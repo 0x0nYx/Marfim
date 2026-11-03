@@ -3,15 +3,27 @@
 Covers OpenAI, OpenRouter, Groq, Together, DeepSeek, Mistral, xAI, Moonshot,
 Zhipu, Google's OpenAI-compat endpoint, Fireworks, Cerebras, Perplexity,
 Novita, Chutes, Ollama, LM Studio, vLLM and any custom base_url.
+
+Review finding 24 fixes:
+- `reasoning_content` is a separate `reasoning` event — chain-of-thought no
+  longer lands in the answer or the stored history.
+- a mid-stream `{"error": ...}` chunk raises ProviderError (no silent empty turn).
+- tool-call deltas are keyed by `id` when `index` is absent (no collapse).
+- transport errors raised mid-stream are wrapped into ProviderError.
+- max_tokens comes from config, not a hard-coded constant.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 from typing import Iterator
 
 from marfim.providers.base import Provider, ProviderError, ToolSpec, Usage
+
+_TRANSPORT_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError, OSError,
+                     http.client.HTTPException)
 
 
 class OpenAICompatProvider(Provider):
@@ -33,11 +45,13 @@ class OpenAICompatProvider(Provider):
             wire_msgs.append({"role": "system", "content": system})
         for msg in messages:
             wire_msgs.append(self._translate_out(msg))
+        max_tokens = getattr(self, "max_output_tokens", None) or 16384
         body: dict = {
             "model": self.model,
             "messages": wire_msgs,
             "stream": True,
             "stream_options": {"include_usage": True},
+            "max_tokens": max_tokens,
         }
         if tools:
             body["tools"] = [
@@ -64,7 +78,7 @@ class OpenAICompatProvider(Provider):
             except Exception:
                 pass
             raise ProviderError(f"HTTP {exc.code}: {detail}", status=exc.code) from exc
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        except _TRANSPORT_ERRORS as exc:
             raise ProviderError(f"transport error: {exc}", kind="transport") from exc
 
     def _api_key(self) -> str:
@@ -74,7 +88,7 @@ class OpenAICompatProvider(Provider):
     # ---------------------------------------------------------------- consume
 
     def _consume(self, resp) -> Iterator[dict]:
-        tool_acc: dict[int, dict] = {}
+        tool_acc: dict[tuple, dict] = {}
         usage = Usage()
         stop_reason = ""
         try:
@@ -85,6 +99,10 @@ class OpenAICompatProvider(Provider):
                 if payload == "[DONE]":
                     break
                 chunk = json.loads(payload)
+                if chunk.get("error"):
+                    err = chunk["error"]
+                    raise ProviderError(str(err.get("message", err) if isinstance(err, dict) else err),
+                                        kind="stream")
                 if "usage" in chunk and chunk["usage"]:
                     u = chunk["usage"]
                     usage = Usage(
@@ -98,28 +116,36 @@ class OpenAICompatProvider(Provider):
                     if text:
                         yield {"type": "text_delta", "text": text}
                     if delta.get("reasoning_content"):
-                        yield {"type": "text_delta", "text": delta["reasoning_content"]}
+                        # separate event: CoT must not pollute the answer/history
+                        yield {"type": "reasoning", "text": delta["reasoning_content"]}
                     for tc in delta.get("tool_calls") or []:
-                        idx = int(tc.get("index") or 0)
-                        acc = tool_acc.setdefault(idx, {"id": "", "name": "", "args": ""})
+                        index = tc.get("index")
+                        if index is not None:
+                            key = ("i", int(index))
+                        else:
+                            key = ("id", str(tc.get("id") or f"noid-{len(tool_acc)}"))
+                        acc = tool_acc.setdefault(key, {"id": "", "name": "", "args": ""})
                         if tc.get("id"):
                             acc["id"] = tc["id"]
                         fn = tc.get("function") or {}
-                        if fn.get("name"):
-                            acc["name"] = fn["name"] if not acc["name"] else acc["name"]
+                        if fn.get("name") and not acc["name"]:
+                            acc["name"] = fn["name"]
                         if fn.get("arguments"):
                             acc["args"] += fn["arguments"]
                     if choice.get("finish_reason"):
                         stop_reason = choice["finish_reason"]
+        except _TRANSPORT_ERRORS as exc:
+            raise ProviderError(f"transport error mid-stream: {exc}",
+                                kind="transport") from exc
         finally:
             try:
                 resp.close()
             except Exception:
                 pass
-        for idx in sorted(tool_acc):
-            acc = tool_acc[idx]
+        for key in sorted(tool_acc.keys(), key=lambda k: (k[0], str(k[1]))):
+            acc = tool_acc[key]
             yield {"type": "tool_call",
-                   "id": acc["id"] or f"call_{idx}",
+                   "id": acc["id"] or f"call_{key[1]}",
                    "name": acc["name"],
                    "arguments": acc["args"] or "{}"}
         yield {"type": "done", "usage": usage, "stop_reason": stop_reason or "stop"}

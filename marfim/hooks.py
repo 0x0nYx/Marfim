@@ -3,6 +3,11 @@
 Configured shell commands receive JSON payloads on stdin and env context:
   MARFIM_EVENT=PreToolUse MARFIM_TOOL=bash
 Exit codes: 0 continue · 2 BLOCK (PreToolUse veto w/ stderr message) · other = warn.
+
+Review finding 33: a SECURITY hook (PreToolUse) that times out now fails
+CLOSED — the call is denied, not waved through.  Hooks also run with a
+scrubbed environment (no API keys leak into hook processes); only
+TRUSTED configs can define hooks at all (see marfim/trust.py).
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 from marfim.config import Config
-from marfim.util import json_dumps
+from marfim.util import json_dumps, strict_secret_env
 
 
 class HookBlocked(Exception):
@@ -27,12 +32,18 @@ class HookRunner:
     def __init__(self, config: Config):
         self.config = config
 
-    def run(self, event: str, payload: dict | None = None, cwd: Path | None = None) -> None:
+    def run(self, event: str, payload: dict | None = None, cwd: Path | None = None,
+            fail_closed: bool = False) -> None:
         commands = (self.config.hooks or {}).get(event) or []
         if not commands:
             return
         payload = payload or {}
         proc_input = json_dumps(payload)
+        env = strict_secret_env()
+        env["MARFIM_EVENT"] = event
+        env["MARFIM_TOOL"] = str(payload.get("tool", ""))
+        # a vanished project dir must not crash the hook path
+        cwd_arg = str(cwd) if cwd and Path(cwd).exists() else None
         for cmd in commands:
             try:
                 proc = subprocess.run(
@@ -41,12 +52,15 @@ class HookRunner:
                     capture_output=True,
                     text=True,
                     timeout=self.TIMEOUT,
-                    cwd=str(cwd or self.config.project_root),
-                    env={**dict(__import__("os").environ),
-                         "MARFIM_EVENT": event,
-                         "MARFIM_TOOL": str(payload.get("tool", ""))},
+                    cwd=cwd_arg,
+                    env=env,
                 )
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
+                if fail_closed:
+                    # finding 33: a security hook that hangs must deny, not pass
+                    raise HookBlocked(
+                        f"{event} hook timed out after {self.TIMEOUT}s "
+                        f"(fail-closed: security hooks must not fail open)") from exc
                 continue
             if proc.returncode == 2:
                 raise HookBlocked(proc.stderr.strip() or f"blocked by {event} hook")

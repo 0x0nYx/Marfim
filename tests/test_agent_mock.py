@@ -127,7 +127,10 @@ class AgentLoopTest(unittest.TestCase):
         agent.run_turn("first")
         reloaded = Session.load(session.path)
         self.assertEqual(len(reloaded.messages), 2)
-        self.assertEqual(reloaded.messages[0]["content"], "first")
+        # finding 24: volatile environment rides in the FIRST user message
+        # (cache-stable system prompt); the user's text is preserved after it
+        self.assertIn("first", reloaded.messages[0]["content"])
+        self.assertIn("<environment>", reloaded.messages[0]["content"])
 
     def test_checkpoint_and_rewind(self):
         script = [

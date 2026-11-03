@@ -4,14 +4,16 @@
 - hermes: deterministic pruning of old large tool results first, then summary.
 - codex: pre-sampling compact + manual /compact share one implementation.
 
-Budget estimate uses ~4 chars/token heuristic.
+Review finding 22: the tail always starts on a turn boundary — never on a
+`tool` message, so a cut can never orphan tool results.
+Review finding 23: context windows come from the provider-qualified model id
+against a cached catalog; no network fetch happens inside the loop.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from marfim.providers.base import Usage
 from marfim.util import estimate_tokens, truncate_middle
 
 SUMMARY_PROMPT = (
@@ -45,11 +47,27 @@ def prune_tool_results(messages: list, keep_last: int = 8,
 
 
 def context_window_for(model: str, default: int = 200_000) -> int:
-    from marfim.providers.registry import list_catalog_models
-    provider, _, model_id = model.partition("/")
-    candidates = [m for m in list_catalog_models(provider) if m.model == model_id]
-    if candidates and candidates[0].context_window:
-        return candidates[0].context_window
+    """Context window for `provider/model` or a bare model id.
+
+    Uses the cached catalog only — never a network fetch inside the loop
+    (review finding 23)."""
+    try:
+        from marfim.providers.registry import list_catalog_models
+        provider, _, model_id = model.partition("/")
+        candidates: list = []
+        if provider and model_id:
+            candidates = list_catalog_models(provider, fetch=False)
+            candidates = [m for m in candidates if m.model == model_id]
+        if not candidates:
+            # bare model id: search every cached provider
+            for m in list_catalog_models(fetch=False):
+                if m.model == (model_id or model):
+                    candidates = [m]
+                    break
+        if candidates and candidates[0].context_window:
+            return candidates[0].context_window
+    except Exception:
+        pass
     return default
 
 
@@ -62,13 +80,22 @@ def needs_compaction(messages: list, context_window: int, threshold: float) -> b
 def compact_messages(messages: list, complete_fn, keep_tail: int = 12) -> tuple[list, str]:
     """Summarize the head of the conversation, keep the tail verbatim.
 
-    complete_fn(messages) -> str must produce the summary (provider call).
+    complete_fn(messages) -> str must produce the summary (provider call); it
+    may raise ProviderError — callers must treat that as a FAILED compaction
+    and keep the history (review finding 22).
     Returns (new_messages, summary_text).
     """
     if len(messages) <= keep_tail + 2:
         return messages, ""
-    head = messages[:-keep_tail]
-    tail = messages[-keep_tail:]
+    start = len(messages) - keep_tail
+    # turn-boundary guarantee: the verbatim tail never begins on a tool
+    # message (a cut there orphans the tool result from its tool_call)
+    while start < len(messages) and messages[start].get("role") == "tool":
+        start += 1
+    head = messages[:start]
+    tail = messages[start:]
+    if not head:
+        return messages, ""
     # find the last user message in head to anchor the summary request
     transcript_parts = []
     for m in head:
@@ -87,6 +114,8 @@ def compact_messages(messages: list, complete_fn, keep_tail: int = 12) -> tuple[
     summary = complete_fn([
         {"role": "user", "content": SUMMARY_PROMPT + "\n\n<conversation>\n" + transcript +
          "\n</conversation>"}])
+    if not summary or not summary.strip() or summary.strip() == "(empty summary)":
+        raise ValueError("compaction produced an empty summary — history kept")
     summary_msg = {"role": "user",
                    "content": f"<compaction-summary>\n{summary}\n</compaction-summary>\n\n"
                               f"Continue from this summary. The messages above the summary "

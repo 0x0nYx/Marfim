@@ -27,11 +27,14 @@ class MemorySection:
 
 
 def collect_memory(config: Config) -> list[MemorySection]:
-    """Hierarchy: home MARFIM.md, then root -> cwd chain (dedup by path)."""
+    """Hierarchy: home MARFIM.md, then root -> cwd chain (dedup by path).
+
+    Review finding 31: the home memory file was assigned to a `candidates`
+    list that the loader never iterated — dead code.  It is now actually
+    collected and injected."""
     sections: list[MemorySection] = []
     seen: set[str] = set()
     home_memory = marfim_home() / "MARFIM.md"
-    candidates: list[Path] = [home_memory]
     cur = Path.cwd().resolve()
     chain = [cur, *cur.parents]
     root = config.project_root.resolve()
@@ -42,17 +45,18 @@ def collect_memory(config: Config) -> list[MemorySection]:
         ordered.append(p)
         if p == root:
             break
+    paths: list[Path] = [home_memory]
     for base in ordered:
-        for name in MEMORY_FILENAMES:
-            path = base / name
-            if path.is_file() and str(path) not in seen:
-                seen.add(str(path))
-                try:
-                    content = path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                if content.strip():
-                    sections.append(MemorySection(str(path), content))
+        paths.extend(base / name for name in MEMORY_FILENAMES)
+    for path in paths:
+        if path.is_file() and str(path) not in seen:
+            seen.add(str(path))
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if content.strip():
+                sections.append(MemorySection(str(path), content))
     return sections
 
 

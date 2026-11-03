@@ -31,8 +31,17 @@ protect_configs = true                   # ECC doctrine: model cannot edit harne
 
 [sandbox]                                # Codex doctrine
 mode = "none"                            # none | bubblewrap | seatbelt | auto
+required = true                          # false = explicit fail-open opt-out
 writable_dirs = []                       # extra writable roots when sandboxed
 network = true
+
+[verify]                                 # review §4.5: evidence-grounded verification
+commands = ["pytest -q", "ruff check ."] # run by the verify tool in the sandbox
+
+[external_agents]                        # review §4.3: other agents as backends
+# opencode  = { command = "opencode", args = ["run"], prompt_via = "arg", format = "text" }
+# codex     = { command = "codex",   args = ["exec", "--json"], prompt_via = "arg", format = "jsonl-codex" }
+# claude    = { command = "claude",  args = ["-p", "--output-format", "stream-json"], prompt_via = "arg", format = "jsonl-claude" }
 
 [agent]
 max_turns = 200

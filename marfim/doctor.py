@@ -55,8 +55,11 @@ def run_doctor(config: Config) -> int:
 
     if sandbox_available(config.sandbox_mode):
         ok("sandbox", config.sandbox_mode)
+    elif config.sandbox_mode == "auto":
+        warn("sandbox", "no backend found — commands will run UNSANDBOXED (auto mode)")
     elif config.sandbox_mode != "none":
-        warn("sandbox", f"{config.sandbox_mode} requested but unavailable")
+        warn("sandbox", f"{config.sandbox_mode} requested but unavailable — commands "
+                        f"will FAIL CLOSED (set sandbox_required=false to opt out explicitly)")
 
     if config.mcp_servers:
         from marfim.mcp.client import McpManager

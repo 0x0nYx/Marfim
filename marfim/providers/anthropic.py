@@ -28,20 +28,26 @@ class AnthropicProvider(Provider):
     def _open(self, messages: list[dict], tools: list[ToolSpec], system: str):
         url = self.config.base_url.rstrip("/") + "/v1/messages"
         wire_msgs = [self._translate_out(m) for m in messages]
+        max_tokens = getattr(self, "max_output_tokens", None) or 16384
         body: dict = {
             "model": self.model,
-            "max_tokens": 16384,
+            "max_tokens": max_tokens,
             "stream": True,
             "messages": wire_msgs,
         }
         if system:
-            body["system"] = system
+            # prompt-cache discipline: system is the most stable prefix, mark it
+            body["system"] = [{"type": "text", "text": system,
+                               "cache_control": {"type": "ephemeral"}}]
         if tools:
-            body["tools"] = [
+            tool_specs = [
                 {"name": t.name, "description": t.description,
                  "input_schema": t.parameters or {"type": "object", "properties": {}}}
                 for t in tools
             ]
+            # cache breakpoint on the last tool: tools change rarely
+            tool_specs[-1]["cache_control"] = {"type": "ephemeral"}
+            body["tools"] = tool_specs
         headers = {
             "Content-Type": "application/json",
             "x-api-key": self.config.key() or "no-key",
@@ -80,6 +86,7 @@ class AnthropicProvider(Provider):
                     m = evt.get("message", {}).get("usage", {})
                     usage.input_tokens = int(m.get("input_tokens") or 0)
                     usage.cached_tokens = int((m.get("cache_read_input_tokens") or 0))
+                    usage.cache_write_tokens = int((m.get("cache_creation_input_tokens") or 0))
                 elif etype == "content_block_start":
                     block = evt.get("content_block", {})
                     if block.get("type") == "tool_use":

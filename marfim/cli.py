@@ -43,6 +43,13 @@ def build_parser() -> argparse.ArgumentParser:
     rm = ssp.add_parser("rm"); rm.add_argument("ref")
     fork = ssp.add_parser("fork"); fork.add_argument("ref")
 
+    # trust (review finding 2)
+    tp = sub.add_parser("trust", help="project-config trust gate")
+    tsp = tp.add_subparsers(dest="trust_cmd", required=True)
+    tsp.add_parser("add", help="trust the current project's .marfim/config.toml")
+    tsp.add_parser("list", help="list trusted projects")
+    tsp.add_parser("revoke", help="revoke trust for the current project")
+
     # models
     mp = sub.add_parser("models", help="model catalog (models.dev)")
     msp = mp.add_subparsers(dest="models_cmd")
@@ -60,8 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     csp = cp.add_subparsers(dest="mcp_cmd", required=True)
     csp.add_parser("list")
     add = csp.add_parser("add")
-    add.add_argument("name"); add.add_argument("command"); add.add_argument("args",
-                                                                         nargs="*")
+    add.add_argument("name")
+    # finding 30: the positional must NOT overwrite ns.command (which carries
+    # the subcommand name) — a REPL used to launch instead of adding
+    add.add_argument("mcp_command")
+    add.add_argument("mcp_args", nargs="*")
+    add.add_argument("--url", default="", help="streamable-HTTP server URL instead of a command")
     test = csp.add_parser("test"); test.add_argument("name")
 
     # config / skills / tools / doctor / usage
@@ -101,12 +112,22 @@ def _main(argv: list[str] | None = None) -> int:
         import os
         os.chdir(ns.cwd)
 
-    from marfim.config import Config
+    from marfim.config import Config, ConfigError
     overrides = {"provider": ns.provider, "model": ns.model, "mode": ns.mode,
                  "approve_all": ns.approve_all, "max_turns": ns.max_turns,
                  "verbose": ns.verbose}
-    config = Config.load(overrides)
+    try:
+        config = Config.load(overrides)
+    except ConfigError as exc:
+        # finding 11: a broken config is a LOUD refusal, never a silent
+        # run-with-default-safety
+        print(f"✗ refusing to start: {exc}", file=sys.stderr)
+        return 2
+    if config.untrusted_notice and getattr(ns, "command", None) != "trust":
+        print(f"warning: {config.untrusted_notice}", file=sys.stderr)
 
+    if ns.command == "trust":
+        return _cmd_trust(config, ns)
     if ns.command == "session":
         return _cmd_session(config, ns)
     if ns.command == "models":
@@ -144,7 +165,8 @@ def _main(argv: list[str] | None = None) -> int:
     if ns.prompt:
         from marfim.ui.headless import run_headless
         return run_headless(config, ns.prompt, output_format=ns.output_format,
-                            resume=ns.resume, max_turns=ns.max_turns)
+                            resume=ns.resume, max_turns=ns.max_turns,
+                            session_name=ns.session_name or "")
 
     from marfim.session.store import Session, find_session
     resume_session = None
@@ -154,7 +176,8 @@ def _main(argv: list[str] | None = None) -> int:
             print(f"session '{ns.resume}' not found", file=sys.stderr)
             return 1
     from marfim.ui.repl import Repl
-    repl = Repl(config, resume_session=resume_session)
+    repl = Repl(config, resume_session=resume_session,
+                session_name=ns.session_name or "")
     try:
         repl.loop()
     except KeyboardInterrupt:
@@ -163,6 +186,51 @@ def _main(argv: list[str] | None = None) -> int:
 
 
 # ------------------------------------------------------------------ subcommands
+
+def _cmd_trust(config, ns) -> int:
+    """Trust gate CLI (review finding 2)."""
+    from marfim.config import project_config_path
+    from marfim.trust import TrustStore, config_digest
+    store = TrustStore()
+    cmd = ns.trust_cmd
+    if cmd == "list":
+        entries = store.list_trusted()
+        if not entries:
+            print("(no trusted projects)")
+            return 0
+        for path, meta in sorted(entries.items()):
+            print(f"• {path}  digest={meta.get('digest', '')[:12]}…  "
+                  f"trusted_at={meta.get('trusted_at', '?')}")
+        return 0
+    if cmd == "add":
+        ppath = project_config_path(config.project_root)
+        if not ppath.is_file():
+            print(f"no project config at {ppath} — nothing to trust")
+            return 1
+        print(f"about to TRUST {ppath} for project {config.project_root}")
+        print("This allows the file to set mode, hooks, MCP servers, providers, "
+              "sandbox and skills dirs. Review it first:")
+        print("---")
+        print(ppath.read_text(encoding="utf-8", errors="replace")[:4000])
+        print("---")
+        try:
+            answer = input("trust this config? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer not in ("y", "yes"):
+            print("not trusted")
+            return 1
+        store.trust(config.project_root, config_digest(ppath))
+        print(f"trusted {config.project_root}")
+        return 0
+    if cmd == "revoke":
+        if store.revoke(config.project_root):
+            print(f"trust revoked for {config.project_root}")
+            return 0
+        print("project was not trusted")
+        return 1
+    return 0
+
 
 def _cmd_session(config, ns) -> int:
     from marfim.session.store import find_session, list_sessions
@@ -202,6 +270,11 @@ def _cmd_session(config, ns) -> int:
         return 0
     if cmd == "rm":
         target.path.unlink(missing_ok=True)
+        # finding 31: session rm used to leave the .snaps directory behind
+        import shutil as _shutil
+        snaps = target.path.parent / f"{target.sid}.snaps"
+        if snaps.is_dir():
+            _shutil.rmtree(snaps, ignore_errors=True)
         print(f"removed {target.sid}")
         return 0
     return 0
@@ -255,36 +328,48 @@ def _cmd_mcp(config, ns) -> int:
             print("(no MCP servers configured)")
             return 0
         for name, srv in config.mcp_servers.items():
-            target = srv.command and f"{srv.command} {' '.join(srv.args)}" or srv.url
+            target = srv.url or (srv.command and f"{srv.command} {' '.join(srv.args)}") or "-"
             print(f"• {name}: {target}")
         return 0
     if cmd == "add":
-        import tomllib
+        from marfim.util import toml_quote
         path = config.project_root / ".marfim" / "config.toml"
         path.parent.mkdir(parents=True, exist_ok=True)
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
-        block = (f'\n[mcp_servers.{ns.name}]\ncommand = "{ns.command}"\n'
-                 f'args = {tomllib_loads_list(ns.args)}\n')
+        # duplicate table would invalidate the file → finding 11 hard error.
+        # refuse and point at the file instead.
+        if f"[mcp_servers.{ns.name}]" in existing:
+            print(f"error: server '{ns.name}' already exists in {path}; edit it there")
+            return 1
+        if not ns.url and not ns.mcp_command:
+            print("error: pass a COMMAND or --url")
+            return 1
+        block = (f"\n[mcp_servers.{ns.name}]\n"
+                 f"command = {toml_quote(ns.mcp_command or '')}\n"
+                 f"args = {toml_quote(list(ns.mcp_args))}\n"
+                 if not ns.url else
+                 f"\n[mcp_servers.{ns.name}]\n"
+                 f"url = {toml_quote(ns.url)}\n")
         path.write_text(existing + block, encoding="utf-8")
-        print(f"added mcp server '{ns.name}' to {path}")
+        # the USER made this edit via the CLI: register the new digest so the
+        # gate does not immediately flag it (finding 2 flow)
+        from marfim.trust import TrustStore, config_digest
+        TrustStore().trust(config.project_root, config_digest(path))
+        print(f"added mcp server '{ns.name}' to {path} (project config trusted)")
         return 0
     if cmd == "test":
         srv = config.mcp_servers.get(ns.name)
-        if srv is None or not srv.command:
+        if srv is None or (not srv.command and not srv.url):
             print(f"server '{ns.name}' not configured")
             return 1
         manager = McpManager()
-        manager.register(ns.name, srv.command, srv.args, srv.env, config.project_root)
+        manager.register(ns.name, srv.command, srv.args, srv.env, config.project_root,
+                         url=srv.url, headers=srv.headers)
         status = manager.start_all(config.project_root)
         print(status.get(ns.name, "?"))
         manager.stop_all()
         return 0
     return 0
-
-
-def tomllib_loads_list(items: list[str]) -> str:
-    import json as _json
-    return _json.dumps(list(items))
 
 
 def _cmd_config(config) -> int:

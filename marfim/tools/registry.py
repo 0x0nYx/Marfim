@@ -9,7 +9,8 @@ from marfim.memory import Skill
 from marfim.mcp.client import McpManager
 from marfim.tools.base import Tool, ToolCtx
 from marfim.tools import fs, bash as bash_tools, web as web_tools, todo as todo_tools, \
-    patch as patch_tools, repomap as repomap_tools, skill as skill_tools, task as task_tools
+    patch as patch_tools, repomap as repomap_tools, skill as skill_tools, task as task_tools, \
+    verify as verify_tools
 
 
 def default_tools(skills: list[Skill] | None = None, mcp: McpManager | None = None) -> list[Tool]:
@@ -22,6 +23,7 @@ def default_tools(skills: list[Skill] | None = None, mcp: McpManager | None = No
     tools += repomap_tools.build_tools()
     tools += task_tools.build_tools()
     tools += [skill_tools.build_tool(skills or [])]
+    tools += [verify_tools.build_tool()]
     if mcp is not None:
         for client in mcp.clients.values():
             if client._alive:

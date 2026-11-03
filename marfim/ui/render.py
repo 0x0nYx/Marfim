@@ -69,15 +69,33 @@ def render_banner() -> None:
     print(ANSI.gray("Type /help for commands · Ctrl-C interrupts · Ctrl-D exits"))
 
 
-def render_permission_prompt(tool: str, args: dict, reason: str) -> str:
-    detail = ""
+def render_permission_header(tool: str, args: dict, reason: str) -> None:
+    """Display a permission question WITHOUT reading input — the REPL owns
+    input (finding 28).  All paths a call touches are shown (finding 3)."""
+    details: list[str] = []
     if tool == "bash":
-        detail = str(args.get("command", ""))[:200]
-    elif tool in ("write", "edit", "patch"):
-        detail = str(args.get("file_path") or args.get("path") or "")[:200]
+        details.append(str(args.get("command", ""))[:200])
+    elif tool in ("patch", "apply_patch"):
+        try:
+            from marfim.tools.patch import parse_patch
+            for op in parse_patch(str(args.get("patch") or "")):
+                details.append(f"{op['op']}: {op['path']}")
+        except Exception:
+            details.append("(patch preview unavailable)")
+    else:
+        for key in ("file_path", "path", "notebook_path"):
+            if args.get(key):
+                details.append(str(args[key])[:200])
+                break
     print(f"{ANSI.yellow('⏵ permission requested')}: {ANSI.bold(tool)}"
-          + (f" → {ANSI.cyan(detail)}" if detail else ""))
+          + (f" → {ANSI.cyan('; '.join(details))}" if details else ""))
     print(ANSI.gray(f"  reason: {reason}"))
+
+
+def render_permission_prompt(tool: str, args: dict, reason: str) -> str:
+    """Legacy self-contained prompt (renders + reads).  The interactive REPL
+    uses render_permission_header + its own queue instead."""
+    render_permission_header(tool, args, reason)
     try:
         answer = input(f"{ANSI.bold('[y]es / [n]o / [a]lways')}: ").strip().lower()
     except (EOFError, KeyboardInterrupt):

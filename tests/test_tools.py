@@ -101,10 +101,10 @@ class PatchTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "old.py").write_text("# c\nbeta = 2\n")
-            read_files = set()
-            # GateGuard: must read first
-            read_files.add(str(root / "old.py"))
-            report = apply_patch_text(patch, root, read_files)
+            from marfim.tools.base import ToolCtx
+            ctx = ToolCtx(cwd=root)
+            ctx.mark_read(root / "old.py")   # GateGuard: must read first
+            report = apply_patch_text(patch, root, ctx)
             self.assertIn("added new.py", report)
             self.assertIn("updated old.py", report)
             self.assertIn("beta = 20", (root / "old.py").read_text())
@@ -119,8 +119,9 @@ class PatchTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "old.py").write_text("beta = 2\n")
+            from marfim.tools.base import ToolCtx
             try:
-                apply_patch_text(patch, root, set())
+                apply_patch_text(patch, root, ToolCtx(cwd=root))
                 self.fail("expected PatchError")
             except Exception as exc:
                 self.assertIn("GateGuard", str(exc))

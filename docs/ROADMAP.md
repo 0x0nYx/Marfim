@@ -4,6 +4,11 @@ v0.1.0 ships the convergent core. This roadmap sequences the remaining high-valu
 capabilities surfaced by the forensic analysis, each with its source doctrine.
 
 ## v0.2 — intelligence & context
+
+> **Status (v0.2.0):** model-role auto-routing SHIPPED (router with failover + budgets +
+> capabilities); MCP HTTP/SSE transport SHIPPED; external agents as worktree-isolated
+> backends SHIPPED; parallel subagents SHIPPED; verify-driven reflection SHIPPED.
+> Remaining below: tree-sitter repo map, CodeMode, micro-compaction refinements.
 - **Tree-sitter + personalized-PageRank repo map** (aider `repomap.py`): replace the
   regex symbol extractor; keep the token-budget binary search.
 - **CodeMode**: expose namespaced tool catalogs to the model as callable code executed

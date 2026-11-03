@@ -8,8 +8,13 @@ Design provenance (clean-room synthesis, see docs/FEATURE-MATRIX.md):
 - ECC: hook graph + protected-config doctrine
 
 Files:
-  global   ~/.marfim/config.toml
-  project  ./.marfim/config.toml   (walks up to git root)
+  global   ~/.marfim/config.toml   (fully trusted: it is the user's own)
+  project  ./.marfim/config.toml   (UNTRUSTED until sha256-registered in
+           ~/.marfim/trust.json — only its deny/ask rules are applied; see
+           marfim/trust.py and review finding 2)
+
+A malformed config is a hard error (review finding 11): safety settings must
+never be silently dropped because a table failed to parse.
 """
 
 from __future__ import annotations
@@ -26,6 +31,10 @@ except ImportError:  # pragma: no cover
 
 
 MARFIM_DIR = ".marfim"
+
+
+class ConfigError(Exception):
+    """A config file exists but cannot be parsed — refuse to run (finding 11)."""
 
 
 def marfim_home() -> Path:
@@ -53,7 +62,7 @@ def global_config_path() -> Path:
 class ProviderConfig:
     name: str = ""
     base_url: str = ""
-    wire: str = "openai"            # openai | anthropic
+    wire: str = "openai"            # openai | anthropic | mock
     api_key_env: str = ""           # env var holding the key
     api_key: str = ""               # direct key (discouraged; prefer env)
     default_model: str = ""
@@ -72,7 +81,8 @@ class McpServerConfig:
     command: str = ""
     args: list = field(default_factory=list)
     env: dict = field(default_factory=dict)
-    url: str = ""                   # future: HTTP transport
+    url: str = ""                   # streamable-HTTP/SSE transport when set
+    headers: dict = field(default_factory=dict)   # auth headers for URL servers
 
 
 @dataclass
@@ -81,9 +91,11 @@ class Config:
     default_provider: str = "openai"
     default_model: str = "gpt-4.1-mini"
     model_roles: dict = field(default_factory=lambda: {
-        # Oh My Pi style roles; resolve to provider/model at runtime
+        # Oh My Pi style roles; values are "provider/model[,fallback,...]"
         "plan": "", "commit": "", "task": "", "smol": "", "vision": "",
     })
+    # per-role dollar budgets (router refuses a role whose spend exceeded it)
+    role_budgets: dict = field(default_factory=dict)
 
     # providers: name -> ProviderConfig
     providers: dict = field(default_factory=dict)
@@ -94,9 +106,11 @@ class Config:
     ask: list = field(default_factory=list)
     deny: list = field(default_factory=list)
     protect_configs: bool = True    # ECC config-protection doctrine
+    # explicit opt-out for the sandbox hard-fail policy (review finding 10)
+    sandbox_required: bool = True
 
     # sandbox (Codex doctrine)
-    sandbox_mode: str = "none"      # none | bubblewrap | seatbelt(auto on mac)
+    sandbox_mode: str = "none"      # none | bubblewrap | seatbelt | auto
     writable_dirs: list = field(default_factory=list)
     network: bool = True
 
@@ -106,10 +120,19 @@ class Config:
     retry_max: int = 3
     reflection_cap: int = 3          # Aider doctrine
     max_subagent_depth: int = 1
+    max_parallel_tasks: int = 4      # bounded thread pool (review §4.4)
     bash_timeout: int = 120
+    max_output_tokens: int = 16384   # provider request cap (finding 24)
+
+    # verification (review §4.5): commands the `verify` tool runs in-sandbox
+    verify_commands: list = field(default_factory=list)
+
+    # external agent backends (review §4.3): name -> {command, args, prompt_via,
+    # format} — opencode / codex / claude-code / hermes as delegate backends
+    external_agents: dict = field(default_factory=dict)
 
     # mcp servers
-    mcp_servers: dict = field(default_factory=dict)   # name -> {command,args,env,url}
+    mcp_servers: dict = field(default_factory=dict)   # name -> McpServerConfig
 
     # hooks: event -> list of shell commands (Claude Code event names)
     hooks: dict = field(default_factory=lambda: {
@@ -129,6 +152,8 @@ class Config:
 
     # resolved at load
     project_root: Path = field(default_factory=Path.cwd)
+    project_config_trusted: bool = True   # False → tightening-only merge happened
+    untrusted_notice: str = ""
 
     # ------------------------------------------------------------------ load
 
@@ -136,9 +161,21 @@ class Config:
     def load(cli_overrides: dict | None = None, project_root: Path | None = None) -> "Config":
         cfg = Config()
         cfg.project_root = (project_root or find_project_root()).resolve()
-        for path in (global_config_path(), project_config_path(cfg.project_root)):
-            if path.is_file():
-                cfg._merge_toml(path)
+        # 1. global config — the user's own file, fully trusted
+        gpath = global_config_path()
+        if gpath.is_file():
+            cfg._merge_toml(gpath, trusted=True)
+        # 2. project config — untrusted until registered (review finding 2)
+        ppath = project_config_path(cfg.project_root)
+        if ppath.is_file():
+            from marfim.trust import TrustStore, config_digest, untrusted_notice
+            digest = config_digest(ppath)
+            store = TrustStore()
+            trusted = store.is_trusted(cfg.project_root, digest)
+            cfg.project_config_trusted = trusted
+            cfg._merge_toml(ppath, trusted=trusted)
+            if not trusted:
+                cfg.untrusted_notice = untrusted_notice(cfg.project_root, ppath.name)
         cfg._merge_env()
         if cli_overrides:
             cfg._merge_cli(cli_overrides)
@@ -147,70 +184,107 @@ class Config:
 
     # -------------------------------------------------------------- merging
 
-    def _merge_toml(self, path: Path) -> None:
+    def _merge_toml(self, path: Path, trusted: bool = True) -> None:
         if _toml is None:
             return
         try:
             data = _toml.loads(path.read_text(encoding="utf-8"))
-        except (tomllib.TOMLDecodeError, OSError):
-            return
+        except tomllib.TOMLDecodeError as exc:
+            # finding 11: never silently drop the safety settings
+            raise ConfigError(f"{path}: invalid TOML — refusing to run with "
+                              f"unparsed safety config ({exc})") from exc
+        except OSError as exc:
+            raise ConfigError(f"{path}: cannot read config ({exc})") from exc
+        self._merge_dict(data, trusted)
+
+    def _merge_dict(self, data: dict, trusted: bool = True) -> None:
+        """Merge one parsed config layer.  When `trusted` is False only the
+        tightening subset is honoured (review finding 2)."""
         simple = {
             "default_provider": "default_provider", "default_model": "default_model",
             "mode": "mode", "sandbox_mode": "sandbox_mode", "max_turns": "max_turns",
             "compact_threshold": "compact_threshold", "retry_max": "retry_max",
             "bash_timeout": "bash_timeout", "session_dir": "session_dir",
             "theme": "theme", "verbose": "verbose", "max_subagent_depth": "max_subagent_depth",
+            "max_parallel_tasks": "max_parallel_tasks", "max_output_tokens": "max_output_tokens",
             "protect_configs": "protect_configs", "network": "network",
+            "sandbox_required": "sandbox_required",
         }
-        for key, attr in simple.items():
-            if key in data:
-                setattr(self, attr, data[key])
+        if trusted:
+            for key, attr in simple.items():
+                if key in data:
+                    setattr(self, attr, data[key])
+            # permissions.mode may widen; the rest of permissions is merged below
         if isinstance(data.get("model_roles"), dict):
-            self.model_roles.update({k: v for k, v in data["model_roles"].items() if v})
+            if trusted:
+                self.model_roles.update({k: v for k, v in data["model_roles"].items() if v})
+        if isinstance(data.get("role_budgets"), dict) and trusted:
+            self.role_budgets.update({k: float(v) for k, v in data["role_budgets"].items()
+                                      if isinstance(v, (int, float))})
         if isinstance(data.get("permissions"), dict):
             perms = data["permissions"]
-            self.allow += [str(x) for x in perms.get("allow", [])]
+            # allow/ask/deny from any layer: allow may widen only when trusted
+            if trusted:
+                self.allow += [str(x) for x in perms.get("allow", [])]
             self.ask += [str(x) for x in perms.get("ask", [])]
             self.deny += [str(x) for x in perms.get("deny", [])]
-            if "mode" in perms:
+            if trusted and "mode" in perms:
                 self.mode = perms["mode"]
         if isinstance(data.get("sandbox"), dict):
             sb = data["sandbox"]
-            self.sandbox_mode = sb.get("mode", self.sandbox_mode)
-            self.writable_dirs += [str(x) for x in sb.get("writable_dirs", [])]
-            if "network" in sb:
-                self.network = bool(sb["network"])
-        if isinstance(data.get("agent"), dict):
+            if trusted:
+                self.sandbox_mode = sb.get("mode", self.sandbox_mode)
+                self.writable_dirs += [str(x) for x in sb.get("writable_dirs", [])]
+                if "network" in sb:
+                    self.network = bool(sb["network"])
+                if "required" in sb:
+                    self.sandbox_required = bool(sb["required"])
+        if isinstance(data.get("agent"), dict) and trusted:
             ag = data["agent"]
             for key in ("max_turns", "compact_threshold", "retry_max", "reflection_cap",
-                        "max_subagent_depth", "bash_timeout"):
+                        "max_subagent_depth", "bash_timeout", "max_parallel_tasks",
+                        "max_output_tokens"):
                 if key in ag:
                     setattr(self, key, ag[key])
-        for name, prov in (data.get("providers") or {}).items():
-            if not isinstance(prov, dict):
-                continue
-            existing = self.providers.get(name) or ProviderConfig(name=name)
-            existing.name = name
-            existing.base_url = prov.get("base_url", existing.base_url)
-            existing.wire = prov.get("wire", existing.wire)
-            existing.api_key_env = prov.get("api_key_env", existing.api_key_env)
-            existing.api_key = prov.get("api_key", existing.api_key)
-            existing.default_model = prov.get("default_model", existing.default_model)
-            self.providers[name] = existing
-        for name, srv in (data.get("mcp_servers") or {}).items():
-            if not isinstance(srv, dict):
-                continue
-            self.mcp_servers[name] = McpServerConfig(
-                name=name, command=srv.get("command", ""), args=list(srv.get("args", [])),
-                env=dict(srv.get("env", {})), url=srv.get("url", ""))
-        if isinstance(data.get("hooks"), dict):
-            for event, cmds in data["hooks"].items():
-                if event in self.hooks and isinstance(cmds, list):
-                    self.hooks[event] += [str(c) for c in cmds]
-        for key, attr in (("skills_dirs", "skills_dirs"), ("commands_dirs", "commands_dirs"),
-                          ("plugins_dirs", "plugins_dirs"), ("writable_dirs", "writable_dirs")):
-            if isinstance(data.get(key), list):
-                setattr(self, attr, getattr(self, attr) + [str(x) for x in data[key]])
+        if isinstance(data.get("verify"), dict) and trusted:
+            vc = data["verify"].get("commands")
+            if isinstance(vc, list):
+                self.verify_commands += [str(c) for c in vc]
+        if isinstance(data.get("external_agents"), dict) and trusted:
+            for name, spec in data["external_agents"].items():
+                if isinstance(spec, dict):
+                    self.external_agents[str(name)] = {
+                        "command": str(spec.get("command", "")),
+                        "args": [str(a) for a in spec.get("args", [])],
+                        "prompt_via": str(spec.get("prompt_via", "arg")),
+                        "format": str(spec.get("format", "text")),
+                    }
+        if trusted:
+            for name, prov in (data.get("providers") or {}).items():
+                if not isinstance(prov, dict):
+                    continue
+                existing = self.providers.get(name) or ProviderConfig(name=name)
+                existing.name = name
+                existing.base_url = prov.get("base_url", existing.base_url)
+                existing.wire = prov.get("wire", existing.wire)
+                existing.api_key_env = prov.get("api_key_env", existing.api_key_env)
+                existing.api_key = prov.get("api_key", existing.api_key)
+                existing.default_model = prov.get("default_model", existing.default_model)
+                self.providers[name] = existing
+            for name, srv in (data.get("mcp_servers") or {}).items():
+                if not isinstance(srv, dict):
+                    continue
+                self.mcp_servers[name] = McpServerConfig(
+                    name=name, command=srv.get("command", ""), args=list(srv.get("args", [])),
+                    env=dict(srv.get("env", {})), url=srv.get("url", ""),
+                    headers=dict(srv.get("headers", {})))
+            if isinstance(data.get("hooks"), dict):
+                for event, cmds in data["hooks"].items():
+                    if event in self.hooks and isinstance(cmds, list):
+                        self.hooks[event] += [str(c) for c in cmds]
+            for key in ("skills_dirs", "commands_dirs", "plugins_dirs", "writable_dirs"):
+                if isinstance(data.get(key), list):
+                    setattr(self, key, getattr(self, key) + [str(x) for x in data[key]])
 
     def _merge_env(self) -> None:
         mapping = {
@@ -233,7 +307,9 @@ class Config:
             elif key == "mode":
                 self.mode = value
             elif key == "approve_all":
-                self.mode = "bypass"
+                # finding 1: False must not flip bypass on every invocation
+                if value:
+                    self.mode = "bypass"
             elif key == "max_turns":
                 self.max_turns = int(value)
             elif key == "verbose":
@@ -245,16 +321,18 @@ class Config:
             preset = get_provider_preset(self.default_provider)
             if preset:
                 self.providers[self.default_provider] = ProviderConfig(**preset)
-        # sensible skill/command/plugin dirs (Oh My Pi + Claude Code compatibility)
+        # skill/command/plugin dirs.  Project-relative dirs (.marfim/*,
+        # .claude/*) are only honoured for TRUSTED projects (finding 2);
+        # the home dirs are always fine — they are the user's own.
         home = marfim_home()
         root = self.project_root
-        self.skills_dirs += [
-            str(home / "skills"), str(root / MARFIM_DIR / "skills"), str(root / ".claude" / "skills"),
-        ]
-        self.commands_dirs += [
-            str(home / "commands"), str(root / MARFIM_DIR / "commands"), str(root / ".claude" / "commands"),
-        ]
-        self.plugins_dirs += [str(home / "plugins"), str(root / MARFIM_DIR / "plugins")]
+        self.skills_dirs += [str(home / "skills")]
+        self.commands_dirs += [str(home / "commands")]
+        self.plugins_dirs += [str(home / "plugins")]
+        if self.project_config_trusted:
+            self.skills_dirs += [str(root / MARFIM_DIR / "skills"), str(root / ".claude" / "skills")]
+            self.commands_dirs += [str(root / MARFIM_DIR / "commands"), str(root / ".claude" / "commands")]
+            self.plugins_dirs += [str(root / MARFIM_DIR / "plugins")]
         if not self.session_dir:
             self.session_dir = str(home / "sessions")
 
@@ -271,9 +349,9 @@ class Config:
         return prov
 
     def ensure_dirs(self) -> None:
-        Path(self.session_dir).mkdir(parents=True, exist_ok=True)
-        marfim_home().mkdir(parents=True, exist_ok=True)
-        (marfim_home() / "cache").mkdir(parents=True, exist_ok=True)
+        Path(self.session_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
+        marfim_home().mkdir(parents=True, exist_ok=True, mode=0o700)
+        (marfim_home() / "cache").mkdir(parents=True, exist_ok=True, mode=0o700)
 
     def effective_dirs(self) -> list[Path]:
         return [self.project_root] + [Path(d).expanduser() for d in self.writable_dirs]

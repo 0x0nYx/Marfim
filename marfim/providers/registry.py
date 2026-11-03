@@ -83,10 +83,12 @@ def catalog_cache_path() -> Path:
     return marfim_home() / "cache" / "models-dev.json"
 
 
-def fetch_catalog(force: bool = False, timeout: int = 15) -> dict | None:
+def fetch_catalog(force: bool = False, timeout: int = 15,
+                  skip_network: bool = False) -> dict | None:
     """Return the models.dev catalog dict, using a 24h disk cache (opencode
     doctrine: KV cache + offline snapshot).  Returns None when offline and no
-    cache exists."""
+    cache exists.  `skip_network=True` never touches the network (agent-loop
+    safety, review finding 23)."""
     cache = catalog_cache_path()
     if not force and cache.is_file():
         age = time.time() - cache.stat().st_mtime
@@ -94,6 +96,10 @@ def fetch_catalog(force: bool = False, timeout: int = 15) -> dict | None:
             data = json_loads(cache.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 return data
+    if skip_network:
+        if cache.is_file():
+            return json_loads(cache.read_text(encoding="utf-8"))
+        return None
     try:
         req = urllib.request.Request(CATALOG_URL, headers={"User-Agent": "marfim/0.1"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -110,8 +116,18 @@ def fetch_catalog(force: bool = False, timeout: int = 15) -> dict | None:
     return None
 
 
-def list_catalog_models(provider: str | None = None) -> list[ModelInfo]:
-    cat = fetch_catalog() or {}
+def list_catalog_models(provider: str | None = None, fetch: bool = True) -> list[ModelInfo]:
+    """Catalog entries, cached in memory with a TTL (review finding 23: the
+    multi-MB catalog was re-parsed on EVERY turn, and a network fetch could
+    happen inside the agent loop).  `fetch=False` serves disk-cache only and
+    never touches the network — that is what the loop uses."""
+    key = provider or "*"
+    now = time.time()
+    with _CACHE_LOCK:
+        cached = _MODELS_CACHE.get(key)
+        if cached and now - cached[0] < _MODELS_TTL:
+            return list(cached[1])
+    cat = fetch_catalog(force=False, skip_network=not fetch) or {}
     out: list[ModelInfo] = []
     for prov_name, prov in cat.items():
         if provider and prov_name != provider:
@@ -129,7 +145,14 @@ def list_catalog_models(provider: str | None = None) -> list[ModelInfo]:
                 free=(cost_in == 0 and cost_out == 0),
                 tool_call=bool((meta.get("tool_call") is not False)),
             ))
+    with _CACHE_LOCK:
+        _MODELS_CACHE[key] = (now, list(out))
     return out
+
+
+_MODELS_CACHE: dict[str, tuple[float, list[ModelInfo]]] = {}
+_MODELS_TTL = 600.0
+_CACHE_LOCK = __import__("threading").Lock()
 
 
 def free_models(limit: int = 40) -> list[ModelInfo]:

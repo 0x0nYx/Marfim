@@ -12,6 +12,11 @@ Format:
 *** End Patch
 
 Multi-hunk updates are supported; @@ headers fuzzy-locate their anchor line.
+
+Integrity doctrine (review findings 3/15/16/17): every touched path is
+evaluated by the permission engine BEFORE the patch runs; writes are atomic;
+files round-trip in their own encoding; updating a file that changed on disk
+since it was read is refused.
 """
 
 from __future__ import annotations
@@ -20,6 +25,8 @@ import difflib
 from pathlib import Path
 
 from marfim.tools.base import Tool, ToolCtx, ToolResult
+from marfim.util import (FileIntegrityError, atomic_write_text,
+                         read_text_preserve)
 
 
 class PatchError(Exception):
@@ -69,7 +76,15 @@ def parse_patch(text: str) -> list[dict]:
     return ops
 
 
-def apply_patch_text(patch: str, cwd: Path, files_read: set) -> str:
+def patch_paths(patch: str) -> list[str]:
+    """Every path a patch touches — used by the permission engine (finding 3)."""
+    try:
+        return [op["path"] for op in parse_patch(patch)]
+    except PatchError:
+        return []
+
+
+def apply_patch_text(patch: str, cwd: Path, ctx: ToolCtx) -> str:
     ops = parse_patch(patch)
     report: list[str] = []
     for op in ops:
@@ -78,24 +93,37 @@ def apply_patch_text(patch: str, cwd: Path, files_read: set) -> str:
         if op["op"] == "add":
             if path.exists():
                 raise PatchError(f"Add File: {op['path']} already exists")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("\n".join(op["lines"]) + "\n", encoding="utf-8")
-            files_read.add(str(path))
+            atomic_write_text(path, "\n".join(op["lines"]) + "\n")
+            ctx.mark_fresh(path)
             report.append(f"added {op['path']} ({len(op['lines'])} lines)")
         elif op["op"] == "delete":
             if not path.exists():
                 raise PatchError(f"Delete File: {op['path']} not found")
+            if str(path) in ctx.files_read:
+                stale = ctx.check_fresh(path)
+                if stale:
+                    raise PatchError(stale.replace("error: ", ""))
             path.unlink()
+            ctx.files_read.pop(str(path), None)
             report.append(f"deleted {op['path']}")
         else:
             if not path.exists():
                 raise PatchError(f"Update File: {op['path']} not found")
-            if str(path) not in files_read:
+            if str(path) not in ctx.files_read:
                 raise PatchError(
                     f"GateGuard: read {op['path']} with the read tool before patching")
-            old_text = path.read_text(encoding="utf-8", errors="replace")
-            new_text = _apply_hunks(old_text, op["hunks"], op["path"])
-            path.write_text(new_text, encoding="utf-8")
+            stale = ctx.check_fresh(path)
+            if stale:
+                raise PatchError(stale.replace("error: ", ""))
+            try:
+                tf = read_text_preserve(path)
+            except FileIntegrityError as exc:
+                raise PatchError(str(exc)) from exc
+            new_text = _apply_hunks(tf.text, op["hunks"], op["path"])
+            if new_text == tf.text:
+                raise PatchError(f"Update File {op['path']}: patch produced no change")
+            atomic_write_text(path, new_text, encoding=tf.encoding, newline=tf.newline)
+            ctx.mark_fresh(path)
             added = sum(1 for h in op["hunks"] for c in h["changes"] if c.startswith("+"))
             removed = sum(1 for h in op["hunks"] for c in h["changes"] if c.startswith("-"))
             report.append(f"updated {op['path']} (+{added} -{removed})")
@@ -155,7 +183,7 @@ def _do_patch(args: dict, ctx: ToolCtx) -> ToolResult:
     if not patch:
         return ToolResult("error: patch is required", is_error=True)
     try:
-        report = apply_patch_text(patch, ctx.cwd, ctx.files_read)
+        report = apply_patch_text(patch, ctx.cwd, ctx)
     except PatchError as exc:
         return ToolResult(f"error: {exc}", is_error=True)
     return ToolResult(report or "(patch applied)")

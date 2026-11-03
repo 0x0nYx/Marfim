@@ -29,6 +29,7 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0
+    cache_write_tokens: int = 0   # Anthropic cache_creation_input_tokens (finding 24)
 
     @property
     def total(self) -> int:
@@ -38,6 +39,7 @@ class Usage:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.cached_tokens += other.cached_tokens
+        self.cache_write_tokens += other.cache_write_tokens
 
 
 @dataclass
@@ -128,13 +130,19 @@ def messages_tokens(messages: list[dict]) -> int:
     return total
 
 
-def build_provider(config: ProviderConfig, model: str) -> Provider:
+def build_provider(config: ProviderConfig, model: str,
+                   max_output_tokens: int | None = None) -> Provider:
     """Factory: wire protocol -> adapter (Codex wire_api doctrine)."""
+    provider: Provider
     if config.wire == "anthropic":
         from marfim.providers.anthropic import AnthropicProvider
-        return AnthropicProvider(config, model)
-    if config.wire == "mock":
+        provider = AnthropicProvider(config, model)
+    elif config.wire == "mock":
         from marfim.providers.mock import MockProvider
-        return MockProvider(config, model)
-    from marfim.providers.openai_compat import OpenAICompatProvider
-    return OpenAICompatProvider(config, model)
+        provider = MockProvider(config, model)
+    else:
+        from marfim.providers.openai_compat import OpenAICompatProvider
+        provider = OpenAICompatProvider(config, model)
+    if max_output_tokens:
+        provider.max_output_tokens = int(max_output_tokens)  # type: ignore[attr-defined]
+    return provider

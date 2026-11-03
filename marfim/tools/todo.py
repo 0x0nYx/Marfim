@@ -28,7 +28,8 @@ def _do_todo(args: dict, ctx: ToolCtx) -> ToolResult:
             return ToolResult("error: items must be [{content, status(pending|in_progress|"
                               "completed)}]", is_error=True)
         if ctx.session is not None:
-            ctx.session.record("todo", {"items": items})
+            # memory and file together (review finding 26)
+            ctx.session.set_todos(items)
         return ToolResult("todo list updated:\n" + _render(items))
     if ctx.session is not None:
         items = ctx.session.last_todo()

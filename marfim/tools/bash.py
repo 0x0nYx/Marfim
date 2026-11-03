@@ -4,6 +4,10 @@ Doctrine merged:
 - Codex: prefix execpolicy rules (allow/prompt/deny) + sandbox wrapper.
 - Claude Code: persistent background shells with log polling.
 - Goose: shell output is bounded and explicit.
+
+Review finding 5: background jobs now travel the SAME execpolicy + sandbox
+path as foreground commands, run in their own session, are capped, and log to
+0600 files.
 """
 
 from __future__ import annotations
@@ -11,19 +15,30 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-import time
+import threading
 from pathlib import Path
 
 from marfim.config import Config, MARFIM_DIR
-from marfim.sandbox import wrap_command
+from marfim.sandbox import SandboxUnavailable, wrap_command
 from marfim.tools.base import Tool, ToolCtx, ToolResult
 from marfim.util import gen_id, truncate_tail
 
 JOBS_DIR = ".marfim/jobs"
+MAX_BACKGROUND_JOBS = 8
+
+_jobs_lock = threading.Lock()
+_active_jobs: dict[str, subprocess.Popen] = {}
 
 
 def _job_file(root: Path, job_id: str) -> Path:
     return root / JOBS_DIR / f"{job_id}.log"
+
+
+def _reap_finished_jobs() -> None:
+    with _jobs_lock:
+        for job_id, proc in list(_active_jobs.items()):
+            if proc.poll() is not None:
+                del _active_jobs[job_id]
 
 
 def _do_bash(args: dict, ctx: ToolCtx) -> ToolResult:
@@ -35,24 +50,48 @@ def _do_bash(args: dict, ctx: ToolCtx) -> ToolResult:
     description = str(args.get("description") or "")
 
     root = ctx.cwd
-    if background:
-        job_id = gen_id("job")
-        log = _job_file(root, job_id)
-        log.parent.mkdir(parents=True, exist_ok=True)
-        with open(log, "w", encoding="utf-8") as fh:
-            proc = subprocess.Popen(
-                ["bash", "-lc", command], stdout=fh, stderr=subprocess.STDOUT,
-                cwd=str(root), start_new_session=True)
-        return ToolResult(f"started background job {job_id} (pid {proc.pid}); "
-                          f"poll with bash: tail -n 50 {log}")
 
+    # execpolicy + sandbox apply to BOTH paths (review finding 5)
     effective = _execpolicy(command, ctx)
     if effective is not None:
         return effective
     writable = [root]
     if ctx.agent is not None:
         writable += ctx.agent.config.effective_dirs()
-    argv = wrap_command(["bash", "-lc", command], _sandbox_mode(ctx), [Path(str(w)) for w in writable])
+    if ctx.agent is not None:
+        try:
+            argv = wrap_command(["bash", "-lc", command], _sandbox_mode(ctx),
+                                [Path(str(w)) for w in writable],
+                                network=bool(ctx.agent.config.network),
+                                project_root=ctx.agent.config.project_root)
+        except SandboxUnavailable as exc:
+            return ToolResult(f"error: sandbox unavailable — refusing to run: {exc}",
+                              is_error=True)
+    else:
+        argv = ["bash", "-lc", command]
+
+    if background:
+        _reap_finished_jobs()
+        with _jobs_lock:
+            if len(_active_jobs) >= MAX_BACKGROUND_JOBS:
+                return ToolResult(
+                    f"error: background job cap reached ({MAX_BACKGROUND_JOBS}); "
+                    f"poll or wait for existing jobs first", is_error=True)
+            job_id = gen_id("job")
+            log = _job_file(root, job_id)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            # 0600 log: the output may quote secret-adjacent material
+            fd = os.open(str(log), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                proc = subprocess.Popen(
+                    argv, stdout=fd, stderr=subprocess.STDOUT,
+                    cwd=str(root), start_new_session=True)
+            finally:
+                os.close(fd)
+            _active_jobs[job_id] = proc
+        return ToolResult(f"started background job {job_id} (pid {proc.pid}); "
+                          f"poll with bash: tail -n 50 {log}")
+
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
                               cwd=str(root))

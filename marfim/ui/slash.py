@@ -60,11 +60,17 @@ def cmd_model(sc: SlashContext, args: str) -> None:
         return
     spec = args.strip()
     provider_name, _, model = spec.partition("/")
-    if not model:
-        model = provider_name
+    # finding 31: `qwen/qwen3-coder` treats `qwen` as a provider only when
+    # `qwen` IS a configured or known provider; otherwise the whole spec is a
+    # model id on the current provider (catalog-style ids keep working)
+    from marfim.providers.registry import get_provider_preset
+    known = provider_name in sc.config.providers or get_provider_preset(provider_name) is not None
+    if not model or not known:
+        model = spec
         provider_name = sc.config.default_provider
     from marfim.providers.base import build_provider
-    sc.agent.provider = build_provider(sc.config.provider(provider_name), model)
+    sc.agent.provider = build_provider(sc.config.provider(provider_name), model,
+                                       max_output_tokens=sc.config.max_output_tokens)
     sc.config.default_provider = provider_name
     sc.config.default_model = model
     _out(f"switched to {provider_name}/{model}")
@@ -158,20 +164,30 @@ def cmd_rewind(sc: SlashContext, args: str) -> None:
 @command("compact", "compact the conversation now")
 def cmd_compact(sc: SlashContext, args: str) -> None:
     from marfim.agent.compaction import compact_messages
+    from marfim.providers.base import ProviderError
     messages = list(sc.session.messages)
 
     def _complete(msgs):
         text = ""
         for event in sc.agent.provider.stream(msgs, [], system="You compress conversations."):
-            if event.get("type") == "text_delta":
+            etype = event.get("type")
+            if etype == "text_delta":
                 text += event.get("text", "")
-        return text or "(empty summary)"
+            elif etype == "error":
+                raise ProviderError(event.get("message", "summary stream error"))
+        if not text.strip():
+            raise ProviderError("empty summary from provider")
+        return text
 
     before = len(messages)
-    new_messages, summary = compact_messages(messages, _complete)
-    sc.session.record("summary", {"summary": summary})
+    try:
+        new_messages, summary = compact_messages(messages, _complete)
+    except (ProviderError, ValueError) as exc:
+        # finding 22: a failed compaction keeps the history
+        _out(f"compaction failed ({exc}); history kept ({before} messages)")
+        return
+    sc.session.record("compact", {"summary": summary, "keep": len(new_messages)})
     sc.session.messages = new_messages
-    sc.session.record("truncate", {"keep": len(new_messages)})
     _out(f"compacted {before} → {len(new_messages)} messages "
          f"(summary {len(summary)} chars)")
 
@@ -185,12 +201,14 @@ def cmd_clear(sc: SlashContext, args: str) -> None:
 
 @command("context", "show context usage estimate")
 def cmd_context(sc: SlashContext, args: str) -> None:
-    from marfim.agent.compaction import context_window_for
+    from marfim.ui.render import render_usage_bar
     tokens = sum(estimate_tokens(str(m.get("content", ""))) +
                  estimate_tokens(str(m.get("tool_calls", "")))
                  for m in sc.session.messages)
-    window = context_window_for(sc.agent.provider.model)
-    from marfim.ui.render import render_usage_bar
+    # finding 23: provider-qualified window via the router
+    window = sc.agent.router.context_window(sc.agent.provider.config.name,
+                                            sc.agent.provider.model) \
+        if getattr(sc.agent, "router", None) else 200_000
     _out(render_usage_bar(tokens, window))
 
 
@@ -294,11 +312,16 @@ def cmd_run(sc: SlashContext, args: str) -> None:
 @command("undo", "git reset the last commit created by the agent")
 def cmd_undo(sc: SlashContext, args: str) -> None:
     try:
-        proc = subprocess.run(["git", "log", "-1", "--format=%H %an %s"],
+        proc = subprocess.run(["git", "log", "-1", "--format=%H%x09%an%x09%s"],
                               cwd=str(sc.config.project_root), capture_output=True,
                               text=True, timeout=10)
-        line = proc.stdout.strip()
-        if "Marfim" not in line and "marfim" not in line:
+        _hash, _, rest = proc.stdout.strip().partition("\t")
+        author, _, subject = rest.partition("\t")
+        # finding 31: substring matching hit ANY commit mentioning marfim;
+        # match the author identity or a message PREFIX exactly
+        is_marfim = (author.startswith("Marfim") or author.endswith("<marfim@local>")
+                     or subject.startswith("marfim:") or subject.startswith("[marfim]"))
+        if not is_marfim:
             _out("refusing: last commit was not created by Marfim (aider doctrine)")
             return
         subprocess.run(["git", "reset", "--soft", "HEAD~1"], cwd=str(sc.config.project_root),

