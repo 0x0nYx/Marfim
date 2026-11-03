@@ -1,0 +1,61 @@
+# Marfim example configuration — copy to ~/.marfim/config.toml (global)
+# or .marfim/config.toml (project). Precedence: defaults < global < project < env < CLI.
+
+default_provider = "openrouter"          # any preset name or custom provider id
+default_model    = "deepseek/deepseek-chat-v3.1:free"
+
+[model_roles]                            # Oh My Pi doctrine: route roles to models
+plan  = "google/gemini-2.5-flash"        # used by /plan and plan subagents
+task  = "groq/llama-3.3-70b-versatile"   # used by task subagents
+commit = ""                              # weak model for commit messages (v0.2)
+
+[providers.ollama-local]                 # custom provider (Codex model_providers doctrine)
+base_url = "http://localhost:11434/v1"
+wire = "openai"                          # openai | anthropic
+default_model = "qwen3-coder:30b"
+
+[permissions]                            # Claude Code rule syntax
+mode = "default"                         # default | plan | accept-edits | bypass
+allow = [
+    "Bash(git *)",
+    "Bash(pytest *)",
+    "Bash(ls *)",
+]
+ask = []                                 # rules that force a prompt
+deny = [
+    "Bash(sudo *)",
+    "Bash(rm -rf *)",
+    "Bash(curl * | bash)",
+]
+protect_configs = true                   # ECC doctrine: model cannot edit harness files
+
+[sandbox]                                # Codex doctrine
+mode = "none"                            # none | bubblewrap | seatbelt | auto
+writable_dirs = []                       # extra writable roots when sandboxed
+network = true
+
+[agent]
+max_turns = 200
+compact_threshold = 0.8                  # fraction of context window
+retry_max = 3
+max_subagent_depth = 1
+bash_timeout = 120
+
+[mcp_servers.context7]                   # MCP servers (claude code / goose doctrine)
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+
+[mcp_server.filesystem]                  # example: filesystem server
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+[hooks]                                  # claude code hook events; exit 2 = veto
+SessionStart = []
+PreToolUse = []
+PostToolUse = []
+PreCompact = []
+Stop = []
+
+[ui]
+theme = "dark"
+verbose = false

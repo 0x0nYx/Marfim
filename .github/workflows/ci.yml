@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: pip install -e .
+      - name: Unit + integration tests
+        run: python -m unittest discover -s tests -v
+      - name: Doctor smoke (offline-safe)
+        run: marfim doctor || true
+        env:
+          MARFIM_HOME: ${{ github.workspace }}/.marfim-home
+      - name: Tools listing
+        run: marfim tools
+        env:
+          MARFIM_HOME: ${{ github.workspace }}/.marfim-home
