@@ -837,6 +837,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "marfim-brain"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "marfim-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "marfim-core"
 version = "0.3.0"
 dependencies = [

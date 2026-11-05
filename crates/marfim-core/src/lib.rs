@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod compact;
 pub mod config;
 pub mod events;
+pub mod faculty;
 pub mod guardian;
 pub mod hooks;
 pub mod journal;

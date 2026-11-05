@@ -2,6 +2,7 @@
 //! (REPL, headless stream-json, SSE gateway, journal).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -79,6 +80,12 @@ pub enum Event {
         message: String,
         fatal: bool,
     },
+    /// P4 faculty hook observability: every faculty hook call lands here.
+    FacultyHook {
+        faculty: String,
+        hook: String,
+        detail: Value,
+    },
 }
 
 impl Event {
@@ -98,6 +105,7 @@ impl Event {
             Event::Compaction { .. } => "compaction",
             Event::VerifyStarted { .. } => "verify_started",
             Event::VerifyFinished { .. } => "verify_finished",
+            Event::FacultyHook { .. } => "faculty_hook",
             Event::TurnEnded { .. } => "turn_end",
             Event::Error { .. } => "error",
         }

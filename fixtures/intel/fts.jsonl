@@ -1,0 +1,26 @@
+{"input":{"op":"ftsAvailable"},"output":true}
+{"input":{"op":"search","ops":[],"query":"hello"},"output":[]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"the quick brown fox"}],"query":"quick"},"output":[{"docId":"d1","title":"","score":0.28768207245178085}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"the quick brown fox"}],"query":"zebra"},"output":[]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"the quick brown fox"}],"query":""},"output":[]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"the quick brown fox"}],"query":"!!! ???"},"output":[]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"bayes rule bayes rule bayes"},{"op":"add","id":"d2","text":"bayes rule"},{"op":"add","id":"d3","text":"bayes theorem and bayes rule examples"}],"query":"bayes rule"},"output":[{"docId":"d1","title":"","score":0.39608012459048153},{"docId":"d2","title":"","score":0.35246865058249605},{"docId":"d3","title":"","score":0.2836010033423464}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"common common kwin"},{"op":"add","id":"d2","text":"common common other"}],"query":"kwin"},"output":[{"docId":"d1","title":"","score":0.6931471805599453}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"bayes rule bayes"},{"op":"add","id":"d2","text":"bayes rule"}],"query":"bayes","limit":1},"output":[{"docId":"d1","title":"","score":0.24472692187108}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"bayes rule"}],"query":"bayes","limit":0},"output":[]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"bayes rule"}],"query":"bayes","limit":10},"output":[{"docId":"d1","title":"","score":0.28768207245178085}]}
+{"input":{"op":"search","ops":[{"op":"addDoc","id":"t1","title":"Alpha Settings","body":"body text here"}],"query":"alpha"},"output":[{"docId":"t1","title":"Alpha Settings","score":0.28768207245178085}]}
+{"input":{"op":"search","ops":[{"op":"addDoc","id":"t1","title":"Alpha Settings","body":"body text here"}],"query":"settings body"},"output":[{"docId":"t1","title":"Alpha Settings","score":0.5753641449035617}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"first version"},{"op":"add","id":"d1","text":"second version"}],"query":"first"},"output":[]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"first version"},{"op":"add","id":"d1","text":"second version"}],"query":"second"},"output":[{"docId":"d1","title":"","score":0.28768207245178085}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"d1","text":"bayes rule"},{"op":"close"}],"query":"bayes"},"output":[]}
+{"input":{"op":"search","ops":[{"op":"addDoc","id":"u1","title":"","body":"Héllo Wörld"}],"query":"héllo"},"output":[{"docId":"u1","title":"","score":0.5753641449035617}]}
+{"input":{"op":"search","ops":[{"op":"addDoc","id":"u1","title":"","body":"Héllo Wörld"}],"query":"hello"},"output":[]}
+{"input":{"op":"search","ops":[{"op":"add","id":"n1","text":"bar 34 baz"}],"query":"34"},"output":[{"docId":"n1","title":"","score":0.28768207245178085}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"n1","text":"bar 34 baz"}],"query":"bar 34!"},"output":[{"docId":"n1","title":"","score":0.5753641449035617}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"b","text":"identical words"},{"op":"add","id":"a","text":"identical words"}],"query":"identical"},"output":[{"docId":"a","title":"","score":0.1823215567939546},{"docId":"b","title":"","score":0.1823215567939546}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"hit","text":"target term here"},{"op":"add","id":"miss","text":"nothing relevant"}],"query":"target"},"output":[{"docId":"hit","title":"","score":0.6359148445504086}]}
+{"input":{"op":"search","ops":[{"op":"index","docs":[["i1","Title One","body one"],["i2","","body two"]]}],"query":"one"},"output":[{"docId":"i1","title":"Title One","score":0.8943834587870262}]}
+{"input":{"op":"search","ops":[{"op":"index","docs":[["i1","Title One","body one"],["i2","","body two"]]}],"query":"body"},"output":[{"docId":"i2","title":"","score":0.21449594916935832},{"docId":"i1","title":"Title One","score":0.15854048416865615}]}
+{"input":{"op":"search","ops":[{"op":"add","id":"short","text":"gamma"},{"op":"add","id":"long","text":"gamma delta epsilon zeta eta theta iota kappa"}],"query":"gamma"},"output":[{"docId":"short","title":"","score":0.28049470275993016},{"docId":"long","title":"","score":0.13505300503255896}]}
+{"input":{"op":"search","ops":[{"op":"addDoc","id":"e1","title":"","body":""}],"query":"anything"},"output":[]}

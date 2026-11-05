@@ -1,0 +1,102 @@
+{"fn":"BASE_RATING","input":[],"output":1200}
+{"fn":"DEFAULT_ELO_K","input":[],"output":24}
+{"fn":"MIN_COMPARISONS","input":[],"output":3}
+{"fn":"_probe_exp","input":[-745.1],"output":5e-324}
+{"fn":"_probe_exp","input":[-745],"output":5e-324}
+{"fn":"_probe_exp","input":[-100],"output":3.720075976020836e-44}
+{"fn":"_probe_exp","input":[-50],"output":1.9287498479639178e-22}
+{"fn":"_probe_exp","input":[-20],"output":2.061153622438558e-9}
+{"fn":"_probe_exp","input":[-10],"output":0.00004539992976248485}
+{"fn":"_probe_exp","input":[-5],"output":0.006737946999085467}
+{"fn":"_probe_exp","input":[-2],"output":0.1353352832366127}
+{"fn":"_probe_exp","input":[-1],"output":0.36787944117144233}
+{"fn":"_probe_exp","input":[-0.5],"output":0.6065306597126334}
+{"fn":"_probe_exp","input":[-0.25],"output":0.7788007830714049}
+{"fn":"_probe_exp","input":[-0.1],"output":0.9048374180359595}
+{"fn":"_probe_exp","input":[-0.01],"output":0.9900498337491681}
+{"fn":"_probe_exp","input":[-0.001],"output":0.999000499833375}
+{"fn":"_probe_exp","input":[-0.00001],"output":0.9999900000499998}
+{"fn":"_probe_exp","input":[-1e-9],"output":0.999999999}
+{"fn":"_probe_exp","input":[0],"output":1}
+{"fn":"_probe_exp","input":[1e-9],"output":1.000000001}
+{"fn":"_probe_exp","input":[0.00001],"output":1.00001000005}
+{"fn":"_probe_exp","input":[0.001],"output":1.0010005001667084}
+{"fn":"_probe_exp","input":[0.01],"output":1.010050167084168}
+{"fn":"_probe_exp","input":[0.1],"output":1.1051709180756477}
+{"fn":"_probe_exp","input":[0.25],"output":1.2840254166877414}
+{"fn":"_probe_exp","input":[0.5],"output":1.6487212707001282}
+{"fn":"_probe_exp","input":[1],"output":2.718281828459045}
+{"fn":"_probe_exp","input":[2],"output":7.38905609893065}
+{"fn":"_probe_exp","input":[5],"output":148.4131591025766}
+{"fn":"_probe_exp","input":[10],"output":22026.465794806718}
+{"fn":"_probe_exp","input":[20],"output":485165195.4097903}
+{"fn":"_probe_exp","input":[50],"output":5.184705528587072e+21}
+{"fn":"_probe_exp","input":[100],"output":2.6881171418161356e+43}
+{"fn":"_probe_exp","input":[700],"output":1.0142320547350045e+304}
+{"fn":"_probe_exp","input":[709.7],"output":1.6549840276802644e+308}
+{"fn":"_probe_exp","input":[0.6931471805599453],"output":2}
+{"fn":"_probe_exp","input":[1.5707963267948966],"output":4.810477380965351}
+{"fn":"_probe_exp","input":[3.141592653589793],"output":23.140692632779267}
+{"fn":"_probe_exp","input":[-3.141592653589793],"output":0.04321391826377226}
+{"fn":"_probe_exp","input":[12.3456],"output":229946.05110989933}
+{"fn":"_probe_exp","input":[-12.3456],"output":0.000004348846154014033}
+{"fn":"_probe_exp","input":[0.7071067811865476],"output":2.0281149816474726}
+{"fn":"_probe_pow10","input":[-3],"output":0.001}
+{"fn":"_probe_pow10","input":[-2],"output":0.01}
+{"fn":"_probe_pow10","input":[-1.5],"output":0.03162277660168379}
+{"fn":"_probe_pow10","input":[-1],"output":0.1}
+{"fn":"_probe_pow10","input":[-0.9],"output":0.12589254117941673}
+{"fn":"_probe_pow10","input":[-0.5],"output":0.31622776601683794}
+{"fn":"_probe_pow10","input":[-0.25],"output":0.5623413251903491}
+{"fn":"_probe_pow10","input":[-0.1],"output":0.7943282347242815}
+{"fn":"_probe_pow10","input":[-0.01],"output":0.9772372209558107}
+{"fn":"_probe_pow10","input":[-0.001],"output":0.9977000638225533}
+{"fn":"_probe_pow10","input":[0],"output":1}
+{"fn":"_probe_pow10","input":[0.001],"output":1.0023052380778996}
+{"fn":"_probe_pow10","input":[0.01],"output":1.023292992280754}
+{"fn":"_probe_pow10","input":[0.1],"output":1.2589254117941673}
+{"fn":"_probe_pow10","input":[0.25],"output":1.7782794100389228}
+{"fn":"_probe_pow10","input":[0.5],"output":3.1622776601683795}
+{"fn":"_probe_pow10","input":[0.75],"output":5.623413251903491}
+{"fn":"_probe_pow10","input":[0.9],"output":7.943282347242816}
+{"fn":"_probe_pow10","input":[1],"output":10}
+{"fn":"_probe_pow10","input":[1.5],"output":31.622776601683793}
+{"fn":"_probe_pow10","input":[2],"output":100}
+{"fn":"_probe_pow10","input":[3],"output":1000}
+{"fn":"_probe_pow10","input":[0.6931471805599453],"output":4.933409667914596}
+{"fn":"_probe_pow10","input":[-0.6931471805599453],"output":0.2026995662865173}
+{"fn":"_probe_pow10","input":[0.3333333333333333],"output":2.154434690031884}
+{"fn":"_probe_pow10","input":[-0.3333333333333333],"output":0.4641588833612779}
+{"fn":"_probe_pow10","input":[2.5],"output":316.22776601683796}
+{"fn":"_probe_pow10","input":[-2.5],"output":0.0031622776601683794}
+{"fn":"_probe_pow10","input":[0.05],"output":1.1220184543019633}
+{"fn":"_probe_pow10","input":[-0.05],"output":0.8912509381337456}
+{"fn":"_probe_pow10","input":[0.005],"output":1.0115794542598986}
+{"fn":"_probe_pow10","input":[0.30000000000000004],"output":1.9952623149688797}
+{"fn":"_probe_pow10","input":[-0.30000000000000004],"output":0.5011872336272722}
+{"fn":"_probe_pow10","input":[1e-7],"output":1.0000002302585358}
+{"fn":"_probe_pow10","input":[-1e-7],"output":0.9999997697415172}
+{"fn":"_probe_pow10","input":[6.907755278982137],"output":8086401.093759918}
+{"fn":"_probe_pow10","input":[-6.907755278982137],"output":1.2366440749169318e-7}
+{"fn":"bradleyTerry","input":[[["a","b"],["b","c"],["c","a"]]],"output":{"strengths":{"a":0,"b":0,"c":0},"counts":{"a":2,"b":2,"c":2},"n_pairs":3,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"}}
+{"fn":"bradleyTerry","input":[[["alpha","beta"],["alpha","gamma"],["beta","gamma"],["alpha","beta"],["gamma","beta"],["alpha","gamma"]]],"output":{"strengths":{"alpha":2.0794,"beta":-1.0397,"gamma":-1.0397},"counts":{"alpha":4,"beta":4,"gamma":4},"n_pairs":6,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"}}
+{"fn":"bradleyTerry","input":[[["x","y"],["x","y"],["x","y"],["x","y"],["x","y"]]],"output":{"strengths":{"x":1.8279,"y":-1.8279},"counts":{"x":5,"y":5},"n_pairs":5,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"}}
+{"fn":"bradleyTerry","input":[[]],"output":{"strengths":{},"n_pairs":0,"iterations":0}}
+{"fn":"bradleyTerry","input":[[["a","b"]]],"output":{"strengths":{"a":0.9891,"b":-0.9891},"counts":{"a":1,"b":1},"n_pairs":1,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"}}
+{"fn":"bradleyTerry","input":[[["n1","n2"],["n2","n3"],["n3","n4"],["n4","n5"],["n5","n1"],["n1","n3"],["n2","n4"]]],"output":{"strengths":{"n1":0.6739,"n2":0.5374,"n3":-0.5374,"n4":-0.6739,"n5":0},"counts":{"n1":3,"n2":3,"n3":3,"n4":3,"n5":2},"n_pairs":7,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"}}
+{"fn":"bradleyTerry","input":[[["a","b"],["b","c"],["c","a"]],10,0.2],"output":{"strengths":{"a":0,"b":0,"c":0},"counts":{"a":2,"b":2,"c":2},"n_pairs":3,"iterations":10,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"}}
+{"fn":"bradleyTerry","input":[[["a","b"],["b","c"],["c","a"]],1,0.5],"output":{"strengths":{"a":0,"b":0,"c":0},"counts":{"a":2,"b":2,"c":2},"n_pairs":3,"iterations":1,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"}}
+{"fn":"bradleyTerry","input":[[["same","same"]]],"error":"item 'same' cannot play itself"}
+{"fn":"bradleyTerry","input":[[["o'brien","o'brien"]]],"error":"item \"o'brien\" cannot play itself"}
+{"fn":"eloLadder","input":[null,[["a","b"],["b","c"],["a","c"],["b","a"],["c","b"],["a","c"]],null],"output":{"toDict":{"ratings":{"a":1221.6602716995862,"b":1199.9334145592527,"c":1178.406313741161},"counts":{"a":4,"b":4,"c":4},"k":24},"ladder":[{"item":"a","rating":1221.7,"comparisons":4,"enough_data":true},{"item":"b","rating":1199.9,"comparisons":4,"enough_data":true},{"item":"c","rating":1178.4,"comparisons":4,"enough_data":true}],"expected_ab":0.5312267661621879}}
+{"fn":"eloLadder","input":[null,[["w","l"],["w","l"],["l","w"],["w","l"]],["l","w"]],"output":{"toDict":{"ratings":{"w":1220.9199502725958,"l":1179.0800497274042},"counts":{"w":4,"l":4},"k":24},"ladder":[{"item":"w","rating":1220.9,"comparisons":4,"enough_data":true},{"item":"l","rating":1179.1,"comparisons":4,"enough_data":true}],"expected_ab":0.5}}
+{"fn":"eloLadder","input":[{"ratings":{"a":1300,"b":1100},"counts":{"a":5,"b":5}},[["b","a"],["b","a"],["a","b"]],null,32],"output":{"toDict":{"ratings":{"a":1264.380849316039,"b":1135.619150683961},"counts":{"a":8,"b":8},"k":32},"ladder":[{"item":"a","rating":1264.4,"comparisons":8,"enough_data":true},{"item":"b","rating":1135.6,"comparisons":8,"enough_data":true}],"expected_ab":0.6772608128086577}}
+{"fn":"eloLadder","input":[{"ratings":{"p":1250.5},"counts":{"p":2.9}},[["p","q"]],null],"output":{"toDict":{"ratings":{"p":1260.7679720619765,"q":1189.7320279380235},"counts":{"p":3,"q":1},"k":24},"ladder":[{"item":"p","rating":1260.8,"comparisons":3,"enough_data":true},{"item":"q","rating":1189.7,"comparisons":1,"enough_data":false}],"expected_ab":0.5}}
+{"fn":"eloLadder","input":[null,[["a","b"]],["a","b","never_seen"]],"output":{"toDict":{"ratings":{"a":1212,"b":1188},"counts":{"a":1,"b":1},"k":24},"ladder":[{"item":"a","rating":1212,"comparisons":1,"enough_data":false},{"item":"never_seen","rating":1200,"comparisons":0,"enough_data":false},{"item":"b","rating":1188,"comparisons":1,"enough_data":false}],"expected_ab":0.5344839447268315}}
+{"fn":"eloLadder","input":[{"ratings":{"b":1000,"a":1400},"counts":{"a":3}},[],["b","a"]],"output":{"toDict":{"ratings":{"b":1000,"a":1400},"counts":{"a":3},"k":24},"ladder":[{"item":"a","rating":1400,"comparisons":3,"enough_data":true},{"item":"b","rating":1000,"comparisons":0,"enough_data":false}],"expected_ab":0.9090909090909091}}
+{"fn":"eloFromDictContinue","input":[[["c","a"]]],"output":{"toDict":{"ratings":{"a":1199.1581451329473,"b":1200.414300586377,"c":1200.4275542806756},"counts":{"a":2,"b":2,"c":2},"k":24},"ladder":[{"item":"b","rating":1200.4,"comparisons":2,"enough_data":false},{"item":"c","rating":1200.4,"comparisons":2,"enough_data":false},{"item":"a","rating":1199.2,"comparisons":2,"enough_data":false}]}}
+{"fn":"eloObserveSelf","input":[[["x","x"]]],"error":"an item cannot play itself"}
+{"fn":"ladderReport","input":[[["a","b"],["b","c"],["a","c"],["b","a"],["c","b"],["a","c"]]],"output":{"ladder":[{"item":"a","rating":1221.7,"comparisons":4,"enough_data":true},{"item":"b","rating":1199.9,"comparisons":4,"enough_data":true},{"item":"c","rating":1178.4,"comparisons":4,"enough_data":true}],"elo":{"ratings":{"a":1221.6602716995862,"b":1199.9334145592527,"c":1178.406313741161},"counts":{"a":4,"b":4,"c":4},"k":24},"bradley_terry":{"strengths":{"a":0.7482,"b":0,"c":-0.7482},"counts":{"a":4,"b":4,"c":4},"n_pairs":6,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"},"agreement_kendall_tau":1,"note":"proposals only — nothing is applied; items under 3 comparisons render 'not enough data'"}}
+{"fn":"ladderReport","input":[[["p","q"]]],"output":{"ladder":[{"item":"p","rating":1212,"comparisons":1,"enough_data":false},{"item":"q","rating":1188,"comparisons":1,"enough_data":false}],"elo":{"ratings":{"p":1212,"q":1188},"counts":{"p":1,"q":1},"k":24},"bradley_terry":{"strengths":{"p":0.9891,"q":-0.9891},"counts":{"p":1,"q":1},"n_pairs":1,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"},"agreement_kendall_tau":null,"note":"proposals only — nothing is applied; items under 3 comparisons render 'not enough data'"}}
+{"fn":"ladderReport","input":[[["s","r"],["s","r"],["r","s"]],{"ratings":{"r":1500,"s":900},"counts":{"r":10,"s":10},"k":40}],"output":{"ladder":[{"item":"r","rating":1426,"comparisons":13,"enough_data":true},{"item":"s","rating":974,"comparisons":13,"enough_data":true}],"elo":{"ratings":{"r":1425.9570587384999,"s":974.0429412614999},"counts":{"r":13,"s":13},"k":40},"bradley_terry":{"strengths":{"r":-0.3453,"s":0.3453},"counts":{"s":3,"r":3},"n_pairs":3,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"},"agreement_kendall_tau":-1,"note":"proposals only — nothing is applied; items under 3 comparisons render 'not enough data'"}}
+{"fn":"ladderReport","input":[[["u1","u2"],["u2","u3"],["u3","u1"],["u1","u2"],["u2","u3"],["u3","u1"],["u1","u3"],["u2","u1"]]],"output":{"ladder":[{"item":"u2","rating":1213.1,"comparisons":5,"enough_data":true},{"item":"u1","rating":1198.2,"comparisons":6,"enough_data":true},{"item":"u3","rating":1188.7,"comparisons":5,"enough_data":true}],"elo":{"ratings":{"u1":1198.1501065306936,"u2":1213.1220324118306,"u3":1188.7278610574758},"counts":{"u1":6,"u2":5,"u3":5},"k":24},"bradley_terry":{"strengths":{"u1":0,"u2":0.2909,"u3":-0.2909},"counts":{"u1":6,"u2":5,"u3":5},"n_pairs":8,"iterations":200,"algorithm":"bradley-terry logistic fit, deterministic gradient ascent (Bradley & Terry 1952; the proposal's verification plan governs the tests)"},"agreement_kendall_tau":1,"note":"proposals only — nothing is applied; items under 3 comparisons render 'not enough data'"}}

@@ -158,6 +158,8 @@ pub struct Harness {
     pub executed_tools: AtomicU64,
     /// Two-queue steering (omp-style): amend vs follow-up (D3).
     steer: Arc<std::sync::Mutex<SteerQueues>>,
+    /// P4 faculties attached to this session (observational hooks).
+    pub faculties: Vec<Arc<dyn crate::faculty::Faculty>>,
 }
 
 /// Steering queues (omp-style two-queue: amend vs follow-up).
@@ -242,7 +244,30 @@ impl Harness {
             stop_on_tool_error,
             executed_tools: AtomicU64::new(0),
             steer: Arc::new(std::sync::Mutex::new(SteerQueues::default())),
+            faculties: Vec::new(),
         }
+    }
+
+    /// P4: attach a faculty (observability + narrow influence hooks).
+    pub fn add_faculty(&mut self, f: Arc<dyn crate::faculty::Faculty>) {
+        self.faculties.push(f);
+    }
+
+    /// P4: faculty context for the current position.
+    fn hook_ctx(&self, step: u64) -> crate::faculty::HookCtx {
+        crate::faculty::HookCtx {
+            session_id: self.ctx.session_id.clone(),
+            cwd: self.ctx.cwd.clone(),
+            turn: self.turn_counter.load(Ordering::SeqCst),
+            step,
+        }
+    }
+
+    /// P4 idle surface: collect proposals from all faculties (the UI
+    /// approval flow consumes them; nothing executes silently).
+    pub async fn idle_proposals(&self) -> Vec<crate::faculty::Proposal> {
+        let ctx = self.hook_ctx(0);
+        crate::faculty::run_idle(&self.bus, &self.faculties, &ctx).await
     }
 
     pub async fn run_turn(&self, user_text: &str) -> StopReason {
@@ -349,6 +374,10 @@ impl Harness {
                 ..Default::default()
             };
 
+            // P4 pre_model hook (observational)
+            crate::faculty::run_pre_model(&self.bus, &self.faculties, &self.hook_ctx(steps), &req)
+                .await;
+
             // 2. call provider — D11 real failover: on a transport error the
             //    model is marked unavailable and the next chain entry is
             //    tried; streaming onto the bus (D9), cancellable (D8). The
@@ -453,6 +482,23 @@ impl Harness {
 
             // 3. tool calls?
             let calls: Vec<ToolCall> = step.tool_calls().iter().map(|t| (*t).clone()).collect();
+
+            // P4 post_step hook: the learning stream (drift/conformal/regret)
+            crate::faculty::run_post_step(
+                &self.bus,
+                &self.faculties,
+                &self.hook_ctx(steps),
+                &crate::faculty::StepOutcome {
+                    model: entry.model.clone(),
+                    input_tokens: step.usage.input_tokens,
+                    output_tokens: step.usage.output_tokens,
+                    had_tool_calls: !calls.is_empty(),
+                    had_tool_error: false,
+                    text_len: step.text().chars().count() as u64,
+                    latency_ms: 0.0,
+                },
+            )
+            .await;
 
             if calls.is_empty() {
                 self.journal_rec(&JournalRecord::AssistantMessage {
@@ -633,6 +679,20 @@ impl Harness {
     /// enforced per-call timeout (D8).
     async fn exec_one(&self, tc: &ToolCall) -> (String, bool) {
         let args = tc.parse_args().unwrap_or(Value::Null);
+        // P4 pre_tool hook: a faculty may deny with a verbatim reason
+        let step_now = self.turn_counter.load(Ordering::SeqCst);
+        if let Some(reason) = crate::faculty::run_pre_tool(
+            &self.bus,
+            &self.faculties,
+            &self.hook_ctx(step_now),
+            &tc.name,
+            &args,
+        )
+        .await
+        {
+            self.executed_tools.fetch_add(1, Ordering::SeqCst);
+            return (format!("denied by faculty `{reason}`"), true);
+        }
         self.bus.publish(Event::ToolCallStarted {
             id: tc.id.clone(),
             tool: tc.name.clone(),
@@ -972,6 +1032,7 @@ mod tests {
             compact_threshold_tokens: u64::MAX,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
+            faculties: Vec::new(),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1122,6 +1183,7 @@ mod tests {
             compact_threshold_tokens: u64::MAX,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
+            faculties: Vec::new(),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1567,6 +1629,7 @@ mod tests {
             compact_threshold_tokens: u64::MAX,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
+            faculties: Vec::new(),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1656,6 +1719,7 @@ mod tests {
             compact_threshold_tokens: u64::MAX,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
+            faculties: Vec::new(),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
