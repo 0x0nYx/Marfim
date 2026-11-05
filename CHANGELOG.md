@@ -1,5 +1,119 @@
 # Changelog
 
+## 0.3.0 — the Rust wave (2026-11-05)
+
+The Marfim core is rewritten in Rust: a Cargo workspace of five crates
+(`marfim-core`, `marfim-tools`, `marfim-mcp`, `marfim-gateway`, `marfim`),
+`#![forbid(unsafe_code)]` in every crate. **170 tests green** across the
+workspace, including a differential suite replaying Node v1.2.0 wire
+goldens (see `PARITY.md` for the item-by-item checkpoint). The Python
+harness remains in this release and keeps working; deletion is gated on
+the owner sign-off (Phase 5).
+
+### marfim-core (Phase 1)
+- Event bus (broadcast, JSON-serializable — drives stream-json + SSE).
+- Append-only session journal: fsync per record, crash-recovery replay,
+  rewind with `.pre-rewind` audit tail.
+- Agent loop with the invariant set: steering drains only after a full
+  tool-result batch (INV-02); verify fires only on no-tool-call steps
+  after mutations with a feedback budget (INV-01); unparseable
+  tool-call JSON is re-requested, never executed (INV-03); a single
+  retry layer at the transport — 429/408/409/5xx + network errors,
+  `Retry-After` honored, other 4xx never retried (INV-06); per-role
+  router with failover, real-model usage ledger, unknown pricing fails
+  closed (INV-05); compaction failure is an explicit stop (INV-07).
+- Permission engine: deny > ask > allow then mode; argv-level shell
+  analysis (quote-aware tokenizer; heredoc/`$()`/backticks/process
+  substitution can NEVER ride an allow past ask; compound/`&&`/`;`/`|`
+  segments checked individually); single serialized approval queue with
+  fail-closed when no listener; env allowlist for subprocesses.
+- Hooks: PreToolUse fail-closed (spawn error, non-zero exit, timeout and
+  bad JSON all block the tool), PostToolUse best-effort.
+- Sandbox: `unshare(1)` availability PROBED by running it (containers
+  EPERM it), process-group spawn + TERM→KILL tree teardown, sanitized env.
+- Strict config: unknown keys error with Levenshtein did-you-mean.
+- Skills (SKILL.md frontmatter, `.marfim/skills` + `.claude/skills`),
+  memory store whose entries can only TIGHTEN safety (relaxation
+  attempts are stored AS constraints; deletion needs explicit confirm),
+  Guardian rule engine with denial cap + kill-switch, evidence ledger,
+  TTL message board, trust store (longest-prefix).
+
+### marfim-tools (Phase 2)
+All 34 Node v1.2.0 tool names (PARITY §4): Read/Write/Edit (exact →
+line-anchored → whitespace-flexible ladder; identifier-fuzzy matching
+rejected, bug-compat #3)/MultiEdit (all-or-nothing)/Glob/Grep/LS/Bash
+(timeout, process-group kill, output cap)/BashOutput/KillShell/
+ApplyPatch/ApplyDiff (unified diff parser with ±1/2/4/8 fuzz and
+trim-matched fallback)/TodoWrite/Think/EnterPlanMode/ExitPlanMode/
+NotebookEdit/RepoMap (heuristic symbol extractor: py/rs/go/js/ts/java/c/
+cpp/rb; reference-count ranking)/Memory/Compute (recursive-descent
+evaluator)/ToolSearch/Task/TaskOutput/WebFetch (SSRF guard: DNS resolve
+→ block loopback/private/link-local/CGNAT/metadata IPs; https-only;
+redirect re-validation; 2 MiB cap)/WebSearch (honest error without an
+API key)/Monitor/MonitorKill/BinInfo/BinStrings/BinHexdump/BinSqlite/
+AstQuery/Eval/JsModuleGraph.
+
+### marfim-mcp (Phase 2)
+MCP client (stdio, initialize handshake, tools/list → `server__tool`
+namespacing, tools/call) and MCP server (exposes the marfim catalog;
+read-only tools execute, execution-class tools refuse without the
+interactive host).
+
+### marfim-gateway (Phase 2)
+- `serve`: hand-rolled HTTP/1.1 + SSE — /healthz, /v1/events,
+  /v1/prompt, /v1/sessions, /v1/approvals/:id, /v1/tools.
+- ACP agent over stdio (initialize, session/new, session/prompt with
+  session/update notifications, session/set_mode, fs/read_file,
+  fs/write_file) accepting both Content-Length and newline framing.
+- ACP client + external agent catalog (`opencode` → `opencode acp`,
+  `hermes` → `hermes-agent acp`): per the no-invention rule every
+  profile ships `enabled=false verified=false` until the owner runs the
+  binaries.
+- LSP server (initialize, didOpen/didChange, completion with the full
+  slash-command set, publishDiagnostics TODO/FIXME + long lines).
+
+### marfim (CLI, Phase 2)
+`marfim -p "..." --output-format text|json|stream-json` (claude-code
+compatible contracts), interactive REPL with the full 65-command slash
+surface + `q`/`?` aliases + `.marfim/commands/*.md` discovery, subcommands
+`serve` `acp` `lsp` `mcp` `doctor` `agents` `sessions`, Node v1.2.0 flag
+parity (`--model/-m --provider --resume --permission-mode --cwd/-C
+--title --profile --budget --failover --glob --on-fail --debounce
+--port --host --token --max-mode --var --days`).
+
+### Performance
+Release binary: **6.4 MB** (budget <25 MB). tokio runtime idles well
+under the 80 MB core RAM budget.
+
+### Dependencies (workspace) — justification per the minimal-deps rule
+- `tokio` — async runtime: every surface (providers, gateway, sandbox,
+  MCP) is IO-bound; the de-facto standard, no fork risk.
+- `reqwest` (default-features off, `rustls-tls`) — provider HTTP +
+  WebFetch; rustls avoids the OpenSSL toolchain dependency.
+- `serde` + `serde_json` — wire/session/config serialization; non-negotiable.
+- `clap` (derive) — CLI arg surface with Node-flag parity; hand-rolling
+  an arg parser invites drift.
+- `thiserror` — error enums without boilerplate; proc-macro only at
+  compile time.
+- `futures-util` — SSE byte-stream consumption (`bytes_stream`).
+- `regex` — Grep tool + lint diagnostics + html stripping; a regex
+  engine is part of the product surface (Node used ripgrep internally).
+- `async-trait` — `Provider`/`ToolHost` async traits (pre-1.75-stable
+  AFIT ergonomics; revisit when RPITIT covers object-safety needs).
+- Tree-sitter was evaluated for RepoMap/AstQuery and DEFERRED: the
+  grammars cost ~30 MB of binary size against the 25 MB budget; the
+  heuristic extractor covers 9 languages and AstQuery stays honestly
+  disabled (see PARITY §4).
+
+### Intentional divergences (bug-compat rejected — PARITY §10)
+1. Truncated tool-call JSON is never handed to tools (Node recorded a
+   `{__parseError}` sentinel into transcripts; Rust re-requests).
+2. Steer-handoff aborts journal the partial assistant message with
+   `stop_reason: aborted` (Node dropped it; accounting stayed exact).
+3. Edit ladder stops at line-anchored matching (Node's ApplyDiff could
+   fuzzy-match across identifier casing; unsafe).
+
+
 ## 0.2.0 — the safety wave (2026-11-03)
 
 Full 34-finding security & correctness review executed. Every finding has a

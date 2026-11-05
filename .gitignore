@@ -13,6 +13,9 @@ venv/
 .marfim/worktrees/
 .marfim/cache/
 
+# Rust
+target/
+
 # tooling
 .pytest_cache/
 .mypy_cache/

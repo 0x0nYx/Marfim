@@ -1,0 +1,17 @@
+{
+  "comment": "Node v1.2.0 goldens: content_block SSE, message_delta usage merge (anthropic.js:103-110), tool_use raw args",
+  "sse": [
+    "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":20,\"cache_creation_input_tokens\":5}}}",
+    "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu1\",\"name\":\"Read\"}}",
+    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"pa\"}}",
+    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"th\\\": \\\"x.rs\\\"}\"}}",
+    "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+    "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":42}}",
+    "event: message_stop\ndata: {\"type\":\"message_stop\"}"
+  ],
+  "golden": {
+    "stop": "tool_use",
+    "usage": {"input_tokens": 100, "output_tokens": 42, "cache_read_tokens": 20, "cache_creation_tokens": 5},
+    "tool_calls": [{"id": "tu1", "name": "Read", "arguments_json": "{\"path\": \"x.rs\"}"}]
+  }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "marfim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Marfim CLI (Rust)"
+
+[[bin]]
+name = "marfim"
+path = "src/main.rs"
+
+[dependencies]
+marfim-core = { path = "../marfim-core" }
+marfim-tools = { path = "../marfim-tools" }
+marfim-mcp = { path = "../marfim-mcp" }
+marfim-gateway = { path = "../marfim-gateway" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+async-trait.workspace = true

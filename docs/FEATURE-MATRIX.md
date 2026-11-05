@@ -1,5 +1,35 @@
 # Marfim Feature Matrix — capability-by-source synthesis
 
+> **Rust wave (v0.3.0):** rows marked 🦢✅ are implemented in the Rust
+> workspace (see `PARITY.md` for the item-by-item Node v1.2.0 parity
+> checkpoint with per-module status). The Python column reflects the
+> 0.2.0 harness that still ships until Phase 5.
+
+Every row is a Marfim capability. "Source" names the harness(es) whose *verified
+behavior* it synthesizes (clean-room; see CLEAN-ROOM.md). "Status" reflects what
+ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.md`.
+
+## 0. Rust parity snapshot (v0.3.0)
+
+| Surface | Rust status |
+|---|---|
+| 34 tools (Node v1.2.0 names) | 🦢✅ (`marfim-tools`, AstQuery/Eval/JsModuleGraph honestly gated on external binaries) |
+| 65 slash commands + aliases | 🦢✅ (`marfim` REPL) |
+| Headless text/json/stream-json | 🦢✅ (e2e-tested against the binary) |
+| OpenAI-compat + Anthropic wires + mock | 🦢✅ (differential-tested vs Node goldens) |
+| Router roles + failover + fail-closed pricing | 🦢✅ |
+| Permissions (deny>ask>allow>mode, argv-level shell analysis, single queue) | 🦢✅ |
+| Hooks (PreToolUse fail-closed) | 🦢✅ |
+| Sandbox (env clean, process-group kill, unshare probe) | 🦢✅ |
+| Session journal (append-only, fsync, rewind w/ audit tail) | 🦢✅ |
+| Strict config (unknown key + did-you-mean) | 🦢✅ |
+| Skills / memory (tighten-only) / guardian / evidence / board / trust | 🦢✅ |
+| MCP client + server | 🦢✅ |
+| serve (HTTP+SSE) / ACP agent+client / LSP | 🦢✅ |
+| External agents (opencode, hermes) | 🦢✅ profiles shipped `unverified=true enabled=false` pending owner binaries |
+| Google / Zen provider dialects | 🦢 partial (OpenAI-compat covers compatible endpoints; documented in PARITY §3) |
+| CDP devtools browser tools | 🦢 deferred to app wave (PARITY §10.4) |
+
 Every row is a Marfim capability. "Source" names the harness(es) whose *verified
 behavior* it synthesizes (clean-room; see CLEAN-ROOM.md). "Status" reflects what
 ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.md`.

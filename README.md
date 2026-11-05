@@ -1,5 +1,25 @@
 # Marfim — one harness, every discipline
 
+> **Rust wave (v0.3.0):** the core is now a Cargo workspace
+> (`marfim-core`, `marfim-tools`, `marfim-mcp`, `marfim-gateway`, `marfim`)
+> with `#![forbid(unsafe_code)]`, 170 green tests and a 6.4 MB release
+> binary. See [PARITY.md](PARITY.md) for the item-by-item Node v1.2.0
+> parity checkpoint and [CHANGELOG.md](CHANGELOG.md) for the 0.3.0 notes.
+> The Python harness below still works; Phase-5 deletion awaits owner
+> sign-off.
+
+```bash
+cargo build --release            # Rust CLI (marfim)
+cargo test                       # 170 tests incl. wire-golden differentials
+./target/release/marfim doctor
+./target/release/marfim -p "fix the failing test" --output-format stream-json
+./target/release/marfim serve --port 7900      # HTTP+SSE gateway
+./target/release/marfim mcp                    # MCP server over stdio
+./target/release/marfim lsp                    # LSP server over stdio
+./target/release/marfim acp                    # ACP agent over stdio
+```
+
+
 **Marfim** is a unified, clean-room coding-agent harness for the terminal. It was designed
 after a forensic analysis of ten state-of-the-art agent codebases, adopting the strongest
 *verified* discipline from each — no copied code, only proven ideas re-implemented from
