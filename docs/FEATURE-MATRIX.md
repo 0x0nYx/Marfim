@@ -1,9 +1,10 @@
 # Marfim Feature Matrix — capability-by-source synthesis
 
-> **Rust wave (v0.3.0):** rows marked 🦢✅ are implemented in the Rust
-> workspace (see `PARITY.md` for the item-by-item Node v1.2.0 parity
-> checkpoint with per-module status). The Python column reflects the
-> 0.2.0 harness that still ships until Phase 5.
+> **1.0.0:** rows marked 🦢✅ are implemented in the Rust workspace
+> (see docs/PORT-LEDGER.md for the honest, fixture-verified port status
+> of the intelligence modules). The Python column is historical (the
+> Python harness is gone; the oracle tree is preserved under the
+> archive/ tags).
 
 Every row is a Marfim capability. "Source" names the harness(es) whose *verified
 behavior* it synthesizes (clean-room; see CLEAN-ROOM.md). "Status" reflects what
@@ -27,7 +28,7 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | MCP client + server | 🦢✅ |
 | serve (HTTP+SSE) / ACP agent+client / LSP | 🦢✅ |
 | External agents (opencode, hermes) | 🦢✅ profiles shipped `unverified=true enabled=false` pending owner binaries |
-| Google / Zen provider dialects | 🦢 partial (OpenAI-compat covers compatible endpoints; documented in PARITY §3) |
+| Google / Zen provider dialects | 🦢 partial (OpenAI-compat covers compatible endpoints; documented in the provider presets) |
 | CDP devtools browser tools | 🦢 deferred to app wave (PARITY §10.4) |
 
 Every row is a Marfim capability. "Source" names the harness(es) whose *verified

@@ -1,22 +1,23 @@
 # Marfim — one harness, every discipline
 
-> **Rust wave (v0.3.0):** the core is now a Cargo workspace
-> (`marfim-core`, `marfim-tools`, `marfim-mcp`, `marfim-gateway`, `marfim`)
-> with `#![forbid(unsafe_code)]`, 170 green tests and a 6.4 MB release
-> binary. See [PARITY.md](PARITY.md) for the item-by-item Node v1.2.0
-> parity checkpoint and [CHANGELOG.md](CHANGELOG.md) for the 0.3.0 notes.
-> The Python harness below still works; Phase-5 deletion awaits owner
-> sign-off.
+> **1.0.0:** one Rust workspace, one static `marfim` binary, the
+> intelligence modules ported differentially from the Node oracle
+> ([docs/PORT-LEDGER.md](docs/PORT-LEDGER.md)), 475 green tests,
+> `#![forbid(unsafe_code)]` everywhere, MIT.
 
 ```bash
-cargo build --release            # Rust CLI (marfim)
-cargo test                       # 170 tests incl. wire-golden differentials
+cargo build --release            # static marfim binary
+cargo test                       # 475 tests incl. 17 oracle-differential suites
 ./target/release/marfim doctor
 ./target/release/marfim -p "fix the failing test" --output-format stream-json
+./target/release/marfim tui                    # ratatui over the session actor
 ./target/release/marfim serve --port 7900      # HTTP+SSE gateway
 ./target/release/marfim mcp                    # MCP server over stdio
 ./target/release/marfim lsp                    # LSP server over stdio
 ./target/release/marfim acp                    # ACP agent over stdio
+./target/release/marfim sessions               # list journals, --resume <id>
+./target/release/marfim models                 # offline models.dev catalog
+./target/release/marfim --routing bandit -p "…"  # UCB1 model routing
 ```
 
 
@@ -48,7 +49,6 @@ Type /help for commands · Ctrl-C interrupts · Ctrl-D exits
 ## Install
 
 ```bash
-pip install -e .        # zero runtime dependencies, Python 3.11+
 marfim doctor           # environment check
 ```
 
@@ -90,7 +90,7 @@ command = "npx"
 args    = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 
 [hooks]
-PreToolUse = ["python3 scripts/audit-tool.py"]   # exit 2 vetoes the tool call
+PreToolUse = ["./examples/hooks/pre-tool-use-secret-guard.sh"]   # exit 2 vetoes the tool call
 
 [sandbox]
 mode = "bubblewrap"          # or "seatbelt" on macOS, "none" to disable
@@ -159,7 +159,6 @@ A 34-finding forensic review was executed end-to-end; every finding has a regres
 ## Repository layout
 
 ```
-marfim/                  the harness (Python, stdlib-only core)
   providers/             wire protocols + models.dev registry + mock
   agent/                 loop, prompts, compaction
   tools/                 13 built-in tools + MCP bridge

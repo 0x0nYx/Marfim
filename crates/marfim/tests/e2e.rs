@@ -52,7 +52,7 @@ fn drain_into<R: std::io::Read + Send + 'static>(
 fn version_and_doctor() {
     let out = Command::new(bin_path()).arg("--version").output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("marfim 0.3.0"), "{text}");
+    assert!(text.contains("marfim 1.0.0"), "{text}");
 
     let out = Command::new(bin_path()).arg("doctor").output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
