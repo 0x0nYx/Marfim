@@ -22,6 +22,12 @@ toml.workspace = true
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", default-features = false, features = ["signal"] }
 
+# Landlock filesystem sandbox (Linux 5.13+ ABI v5): the crate wraps the
+# raw syscalls; our code stays safe-only and fail-closed (an unsupported
+# kernel REFUSES the command instead of running it unsandboxed).
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4" 
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 # D10: outbound bodies are validated against the vendored wire schemas.

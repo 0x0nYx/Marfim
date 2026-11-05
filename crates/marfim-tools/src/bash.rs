@@ -91,7 +91,10 @@ pub async fn run_bash(
         );
     }
 
-    let mut cmd: Command = sandbox.command("/bin/sh");
+    let mut cmd: Command = match sandbox.command("/bin/sh") {
+        Ok(c) => c,
+        Err(e) => return (e, true), // fail-closed refusal is a tool error
+    };
     cmd.arg("-c").arg(command);
     cmd.current_dir(&ctx.cwd);
     cmd.stdin(std::process::Stdio::null());

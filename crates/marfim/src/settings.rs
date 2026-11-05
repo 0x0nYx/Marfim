@@ -174,6 +174,17 @@ pub enum Command {
     Sessions,
     /// List models from the offline models.dev catalog (--provider filters)
     Models,
+    /// Internal: run <cmd>... with filesystem writes confined to --root
+    /// dirs (Landlock on Linux / Seatbelt on macOS). FAIL-CLOSED: if the
+    /// platform cannot enforce, the command refuses to start.
+    SandboxExec {
+        /// Writable roots (reads stay broad; execution inherited)
+        #[arg(long = "root")]
+        roots: Vec<String>,
+        /// Command to exec after the sandbox is applied
+        #[arg(last = true)]
+        cmd: Vec<String>,
+    },
 }
 
 /// Built-in provider presets (D11): presets carry wire + base URL + the
