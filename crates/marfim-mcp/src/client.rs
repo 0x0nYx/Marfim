@@ -20,6 +20,9 @@ pub struct McpClient {
     next_id: AtomicU64,
     pending: std::sync::Mutex<PendingRx>,
     pub tools: Mutex<ToolListing>,
+    /// Per-call deadline. The 30 s default is for real servers; tests
+    /// inject a short deadline so stale responses fail fast and honestly.
+    pub call_timeout: std::time::Duration,
 }
 
 impl McpClient {
@@ -28,6 +31,17 @@ impl McpClient {
         server_name: &str,
         command: &str,
         args: &[String],
+    ) -> Result<Arc<Self>, String> {
+        Self::spawn_with_timeout(server_name, command, args, std::time::Duration::from_secs(30))
+            .await
+    }
+
+    /// Like [`McpClient::spawn`] with an explicit per-call deadline.
+    pub async fn spawn_with_timeout(
+        server_name: &str,
+        command: &str,
+        args: &[String],
+        call_timeout: std::time::Duration,
     ) -> Result<Arc<Self>, String> {
         let mut child = Command::new(command)
             .args(args)
@@ -48,6 +62,7 @@ impl McpClient {
             next_id: AtomicU64::new(1),
             pending: std::sync::Mutex::new(None),
             tools: Mutex::new(vec![]),
+            call_timeout,
         });
 
         // reader task: collect responses by id, notifications dropped
@@ -65,7 +80,7 @@ impl McpClient {
                 }
             }
         });
-        *client.pending.lock().unwrap() = Some(rx);
+        *client.pending.lock().unwrap_or_else(|p| p.into_inner()) = Some(rx);
 
         // initialize handshake
         let result = client
@@ -120,7 +135,7 @@ impl McpClient {
             stdin.flush().await.map_err(|e| format!("mcp flush: {e}"))?;
         }
         // wait for the matching response (dropping stale ones)
-        let deadline = tokio::time::Duration::from_secs(30);
+        let deadline = self.call_timeout;
         let started = tokio::time::Instant::now();
         loop {
             if started.elapsed() > deadline {
@@ -130,7 +145,7 @@ impl McpClient {
             let mut taken = self
                 .pending
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|p| p.into_inner())
                 .take()
                 .ok_or_else(|| format!("mcp {method}: reader not installed"))?;
             let resp = match tokio::time::timeout(deadline, taken.recv()).await {
@@ -139,7 +154,7 @@ impl McpClient {
                 Err(_) => return Err(format!("mcp {method}: timed out")),
             };
             // put the receiver back for the next call
-            *self.pending.lock().unwrap() = Some(taken);
+            *self.pending.lock().unwrap_or_else(|p| p.into_inner()) = Some(taken);
             if resp.id.as_u64() == Some(id) {
                 if let Some(err) = resp.error {
                     return Err(format!("mcp {method}: {} ({})", err.message, err.code));
