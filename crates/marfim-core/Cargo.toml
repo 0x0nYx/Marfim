@@ -17,6 +17,11 @@ regex.workspace = true
 async-trait.workspace = true
 toml.workspace = true
 
+# Safe process-group signalling (kill(2) on the negative pgid) for Linux+macOS.
+# marfim-core forbids unsafe code, so libc is wrapped via nix's safe API.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", default-features = false, features = ["signal"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 # D10: outbound bodies are validated against the vendored wire schemas.
