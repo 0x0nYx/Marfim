@@ -50,6 +50,33 @@ pub struct Router {
     pub budgeted: bool,
     /// Failover state (D11): models marked unavailable until an instant.
     unavailable_until: std::collections::BTreeMap<(Role, String), std::time::Instant>,
+    /// P3 bandit routing: UCB1 over observed outcomes per (role, model).
+    /// Off by default — chain order stays the zero-config behavior.
+    pub bandit: bool,
+    stats: std::collections::BTreeMap<(Role, String), BanditStats>,
+    rounds: std::collections::BTreeMap<Role, u64>,
+}
+
+/// Observed outcomes for one (role, model) under bandit routing.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct BanditStats {
+    pub pulls: u64,
+    pub successes: u64,
+    pub total_latency_ms: f64,
+}
+
+impl BanditStats {
+    /// Reward in [0,1]: success indicator, latency as tiebreak signal
+    /// (faster successes earn slightly more).
+    fn reward(&self) -> f64 {
+        if self.pulls == 0 {
+            return 0.0;
+        }
+        let success_rate = self.successes as f64 / self.pulls as f64;
+        let avg_latency = self.total_latency_ms / self.pulls as f64;
+        let latency_bonus = 1.0 - (avg_latency / 30_000.0).min(0.25);
+        success_rate * (0.75 + 0.25 * latency_bonus)
+    }
 }
 
 impl Router {
@@ -59,7 +86,78 @@ impl Router {
             costs,
             budgeted,
             unavailable_until: Default::default(),
+            bandit: false,
+            stats: Default::default(),
+            rounds: Default::default(),
         }
+    }
+
+    /// P3: enable UCB1 selection over healthy chain candidates (default
+    /// off: strict chain order).
+    pub fn set_bandit(&mut self, on: bool) {
+        self.bandit = on;
+    }
+
+    /// Record one observed outcome (called by the agent loop after each
+    /// provider step).
+    pub fn report_outcome(&mut self, role: Role, model: &str, success: bool, latency_ms: f64) {
+        let s = self.stats.entry((role, model.to_string())).or_default();
+        s.pulls += 1;
+        if success {
+            s.successes += 1;
+        }
+        s.total_latency_ms += latency_ms.max(0.0);
+        *self.rounds.entry(role).or_default() += 1;
+    }
+
+    pub fn stats_for(&self, role: Role, model: &str) -> BanditStats {
+        self.stats
+            .get(&(role, model.to_string()))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// UCB1 pick among the USABLE candidates (probe-passing, available,
+    /// priced under budget). Untried models go first, in chain order.
+    /// Returns None when bandit selection does not apply.
+    fn bandit_pick<F>(
+        &self,
+        role: Role,
+        candidates: &[&ModelEntry],
+        probe: &mut F,
+    ) -> Option<ModelEntry>
+    where
+        F: FnMut(&ModelEntry) -> bool,
+    {
+        if !self.bandit || candidates.len() < 2 {
+            return None;
+        }
+        let usable: Vec<&&ModelEntry> = candidates
+            .iter()
+            .filter(|e| self.is_available(role, &e.model) && probe(e))
+            .collect();
+        if usable.len() < 2 {
+            return None;
+        }
+        let t = *self.rounds.get(&role).unwrap_or(&0);
+        let mut best: Option<(&ModelEntry, f64)> = None;
+        for e in usable {
+            let s = self.stats_for(role, &e.model);
+            let score = if s.pulls == 0 {
+                // untried first: chain order breaks ties deterministically
+                f64::INFINITY
+            } else {
+                s.reward() + std::f64::consts::SQRT_2 * ((t as f64).ln() / s.pulls as f64).sqrt()
+            };
+            if best.map(|(_, bs)| score > bs).unwrap_or(true) {
+                best = Some((e, score));
+            }
+        }
+        best.map(|(e, _)| ModelEntry {
+            model: e.model.clone(),
+            provider: e.provider.clone(),
+            priced: e.priced,
+        })
     }
 
     /// D11: mark a model unavailable after a transport error; the failover
@@ -104,6 +202,12 @@ impl Router {
             )));
         }
         let mut tried = Vec::new();
+        // P3 bandit: when enabled and more than one candidate is healthy,
+        // UCB1 decides among them (failover still applies on the outcome).
+        if let Some(picked) = self.bandit_pick(role, &chain.iter().collect::<Vec<_>>(), &mut probe)
+        {
+            return Ok((picked, tried));
+        }
         for entry in &chain {
             if self.budgeted && !entry.priced {
                 tried.push(format!("{}: unpriced (fail closed)", entry.model));
@@ -215,5 +319,75 @@ mod tests {
         };
         let c = cb.cost_usd("gpt-5-mini", &u).unwrap();
         assert!((c - (10_000.0 * 0.25 + 2_000.0 * 2.0) / 1e6).abs() < 1e-12);
+    }
+
+    fn bandit_entry(model: &str, priced: bool) -> ModelEntry {
+        ModelEntry {
+            model: model.into(),
+            provider: Arc::new(crate::providers::MockProvider::new(vec![])),
+            priced,
+        }
+    }
+
+    fn two_chain() -> Router {
+        let mut r = Router::new(CostBook::default(), false);
+        r.set_chain(
+            Role::Primary,
+            vec![bandit_entry("a", true), bandit_entry("b", true)],
+        );
+        r
+    }
+
+    #[test]
+    fn bandit_off_by_default_chain_order_unchanged() {
+        let mut r = two_chain();
+        r.report_outcome(Role::Primary, "a", false, 5.0); // a is failing
+        r.report_outcome(Role::Primary, "b", true, 5.0);
+        let (e, _) = r.resolve(Role::Primary, |_| true).unwrap();
+        assert_eq!(e.model, "a", "no bandit → strict chain order");
+    }
+
+    #[test]
+    fn bandit_prefers_healthy_model_after_observed_failures() {
+        let mut r = two_chain();
+        r.set_bandit(true);
+        // a: 3 failures; b: 3 successes
+        for _ in 0..3 {
+            r.report_outcome(Role::Primary, "a", false, 5.0);
+            r.report_outcome(Role::Primary, "b", true, 5.0);
+        }
+        let (e, _) = r.resolve(Role::Primary, |_| true).unwrap();
+        assert_eq!(e.model, "b", "UCB1 routes away from the failing head");
+    }
+
+    #[test]
+    fn bandit_plays_untried_first_in_chain_order() {
+        let mut r = two_chain();
+        r.set_bandit(true);
+        let (e, _) = r.resolve(Role::Primary, |_| true).unwrap();
+        assert_eq!(
+            e.model, "a",
+            "untried models first, chain order breaks ties"
+        );
+    }
+
+    #[test]
+    fn bandit_single_candidate_falls_back_to_chain_walk() {
+        let mut r = Router::new(CostBook::default(), false);
+        r.set_chain(Role::Primary, vec![bandit_entry("only", true)]);
+        r.set_bandit(true);
+        let (e, _) = r.resolve(Role::Primary, |_| true).unwrap();
+        assert_eq!(e.model, "only");
+    }
+
+    #[test]
+    fn bandit_stats_are_observable() {
+        let mut r = two_chain();
+        r.report_outcome(Role::Primary, "a", true, 100.0);
+        r.report_outcome(Role::Primary, "a", false, 50.0);
+        let s = r.stats_for(Role::Primary, "a");
+        assert_eq!(s.pulls, 2);
+        assert_eq!(s.successes, 1);
+        assert!((s.total_latency_ms - 150.0).abs() < 1e-9);
     }
 }

@@ -333,6 +333,21 @@ pub struct CostBook {
     pub pricing: std::collections::BTreeMap<String, (f64, f64)>,
 }
 
+impl CostBook {
+    /// P3: merge per-Mtok pricing for the given models.dev provider ids
+    /// into the book (only entries that exist and carry both prices).
+    /// Committing the snapshot keeps this fully offline (D11).
+    pub fn extend_from_catalog(&mut self, provider_ids: &[&str]) {
+        for p in provider_ids {
+            for (id, m) in crate::catalog::models_of(p) {
+                if let (Some(i), Some(o)) = (m.input_usd_per_mtok, m.output_usd_per_mtok) {
+                    self.pricing.entry(id.clone()).or_insert((i, o));
+                }
+            }
+        }
+    }
+}
+
 impl Default for CostBook {
     fn default() -> Self {
         let mut pricing = std::collections::BTreeMap::new();

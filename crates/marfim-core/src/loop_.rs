@@ -382,6 +382,7 @@ impl Harness {
                         text: t,
                     }),
                 };
+                let step_t0 = std::time::Instant::now();
                 match tokio::select! {
                     r = e.provider.chat_step_stream(&req, &mut on_ev) => r,
                     _ = cancel.cancelled() => {
@@ -389,11 +390,24 @@ impl Harness {
                     }
                 } {
                     Ok(s) => {
+                        // P3 bandit routing input: observed per-model outcome
+                        self.router.write().await.report_outcome(
+                            Role::Primary,
+                            &e.model,
+                            true,
+                            step_t0.elapsed().as_secs_f64() * 1000.0,
+                        );
                         entry = Some(e);
                         step = Some(s);
                         break;
                     }
                     Err(err) => {
+                        self.router.write().await.report_outcome(
+                            Role::Primary,
+                            &e.model,
+                            false,
+                            step_t0.elapsed().as_secs_f64() * 1000.0,
+                        );
                         self.router.write().await.mark_unavailable(
                             Role::Primary,
                             &e.model,

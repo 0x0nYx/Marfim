@@ -6,7 +6,6 @@
 //! all profiles ship unverified until the owner confirms the binaries).
 
 use serde_json::Value;
-use std::io::Write;
 use std::sync::Arc;
 
 // -------------------------------------------------------------- agent side
@@ -28,13 +27,26 @@ pub fn serve_agent_stdio(handlers: AgentHandlers) {
     let mut out = std::io::stdout();
     let mut pending: Vec<u8> = Vec::new();
     let mut reader = stdin.lock();
+    serve_agent_stream(&mut reader, &mut out, handlers, &mut pending);
+}
+
+/// One ACP agent session over an arbitrary byte stream. Splitting the
+/// stream from stdio is what makes the handshake FIXTURES possible: the
+/// recorded request transcripts in `fixtures/acp/handshake/` replay
+/// through in-memory buffers and the responses are asserted byte-level.
+pub fn serve_agent_stream<R: std::io::BufRead, W: std::io::Write>(
+    reader: &mut R,
+    out: &mut W,
+    handlers: AgentHandlers,
+    pending: &mut Vec<u8>,
+) {
     let mut session_counter = 0u64;
     let mut mode = "default".to_string();
     let mut eof = false;
 
     while !eof {
         // read one framed message
-        let msg = match read_message(&mut reader, &mut pending, &mut eof) {
+        let msg = match read_message(reader, pending, &mut eof) {
             Some(m) => m,
             None => break,
         };
@@ -107,27 +119,30 @@ pub fn serve_agent_stdio(handlers: AgentHandlers) {
             }
             ("fs/read_file", false) => {
                 let path = params["path"].as_str().unwrap_or("");
-                match std::fs::read_to_string(handlers.cwd.join(path)) {
+                let full = handlers.cwd.join(path);
+                match std::fs::read_to_string(&full) {
                     Ok(content) => serde_json::json!({
                         "jsonrpc": "2.0", "id": id,
                         "result": {"content": content}
                     }),
+                    // io::Error is bare — name the path so clients can act
                     Err(e) => serde_json::json!({
                         "jsonrpc": "2.0", "id": id,
-                        "error": {"code": -32000, "message": format!("{e}")}
+                        "error": {"code": -32000, "message": format!("fs/read_file {}: {e}", full.display())}
                     }),
                 }
             }
             ("fs/write_file", false) => {
                 let path = params["path"].as_str().unwrap_or("");
                 let content = params["content"].as_str().unwrap_or("");
-                match std::fs::write(handlers.cwd.join(path), content) {
+                let full = handlers.cwd.join(path);
+                match std::fs::write(&full, content) {
                     Ok(_) => {
                         serde_json::json!({"jsonrpc": "2.0", "id": id, "result": {"ok": true}})
                     }
                     Err(e) => serde_json::json!({
                         "jsonrpc": "2.0", "id": id,
-                        "error": {"code": -32000, "message": format!("{e}")}
+                        "error": {"code": -32000, "message": format!("fs/write_file {}: {e}", full.display())}
                     }),
                 }
             }

@@ -71,6 +71,7 @@ async fn async_main(cli: Cli) -> i32 {
         Some(Command::Doctor) => doctor_cmd(&cli, &config, &cwd, cwd_trust, &loaded_layers),
         Some(Command::Agents) => agents_cmd(),
         Some(Command::Sessions) => sessions_cmd(&cli),
+        Some(Command::Models) => models_cmd(&cli),
         None => run_cmd(cli, config, cwd).await,
     };
     std::process::exit(code);
@@ -501,7 +502,23 @@ async fn build_session(
         None => new_session(&settings.cwd.to_string_lossy(), settings.title.as_deref()),
     };
 
-    let mut router = Router::new(CostBook::default(), settings.budgeted);
+    // pricing: built-ins + the offline models.dev catalog for the active
+    // provider chain (unknown models still fail closed under --budget)
+    let mut costs = CostBook::default();
+    costs.extend_from_catalog(&[
+        "anthropic",
+        "openai",
+        "xai",
+        "google",
+        "groq",
+        "openrouter",
+        "deepseek",
+        "mistral",
+    ]);
+    let mut router = Router::new(costs, settings.budgeted);
+    if settings.routing == "bandit" {
+        router.set_bandit(true);
+    }
     let primary = settings::build_primary_chain(settings, config).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
@@ -897,6 +914,40 @@ fn agents_cmd() -> i32 {
     println!("external agent profiles (no-invention rule: unverified until owner runs them):");
     for (name, cmd, args, enabled, verified) in marfim_gateway::acp::external_agent_catalog() {
         println!("  {name}: {cmd} {args:?} enabled={enabled} verified={verified}");
+    }
+    0
+}
+
+fn models_cmd(cli: &Cli) -> i32 {
+    use marfim_core::catalog;
+    let provider_filter = cli.provider.as_deref();
+    let providers: Vec<String> = match provider_filter {
+        Some(p) => vec![p.to_string()],
+        None => catalog::providers(),
+    };
+    for p in providers {
+        let cat_provider = catalog::catalog_provider_for(&p).unwrap_or(&p);
+        let n = catalog::model_count(cat_provider);
+        if n == 0 {
+            println!("{p}: no catalog entries (local providers are not in models.dev)");
+            continue;
+        }
+        println!("{p}: {n} model(s) (snapshot {})", catalog::SNAPSHOT_DATE);
+        // details require the provider id; the CLI prints counts here —
+        // `marfim models --provider <p>` lists ids for scripted use
+        if provider_filter.is_some() {
+            for (id, m) in catalog::models_of(cat_provider) {
+                let ctx = m
+                    .context_tokens
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "?".into());
+                let price = match (m.input_usd_per_mtok, m.output_usd_per_mtok) {
+                    (Some(i), Some(o)) => format!("${i}/${o} per Mtok"),
+                    _ => "pricing n/a".into(),
+                };
+                println!("  {id}\t{}\tctx={ctx}\t{price}", m.name);
+            }
+        }
     }
     0
 }

@@ -26,6 +26,7 @@ pub const CONSUMED_FLAGS: &[&str] = &[
     "title",
     "profile",
     "budget",
+    "routing",
     "failover",
     "glob",
     "on_fail",
@@ -116,6 +117,11 @@ pub struct Cli {
     #[arg(long = "budget")]
     pub budget: Option<String>,
 
+    /// Model selection strategy: "chain" (default, strict order) or
+    /// "bandit" (UCB1 over observed outcomes, P3).
+    #[arg(long = "routing", default_value = "chain")]
+    pub routing: String,
+
     #[arg(long = "failover")]
     pub failover: Option<String>,
 
@@ -166,6 +172,8 @@ pub enum Command {
     Agents,
     /// Show session journals
     Sessions,
+    /// List models from the offline models.dev catalog (--provider filters)
+    Models,
 }
 
 /// Built-in provider presets (D11): presets carry wire + base URL + the
@@ -190,6 +198,16 @@ pub fn builtin_presets() -> std::collections::BTreeMap<&'static str, Preset> {
             base_url: "https://api.openai.com/v1".into(),
             api_key_env: "OPENAI_API_KEY".into(),
             default_model: "gpt-5".into(),
+        },
+    );
+    m.insert(
+        "gemini",
+        Preset {
+            // Google's OpenAI-compatible endpoint (generative language API)
+            wire: "openai".into(),
+            base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+            api_key_env: "GEMINI_API_KEY".into(),
+            default_model: "gemini-2.5-pro".into(),
         },
     );
     m.insert(
@@ -409,6 +427,8 @@ pub struct EffectiveSettings {
     pub rules: Vec<Rule>,
     pub working_globs: Vec<String>,
     pub budgeted: bool,
+    /// "chain" | "bandit" (P3 UCB1 routing).
+    pub routing: String,
     // Consumed from config (D13 coverage) and carried for the Phase 3
     // provider-request wiring; not yet read downstream.
     #[allow(dead_code)]
@@ -680,6 +700,7 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         rules,
         working_globs,
         budgeted,
+        routing: cli.routing.clone(),
         max_tokens,
         temperature,
         thinking_budget,
