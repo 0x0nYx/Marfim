@@ -8,6 +8,7 @@
 
 mod settings;
 mod slash;
+mod tui;
 
 use clap::Parser;
 use marfim_core::config::Config;
@@ -68,6 +69,13 @@ async fn async_main(cli: Cli) -> i32 {
             0
         }
         Some(Command::Mcp) => mcp_cmd(&config).await,
+        Some(Command::Tui) => match settings::effective(&cli, &config, cwd.clone()) {
+            Ok(s) => tui::run(&cli, config, s).await,
+            Err(e) => {
+                eprintln!("error: {e}");
+                1
+            }
+        },
         Some(Command::Doctor) => doctor_cmd(&cli, &config, &cwd, cwd_trust, &loaded_layers),
         Some(Command::Agents) => agents_cmd(),
         Some(Command::Sessions) => sessions_cmd(&cli),
