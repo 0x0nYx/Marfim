@@ -79,8 +79,10 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
     for m in &req.messages {
         match (m.role.as_str(), &m.tool_call_id, m.is_error) {
             ("tool", Some(id), is_err) => {
+                // OpenAI wire: tool content is a plain string; errors are
+                // marked in-band, not with a content array (D10).
                 let content = if is_err {
-                    serde_json::json!([{"type": "text", "text": m.content}])
+                    serde_json::Value::String(format!("[error] {}", m.content))
                 } else {
                     serde_json::Value::String(m.content.clone())
                 };
@@ -116,7 +118,35 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
         body["reasoning_effort"] = serde_json::json!(reasoning_effort(tb));
     }
     if !req.tools.is_empty() {
-        body["tools"] = serde_json::json!(req.tools);
+        // Normalize tool schemas to the OpenAI function format (D10): the
+        // registry emits {name, description, input_schema}; OpenAI wants
+        // {type: "function", function: {name, description, parameters}}.
+        let tools: Vec<serde_json::Value> = req
+            .tools
+            .iter()
+            .map(|t| {
+                if t.get("function").is_some() {
+                    t.clone() // already OpenAI-shaped
+                } else {
+                    let mut f = serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": t["name"].clone(),
+                            "parameters": if t["input_schema"].is_object() {
+                                t["input_schema"].clone()
+                            } else {
+                                serde_json::json!({"type": "object"})
+                            }
+                        }
+                    });
+                    if let Some(d) = t.get("description") {
+                        f["function"]["description"] = d.clone();
+                    }
+                    f
+                }
+            })
+            .collect();
+        body["tools"] = serde_json::json!(tools);
     }
     body
 }
@@ -281,6 +311,10 @@ impl Provider for OpenAiCompat {
         on_event: &mut (dyn FnMut(StreamEvent) + Send),
     ) -> Result<Step> {
         let body = build_body(req, &self.model);
+        // D10: fail fast on an invalid outbound body — never send it.
+        super::validate_openai_body(&body).map_err(|e| {
+            CoreError::Provider(format!("outbound body rejected by vendored schema: {e}"))
+        })?;
         let res = self.send_with_retry(&body).await?;
         let mut acc = Step::default();
         let mut stream = res.bytes_stream();

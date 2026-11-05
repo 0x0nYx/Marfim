@@ -25,6 +25,11 @@ pub enum Event {
     Thinking {
         text: String,
     },
+    /// Incremental streamed output (D9): `kind` is "text" or "thinking".
+    StreamDelta {
+        kind: String,
+        text: String,
+    },
     ToolCallStarted {
         id: String,
         tool: String,
@@ -84,6 +89,7 @@ impl Event {
             Event::ModelSelected { .. } => "model_selected",
             Event::AssistantMessage { .. } => "assistant_message",
             Event::Thinking { .. } => "thinking",
+            Event::StreamDelta { .. } => "stream_delta",
             Event::ToolCallStarted { .. } => "tool_call_started",
             Event::ToolCallResult { .. } => "tool_call_result",
             Event::ApprovalRequested { .. } => "approval_requested",

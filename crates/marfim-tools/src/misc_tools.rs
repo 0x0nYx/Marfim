@@ -364,6 +364,7 @@ mod tests {
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
+            subagent: Arc::new(crate::subagent::UnwiredSubagents),
         }
     }
 
@@ -652,6 +653,7 @@ mod tests_extra {
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
+            subagent: Arc::new(crate::subagent::UnwiredSubagents),
         }
     }
 

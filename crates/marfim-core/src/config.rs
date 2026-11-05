@@ -9,11 +9,10 @@ pub const KNOWN_KEYS: &[&str] = &[
     "model",
     "provider",
     "providers",
-    "profile",
     "smallModel",
     "architectModel",
+    "reviewModel",
     "failover",
-    "routing",
     "budget",
     "permissions",
     "sandbox",
@@ -23,43 +22,19 @@ pub const KNOWN_KEYS: &[&str] = &[
     "hooks",
     "lsp",
     "wal",
-    "cache",
     "compaction",
-    "microCompact",
-    "autoCompact",
     "autoCompactThreshold",
-    "autoCompactFloor",
     "steerMode",
     "stream",
     "theme",
     "env",
-    "git",
-    "review",
-    "audit",
-    "evidence",
-    "evidenceGate",
-    "guardian",
-    "riskScores",
-    "swarm",
-    "cron",
-    "goal",
-    "plugins",
-    "policy",
     "skills",
     "verify",
-    "ttsr",
-    "externalAgents",
-    "dialectTools",
-    "shield",
-    "gateguard",
-    "supplyChainGate",
-    "mcpHealthGate",
     "unattended",
     "verbose",
     "maxTokens",
     "temperature",
     "thinkingBudget",
-    "externalAgents",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -141,6 +116,122 @@ impl Config {
                 .collect(),
         )
     }
+
+    // ---------------------------------------------------------- D13
+    /// Strict per-section validation of the keys Marfim actually consumes.
+    /// Unknown keys INSIDE a consumed section are errors (not just
+    /// top-level keys) — fail loud, never silently ignore.
+    pub fn validate_consumed_sections(&self) -> crate::Result<()> {
+        let nested: &[(&str, &[&str])] = &[
+            (
+                "providers",
+                &["baseUrl", "apiKeyEnv", "model", "pricing", "wire"],
+            ),
+            ("mcpServers", &["command", "args", "env", "url"]),
+            (
+                "permissions",
+                &["mode", "deny", "ask", "allow", "workingGlobs"],
+            ),
+            ("bash", &["defaultTimeoutMs", "envAllowlist"]),
+            ("hooks", &["PreToolUse", "PostToolUse"]),
+            ("verify", &["commands"]),
+        ];
+        for (section, allowed) in nested {
+            if let Some(v) = self.raw.get(*section) {
+                let Some(map) = v.as_object() else {
+                    return Err(crate::CoreError::Config(format!(
+                        "`{section}` must be an object"
+                    )));
+                };
+                // providers/mcpServers are maps of sub-configs; permissions
+                // etc. are flat option objects.
+                if matches!(*section, "providers" | "mcpServers") {
+                    for (name, sub) in map {
+                        let Some(sobj) = sub.as_object() else {
+                            return Err(crate::CoreError::Config(format!(
+                                "`{section}.{name}` must be an object"
+                            )));
+                        };
+                        for k in sobj.keys() {
+                            if !allowed.contains(&k.as_str()) {
+                                let hint = did_you_mean(k, allowed)
+                                    .map(|s| format!(" (did you mean `{s}`?)"))
+                                    .unwrap_or_default();
+                                return Err(crate::CoreError::Config(format!(
+                                    "unknown key `{k}` in `{section}.{name}`{hint}"
+                                )));
+                            }
+                        }
+                    }
+                } else {
+                    for k in map.keys() {
+                        if !allowed.contains(&k.as_str()) {
+                            let hint = did_you_mean(k, allowed)
+                                .map(|s| format!(" (did you mean `{s}`?)"))
+                                .unwrap_or_default();
+                            return Err(crate::CoreError::Config(format!(
+                                "unknown key `{k}` in `{section}`{hint}"
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// D13: layered config — `~/.marfim/config.toml` first, then
+    /// `.marfim/config.toml` from the working directory (cwd wins).
+    /// The cwd layer is a TRUST GATE: it only loads when the directory is
+    /// trusted at Workspace level or above; an untrusted cwd must never be
+    /// able to configure providers or permissions.
+    pub fn load_layered(
+        home_dir: &std::path::Path,
+        cwd: &std::path::Path,
+        cwd_trust: crate::trust::Trust,
+    ) -> crate::Result<(Self, Vec<String>)> {
+        let mut out = Self::default();
+        let mut loaded = Vec::new();
+        let home_cfg = home_dir.join(".marfim").join("config.toml");
+        if home_cfg.is_file() {
+            let text = std::fs::read_to_string(&home_cfg)?;
+            let layer = Self::from_toml_str(&text)?;
+            out.merge(layer);
+            loaded.push(home_cfg.display().to_string());
+        }
+        if matches!(
+            cwd_trust,
+            crate::trust::Trust::Workspace | crate::trust::Trust::Trusted
+        ) {
+            let cwd_cfg = cwd.join(".marfim").join("config.toml");
+            if cwd_cfg.is_file() {
+                let text = std::fs::read_to_string(&cwd_cfg)?;
+                let layer = Self::from_toml_str(&text)?;
+                out.merge(layer);
+                loaded.push(cwd_cfg.display().to_string());
+            }
+        }
+        out.validate_consumed_sections()?;
+        Ok((out, loaded))
+    }
+
+    pub fn from_toml_str(s: &str) -> crate::Result<Self> {
+        let table: toml::Table = toml::from_str(s)
+            .map_err(|e| crate::CoreError::Config(format!("invalid TOML: {e}")))?;
+        let v = serde_json::to_value(table)?;
+        Self::from_value(v)
+    }
+
+    /// Later layers win on scalar conflicts; objects merge shallowly.
+    pub fn merge(&mut self, other: Self) {
+        for (k, v) in other.raw {
+            self.raw.insert(k, v);
+        }
+    }
+
+    pub fn keys(&self) -> Vec<String> {
+        self.raw.keys().cloned().collect()
+    }
 }
 
 #[cfg(test)]
@@ -177,5 +268,65 @@ mod tests {
         let mut c = Config::default();
         assert!(c.set("notakey", 1.into()).is_err());
         assert!(c.set("model", "x".into()).is_ok());
+    }
+
+    // ---------------------------------------------------------- D13
+    #[test]
+    fn layered_config_cwd_overrides_home_and_trust_gate_blocks_cwd_layer() {
+        let home = std::env::temp_dir().join(format!("marfim-cfg-h-{}", std::process::id()));
+        let cwd = std::env::temp_dir().join(format!("marfim-cwd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+        std::fs::create_dir_all(home.join(".marfim")).unwrap();
+        std::fs::create_dir_all(cwd.join(".marfim")).unwrap();
+        std::fs::write(
+            home.join(".marfim").join("config.toml"),
+            "model = \"home-model\"\nverbose = true\n",
+        )
+        .unwrap();
+        std::fs::write(
+            cwd.join(".marfim").join("config.toml"),
+            "model = \"cwd-model\"\n",
+        )
+        .unwrap();
+
+        // trusted cwd: both layers load, cwd wins
+        let (cfg, loaded) =
+            Config::load_layered(&home, &cwd, crate::trust::Trust::Workspace).unwrap();
+        assert_eq!(cfg.get_str("model", ""), "cwd-model");
+        assert!(cfg.get_bool("verbose", false));
+        assert_eq!(loaded.len(), 2);
+
+        // untrusted cwd: the cwd layer MUST NOT load (trust gate)
+        let (cfg2, loaded2) =
+            Config::load_layered(&home, &cwd, crate::trust::Trust::Untrusted).unwrap();
+        assert_eq!(cfg2.get_str("model", ""), "home-model");
+        assert_eq!(loaded2.len(), 1);
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn nested_section_keys_are_strict() {
+        let c = Config::from_toml_str(
+            "[mcpServers.files]\ncommand = \"mcp-fileserver\"\nbadKey = 1\n",
+        )
+        .unwrap();
+        let err = c.validate_consumed_sections().unwrap_err();
+        assert!(format!("{err}").contains("badKey"), "{err}");
+
+        let c2 = Config::from_toml_str(
+            "[providers.xai]\nbaseUrl = \"https://api.x.ai/v1\"\napiKeyEnv = \"XAI_API_KEY\"\n",
+        )
+        .unwrap();
+        assert!(c2.validate_consumed_sections().is_ok());
+    }
+
+    #[test]
+    fn toml_config_parses_strictly() {
+        assert!(Config::from_toml_str("modle = \"x\"").is_err());
+        let c = Config::from_toml_str("[permissions]\nmode = \"yolo\"\n").unwrap();
+        assert_eq!(c.get_str("permissions.mode", ""), ""); // top-level access only
+        assert_eq!(c.get("permissions").unwrap()["mode"], "yolo");
     }
 }

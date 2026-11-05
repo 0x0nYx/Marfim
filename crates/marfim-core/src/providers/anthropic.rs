@@ -23,20 +23,34 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
             serde_json::json!(sys)
         };
     }
-    let mut msgs = Vec::new();
+    // D10: tool results become tool_result blocks, and ALL results of one
+    // batch are merged into a SINGLE user message (Anthropic wire contract).
+    let mut msgs: Vec<serde_json::Value> = Vec::new();
+    let mut pending_results: Vec<serde_json::Value> = Vec::new();
+    let flush_results = |msgs: &mut Vec<serde_json::Value>,
+                         pending: &mut Vec<serde_json::Value>| {
+        if !pending.is_empty() {
+            msgs.push(serde_json::json!({
+                "role": "user",
+                "content": pending.drain(..).collect::<Vec<_>>()
+            }));
+        }
+    };
     for m in &req.messages {
         match (m.role.as_str(), &m.tool_call_id) {
             ("tool", Some(id)) => {
-                let content = if m.is_error {
-                    serde_json::json!([{"type": "text", "text": m.content, "is_error": true}])
-                } else {
-                    serde_json::json!([{"type": "text", "text": m.content}])
-                };
-                msgs.push(
-                    serde_json::json!({"role": "user", "content": content, "tool_use_id": id}),
-                );
+                let mut block = serde_json::json!({
+                    "type": "tool_result",
+                    "tool_use_id": id,
+                    "content": [{"type": "text", "text": m.content}]
+                });
+                if m.is_error {
+                    block["is_error"] = serde_json::json!(true);
+                }
+                pending_results.push(block);
             }
             ("assistant", _) if !m.tool_calls.is_empty() => {
+                flush_results(&mut msgs, &mut pending_results);
                 let mut content = Vec::new();
                 if !m.content.is_empty() {
                     content.push(serde_json::json!({"type": "text", "text": m.content}));
@@ -50,9 +64,13 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
                 }
                 msgs.push(serde_json::json!({"role": "assistant", "content": content}));
             }
-            (role, _) => msgs.push(serde_json::json!({"role": role, "content": m.content})),
+            (role, _) => {
+                flush_results(&mut msgs, &mut pending_results);
+                msgs.push(serde_json::json!({"role": role, "content": m.content}));
+            }
         }
     }
+    flush_results(&mut msgs, &mut pending_results);
     let mut body = serde_json::json!({
         "model": model,
         "max_tokens": req.max_completion_tokens.unwrap_or(8192),
@@ -270,6 +288,10 @@ impl Provider for Anthropic {
         on_event: &mut (dyn FnMut(StreamEvent) + Send),
     ) -> Result<Step> {
         let body = build_body(req, &self.model);
+        // D10: fail fast on an invalid outbound body — never send it.
+        super::validate_anthropic_body(&body).map_err(|e| {
+            CoreError::Provider(format!("outbound body rejected by vendored schema: {e}"))
+        })?;
         let res = self.send_with_retry(&body).await?;
         let mut acc = Step::default();
         let mut tool_blocks = std::collections::BTreeMap::new();

@@ -12,6 +12,7 @@ pub mod misc_tools;
 pub mod monitor;
 pub mod patch;
 pub mod registry;
+pub mod subagent;
 pub mod repomap;
 pub mod todo;
 pub mod tools_host;

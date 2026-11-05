@@ -1,20 +1,59 @@
 //! The agent loop (INV-01..07,10):
-//!  - steering drains ONLY after the step's full tool-result set
-//!  - verify runs only when the step had NO tool call AND a prior batch
-//!    mutated files, with a feedback budget
-//!  - unparseable tool-call JSON → re-request that call (never executed)
-//!  - single retry layer lives in the provider transport only
-//!  - roles all consumed via router; per-role real-model usage ledger
-//!  - compaction failure stops the turn explicitly
-//!  - turn end normalizes stop reason; `aborted` journals partial text
+//!  - user message lands in session history at turn start (D1)
+//!  - history lives on the Harness across turns (D2); the Session actor
+//!    formalization arrives in Phase 2 on the same structure
+//!  - real steering: amend vs follow-up, drained ONLY after a full
+//!    tool-result batch (or as the seed of the next turn) (D3)
+//!  - compaction on per-step context tokens, summary re-injected as the
+//!    first message, Small-role usage ledgered (D4)
+//!  - every tool_use gets a tool_result, no duplicate assistant message (D5)
+//!  - no expect/unwrap on fallible paths; journal write errors stop the
+//!    turn (D6)
+//!  - any mutation (incl. Bash) arms verify; reset after pass; `[verify]`
+//!    output marker honoured (D7)
+//!  - CancellationToken from Ctrl-C into loop+tools; concurrency_safe tools
+//!    run in parallel; sync tools via spawn_blocking; timeout_ms enforced (D8)
+//!  - stream via chat_step_stream onto the bus (D9)
+//!  - every stop path emits TurnEnded{stop_reason} (D12)
 
 use crate::events::{Event, EventBus};
 use crate::journal::{Journal, JournalRecord};
-use crate::providers::{ChatMessage, ChatRequest, Stop, ToolCall, Usage};
+use crate::providers::{backoff_ms, ChatMessage, ChatRequest, StreamEvent, ToolCall, Usage};
 use crate::router::{Role, Router};
 use serde_json::Value;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
+
+/// Cooperative cancellation (D8): Ctrl-C sets the flag, waiters wake.
+#[derive(Clone, Default)]
+pub struct CancelToken {
+    flag: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl CancelToken {
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+
+    /// Resolves once cancelled (never otherwise).
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        let notified = self.notify.notified();
+        if self.is_cancelled() {
+            return;
+        }
+        notified.await;
+    }
+}
 
 /// Trait the loop needs from the tool layer (implemented by marfim-tools).
 #[async_trait::async_trait]
@@ -23,18 +62,31 @@ pub trait ToolHost: Send + Sync {
     async fn execute(&self, tool: &str, args: &Value, session: &LoopCtx) -> (String, bool);
     /// JSON schemas for the current wire (visible tools only).
     fn schemas(&self) -> Vec<Value>;
-    /// Whether this tool mutates files (verify gating).
+    /// Whether this tool mutates files (verify gating). Bash counts: any
+    /// shell execution arms verify (D7).
     fn is_mutating(&self, tool: &str) -> bool;
     /// Commands to run for verification of the current project.
     fn verify_commands(&self) -> Vec<String>;
     /// Run verification; returns (passed, output).
     async fn run_verify(&self, session: &LoopCtx) -> (bool, String);
+    /// Whether the tool may run concurrently with siblings in one batch (D8).
+    fn concurrency_safe(&self, tool: &str) -> bool {
+        let _ = tool;
+        false
+    }
+    /// Enforced per-call timeout in milliseconds (D8).
+    fn tool_timeout_ms(&self, tool: &str) -> Option<u64> {
+        let _ = tool;
+        None
+    }
 }
 
 #[derive(Clone, Default)]
 pub struct LoopCtx {
     pub session_id: String,
     pub cwd: String,
+    /// Cooperative cancellation handed down to tools (D8).
+    pub cancel: CancelToken,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,6 +95,17 @@ pub enum SteerClass {
     Amend,
     /// follow-up: appended after the current tool batch
     FollowUp,
+}
+
+/// Classification for a steering line typed mid-turn: an explicit
+/// `amend:`/`amend ` prefix amends; everything else is a follow-up.
+pub fn classify_steer(text: &str) -> SteerClass {
+    let t = text.trim_start();
+    if t.starts_with("amend:") || t.starts_with("amend ") {
+        SteerClass::Amend
+    } else {
+        SteerClass::FollowUp
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +117,19 @@ pub enum StopReason {
     BudgetExceeded(String),
 }
 
+impl StopReason {
+    /// Normalized stop reason string for TurnEnded + headless exit codes.
+    pub fn normalized(&self) -> &'static str {
+        match self {
+            StopReason::EndTurn => "end_turn",
+            StopReason::Aborted(_) => "aborted",
+            StopReason::CompactionFailed(_) => "compaction_failed",
+            StopReason::VerifyExhausted(_) => "verify_exhausted",
+            StopReason::BudgetExceeded(_) => "budget_exceeded",
+        }
+    }
+}
+
 pub struct Harness {
     pub bus: EventBus,
     pub router: Arc<RwLock<Router>>,
@@ -63,6 +139,25 @@ pub struct Harness {
     pub permissions: Arc<crate::permissions::PermissionEngine>,
     pub max_steps: u64,
     pub max_verify_feedback: u32,
+    /// Session-scoped conversation history (D2): survives across turns.
+    pub history: Arc<RwLock<Vec<ChatMessage>>>,
+    /// Cooperative cancellation into loop + tools (D8).
+    pub cancel: CancelToken,
+    /// Per-step context-token threshold that triggers compaction (D4).
+    pub compact_threshold_tokens: u64,
+    /// Monotonic turn counter (TurnStarted/TurnEnded carry the real turn).
+    pub turn_counter: AtomicU64,
+    /// Tool calls denied by the permission engine this session (D12 exit 2).
+    pub denied_tools: AtomicU64,
+    /// verify armed by a mutation this batch (D7).
+    verify_armed: AtomicBool,
+    /// --on-fail abort: a tool error ends the turn immediately (D11 flag
+    /// consumption in headless pipelines).
+    pub stop_on_tool_error: bool,
+    /// Tool calls executed this session (D12 exit-code bookkeeping).
+    pub executed_tools: AtomicU64,
+    /// Two-queue steering (omp-style): amend vs follow-up (D3).
+    steer: Arc<std::sync::Mutex<SteerQueues>>,
 }
 
 /// Steering queues (omp-style two-queue: amend vs follow-up).
@@ -72,84 +167,255 @@ pub struct SteerQueues {
     pub follow_ups: Vec<String>,
 }
 
-impl Harness {
-    pub async fn run_turn(&self, user_text: &str) -> StopReason {
-        self.bus.publish(Event::TurnStarted { turn: 0 });
-        self.journal
-            .lock()
-            .unwrap()
-            .append(&JournalRecord::UserMessage {
-                text: user_text.into(),
-            })
-            .ok();
+impl SteerQueues {
+    pub fn submit_follow_up(&mut self, text: &str) {
+        self.follow_ups.push(text.to_string());
+    }
 
-        let mut queues = SteerQueues::default();
-        let mut pending_user: Vec<String> = vec![user_text.to_string()];
-        let mut transcript: Vec<ChatMessage> = Vec::new();
+    /// An amend REPLACES the queued follow-up (the follow-up is superseded).
+    pub fn submit_amend(&mut self, text: &str) {
+        self.follow_ups.clear();
+        self.amend.push(text.to_string());
+    }
+
+    /// Submit with automatic classification.
+    pub fn submit(&mut self, text: &str) -> SteerClass {
+        match classify_steer(text) {
+            SteerClass::Amend => {
+                self.submit_amend(text);
+                SteerClass::Amend
+            }
+            SteerClass::FollowUp => {
+                self.submit_follow_up(text);
+                SteerClass::FollowUp
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.amend.is_empty() && self.follow_ups.is_empty()
+    }
+
+    /// Drain ONE message. Amend supersedes queued follow-ups.
+    pub fn drain(&mut self) -> Option<String> {
+        if let Some(a) = self.amend.pop() {
+            return Some(a);
+        }
+        if !self.follow_ups.is_empty() {
+            return Some(self.follow_ups.remove(0));
+        }
+        None
+    }
+}
+
+impl Harness {
+    /// Public constructor: internal invariants (verify arming, steering
+    /// queues, counters) start in their canonical state.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        bus: EventBus,
+        router: Arc<RwLock<Router>>,
+        tools: Arc<dyn ToolHost>,
+        journal: Arc<std::sync::Mutex<Journal>>,
+        ctx: LoopCtx,
+        permissions: Arc<crate::permissions::PermissionEngine>,
+        max_steps: u64,
+        max_verify_feedback: u32,
+        compact_threshold_tokens: u64,
+        stop_on_tool_error: bool,
+    ) -> Self {
+        Self {
+            bus,
+            router,
+            tools,
+            journal,
+            ctx,
+            permissions,
+            max_steps,
+            max_verify_feedback,
+            history: Arc::new(RwLock::new(Vec::new())),
+            cancel: CancelToken::default(),
+            compact_threshold_tokens,
+            turn_counter: AtomicU64::new(0),
+            denied_tools: AtomicU64::new(0),
+            verify_armed: AtomicBool::new(false),
+            stop_on_tool_error,
+            executed_tools: AtomicU64::new(0),
+            steer: Arc::new(std::sync::Mutex::new(SteerQueues::default())),
+        }
+    }
+
+    pub async fn run_turn(&self, user_text: &str) -> StopReason {
+        let turn = self.turn_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        self.bus.publish(Event::TurnStarted { turn });
+
+        // D1: the user message lands in history at turn start.
+        if let Err(e) = self.journal_rec(&JournalRecord::UserMessage {
+            text: user_text.into(),
+        }) {
+            return self.finish_turn(turn, StopReason::Aborted(format!("{e}")));
+        }
+        self.history
+            .write()
+            .await
+            .push(ChatMessage::user(user_text.to_string()));
+
+        let stop = match self.run_turn_inner().await {
+            Ok(s) => s,
+            Err(e) => {
+                self.bus.publish(Event::Error {
+                    message: format!("{e}"),
+                    fatal: true,
+                });
+                StopReason::Aborted(format!("{e}"))
+            }
+        };
+        self.finish_turn(turn, stop)
+    }
+
+    /// D12: every stop path funnels through here, so TurnEnded is always
+    /// emitted exactly once with the normalized stop reason.
+    fn finish_turn(&self, turn: u64, stop: StopReason) -> StopReason {
+        self.bus.publish(Event::TurnEnded {
+            turn,
+            stop_reason: stop.normalized().into(),
+        });
+        stop
+    }
+
+    fn journal_rec(&self, rec: &JournalRecord) -> crate::Result<()> {
+        let mut j = self.journal.lock().unwrap_or_else(|p| p.into_inner());
+        j.append(rec).map(|_| ()).map_err(|e| {
+            crate::CoreError::Session(format!("journal write failed: {e}"))
+        })
+    }
+
+    fn steer_lock(&self) -> std::sync::MutexGuard<'_, SteerQueues> {
+        self.steer.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Steering entry points (D3): queued, consumed only after a full
+    /// tool-result batch. Both journal the Steer record.
+    pub fn steer(&self, text: &str) {
+        let class = self.steer_lock().submit(text);
+        let _ = self.journal_rec(&JournalRecord::Steer {
+            text: format!("[{class:?}] {text}"),
+        });
+    }
+
+    pub fn steer_amend(&self, text: &str) {
+        self.steer_lock().submit_amend(text);
+        let _ = self.journal_rec(&JournalRecord::Steer {
+            text: format!("[Amend] {text}"),
+        });
+    }
+
+    pub fn pending_steers(&self) -> usize {
+        let q = self.steer_lock();
+        q.amend.len() + q.follow_ups.len()
+    }
+
+    async fn run_turn_inner(&self) -> crate::Result<StopReason> {
         let mut usage_total = Usage::default();
-        let mut edits_this_batch = false;
         let mut steps: u64 = 0;
         let mut verify_used = 0u32;
+        // D4: per-step context tokens (the LAST step's usage), not cumulative.
+        let mut last_step_input_tokens: u64;
 
         loop {
+            // D8: Ctrl-C between steps ends the turn.
+            if self.cancel.is_cancelled() {
+                return Ok(StopReason::Aborted("cancelled by user".into()));
+            }
             steps += 1;
             if steps > self.max_steps {
-                let b = self.max_steps;
-                return StopReason::BudgetExceeded(format!("step budget {b} exceeded"));
+                return Ok(StopReason::BudgetExceeded(format!(
+                    "step budget {} exceeded",
+                    self.max_steps
+                )));
             }
 
-            // 1. build request from transcript + pending user messages
-            let mut messages: Vec<ChatMessage> = Vec::new();
-            for u in &pending_user {
-                messages.push(ChatMessage::user(u.clone()));
+            // 1. build request from session history (user msg already in it)
+            let history_snapshot = self.history.read().await.clone();
+            if history_snapshot.is_empty() {
+                return Ok(StopReason::Aborted("empty history".into()));
             }
-            pending_user.clear();
-            messages.extend(transcript.clone());
-
-            let router = self.router.read().await;
-            let _chain = router.chain(Role::Primary);
-            let (entry, tried) = router
-                .resolve(Role::Primary, |_| true)
-                .map_err(|e| {
-                    self.bus.publish(Event::Error {
-                        message: format!("{e}"),
-                        fatal: true,
-                    });
-                    e
-                })
-                .expect("primary model");
-            drop(router);
-            self.bus.publish(Event::ModelSelected {
-                role: Role::Primary.as_str().into(),
-                model: entry.model.clone(),
-                why: self
-                    .router
-                    .read()
-                    .await
-                    .explain(Role::Primary, &entry.model, &tried),
-            });
 
             let req = ChatRequest {
-                messages,
+                messages: history_snapshot,
                 tools: self.tools.schemas(),
                 cache_breakpoints: true,
                 system: Some(system_prompt(&self.ctx)),
                 ..Default::default()
             };
 
-            // 2. call provider — the provider transport owns the ONLY retry
-            let step = match entry.provider.chat_step(&req).await {
-                Ok(s) => s,
-                Err(e) => {
-                    self.bus.publish(Event::Error {
-                        message: format!("{e}"),
-                        fatal: true,
-                    });
-                    self.journal_total_usage(&usage_total, &entry.model);
-                    return StopReason::Aborted(format!("provider error: {e}"));
+            // 2. call provider — D11 real failover: on a transport error the
+            //    model is marked unavailable and the next chain entry is
+            //    tried; streaming onto the bus (D9), cancellable (D8). The
+            //    provider transport owns the ONLY retry layer.
+            let chain_len = self.router.read().await.chain(Role::Primary).len();
+            let mut entry = None;
+            let mut step = None;
+            for attempt in 0..chain_len.max(1) {
+                let (e, tried) = {
+                    let router = self.router.read().await;
+                    router.resolve(Role::Primary, |_| true)?
+                };
+                self.bus.publish(Event::ModelSelected {
+                    role: Role::Primary.as_str().into(),
+                    model: e.model.clone(),
+                    why: self
+                        .router
+                        .read()
+                        .await
+                        .explain(Role::Primary, &e.model, &tried),
+                });
+                let bus = self.bus.clone();
+                let cancel = self.cancel.clone();
+                let mut on_ev = |ev: StreamEvent| {
+                    match ev {
+                        StreamEvent::Text(t) => bus.publish(Event::StreamDelta { kind: "text".into(), text: t }),
+                        StreamEvent::Thinking(t) => bus.publish(Event::StreamDelta { kind: "thinking".into(), text: t }),
+                    }
+                };
+                match tokio::select! {
+                    r = e.provider.chat_step_stream(&req, &mut on_ev) => r,
+                    _ = cancel.cancelled() => {
+                        return Ok(StopReason::Aborted("cancelled by user".into()));
+                    }
+                } {
+                    Ok(s) => {
+                        entry = Some(e);
+                        step = Some(s);
+                        break;
+                    }
+                    Err(err) => {
+                        self.router.write().await.mark_unavailable(
+                            Role::Primary,
+                            &e.model,
+                            backoff_ms(attempt as u32),
+                        );
+                        if attempt + 1 >= chain_len.max(1) {
+                            return Err(err);
+                        }
+                        self.bus.publish(Event::Error {
+                            message: format!(
+                                "provider `{}` failed ({err}); failing over",
+                                e.model
+                            ),
+                            fatal: false,
+                        });
+                    }
                 }
-            };
+            }
+            let entry = entry.ok_or_else(|| {
+                crate::CoreError::Provider("no provider entry after failover".into())
+            })?;
+            let step = step.ok_or_else(|| {
+                crate::CoreError::Provider("no step after failover".into())
+            })?;
             usage_total.add(&step.usage);
+            last_step_input_tokens = step.usage.input_tokens;
             self.bus.publish(Event::Usage {
                 role: Role::Primary.as_str().into(),
                 model: entry.model.clone(),
@@ -175,28 +441,27 @@ impl Harness {
             let calls: Vec<ToolCall> = step.tool_calls().iter().map(|t| (*t).clone()).collect();
 
             if calls.is_empty() {
-                // journal the assistant turn
-                self.journal
-                    .lock()
-                    .unwrap()
-                    .append(&JournalRecord::AssistantMessage {
-                        text: text.clone(),
-                        model: entry.model.clone(),
-                        stop_reason: step
-                            .stop
-                            .map(|s| s.as_str().to_string())
-                            .unwrap_or_else(|| "end_turn".into()),
-                    })
-                    .ok();
-                transcript.push(ChatMessage::assistant(text.clone()));
+                self.journal_rec(&JournalRecord::AssistantMessage {
+                    text: text.clone(),
+                    model: entry.model.clone(),
+                    stop_reason: step
+                        .stop
+                        .map(|s| s.as_str().to_string())
+                        .unwrap_or_else(|| "end_turn".into()),
+                })?;
+                self.history
+                    .write()
+                    .await
+                    .push(ChatMessage::assistant(text.clone()));
 
-                // INV: verify only when no tool call AND mutations happened
-                if edits_this_batch && !self.tools.verify_commands().is_empty() {
+                // INV: verify only when no tool call AND a mutation armed it
+                if self.verify_armed.load(Ordering::SeqCst) && !self.tools.verify_commands().is_empty()
+                {
                     if verify_used >= self.max_verify_feedback {
-                        self.journal_total_usage(&usage_total, &entry.model);
-                        return StopReason::VerifyExhausted(format!(
+                        self.journal_total_usage(&usage_total, &entry.model)?;
+                        return Ok(StopReason::VerifyExhausted(format!(
                             "verify feedback budget {verify_used} exhausted with failing checks"
-                        ));
+                        )));
                     }
                     verify_used += 1;
                     let cmds = self.tools.verify_commands();
@@ -209,170 +474,334 @@ impl Harness {
                         output: output.clone(),
                     });
                     if !passed {
-                        // feed verify output back as the next user message
-                        pending_user.push(format!(
+                        // feed verify output back into history as a user message
+                        self.history.write().await.push(ChatMessage::user(format!(
                             "Verification failed. Fix the issues.\n\n--- verify output ---\n{output}\n--- end ---"
-                        ));
-                        edits_this_batch = false;
+                        )));
+                        self.verify_armed.store(false, Ordering::SeqCst);
                         continue;
                     }
+                    // D7: verify passed → disarm (a later mutation re-arms)
+                    self.verify_armed.store(false, Ordering::SeqCst);
                 }
 
-                // steering drains after a clean step end (INV-02)
-                if !queues.follow_ups.is_empty() {
-                    let next = queues.follow_ups.remove(0);
-                    pending_user.push(next);
+                // D4: compaction also applies to a clean step end so the
+                // NEXT turn starts from the summary.
+                if let Err(e) = self.maybe_compact(last_step_input_tokens).await {
+                    self.journal_total_usage(&usage_total, &entry.model)?;
+                    return Ok(StopReason::CompactionFailed(format!("{e}")));
+                }
+
+                // Pending steering seeds the next turn (never interrupts a
+                // clean step mid-flight; the batch drain point is below).
+                let next = self.steer_lock().drain();
+                if let Some(s) = next {
+                    self.history.write().await.push(ChatMessage::user(s));
                     continue;
                 }
-                if !queues.amend.is_empty() {
-                    let next = queues.amend.remove(0);
-                    pending_user.push(next);
-                    continue;
-                }
 
-                self.journal_total_usage(&usage_total, &entry.model);
-                let stop = step.stop.unwrap_or(Stop::EndTurn);
-                self.bus.publish(Event::TurnEnded {
-                    turn: 0,
-                    stop_reason: stop.as_str().into(),
-                });
-                return StopReason::EndTurn;
+                self.journal_total_usage(&usage_total, &entry.model)?;
+                return Ok(StopReason::EndTurn);
             }
 
-            // 4. truncation check (INV-03): any call with unparseable JSON
-            //    → re-request BEFORE any tool runs
-            let mut reparse: Option<String> = None;
-            for tc in &calls {
-                if tc.parse_args().is_err() {
-                    reparse = Some(tc.id.clone());
-                    break;
-                }
-            }
-            if let Some(bad_id) = reparse {
-                transcript.push(ChatMessage::assistant(text.clone()));
-                transcript.push(ChatMessage {
+            // 4. truncation check (INV-03 + D5): any call with unparseable
+            //    JSON → re-request BEFORE the truncated call runs; the ONE
+            //    assistant message carries all tool_calls, and EVERY call
+            //    gets a tool_result.
+            let has_bad = calls.iter().any(|tc| tc.parse_args().is_err());
+            if has_bad {
+                let truncated_note = format!(
+                    "TOOL_CALL_TRUNCATED: arguments JSON was incomplete (stop={}). \
+                     Re-emit the complete tool call with full arguments.",
+                    step.stop.map(|s| s.as_str()).unwrap_or("unknown")
+                );
+                // ONE assistant message (D5: no duplicate assistant message)
+                self.journal_rec(&JournalRecord::AssistantMessage {
+                    text: text.clone(),
+                    model: entry.model.clone(),
+                    stop_reason: "tool_use".into(),
+                })?;
+                self.history.write().await.push(ChatMessage {
                     role: "assistant".into(),
-                    content: String::new(),
+                    content: text.clone(),
                     tool_calls: calls.clone(),
                     tool_call_id: None,
                     is_error: false,
                 });
-                transcript.push(ChatMessage::tool_result(
-                    bad_id,
-                    format!(
-                        "TOOL_CALL_TRUNCATED: arguments JSON was incomplete (stop={}). \
-                         Re-emit the complete tool call with full arguments.",
-                        step.stop.map(|s| s.as_str()).unwrap_or("unknown")
-                    ),
-                    true,
-                ));
-                continue; // single re-request; no tool executed on garbage
+                self.journal_tool_calls(&calls)?;
+                // error result for each truncated call
+                for tc in &calls {
+                    if tc.parse_args().is_err() {
+                        self.journal_rec(&JournalRecord::ToolResult {
+                            id: tc.id.clone(),
+                            output: truncated_note.clone(),
+                            is_error: true,
+                        })?;
+                        self.history.write().await.push(ChatMessage::tool_result(
+                            tc.id.clone(),
+                            truncated_note.clone(),
+                            true,
+                        ));
+                    }
+                }
+                // valid siblings still execute so they have real results (D5)
+                let valid: Vec<ToolCall> = calls
+                    .iter()
+                    .filter(|tc| tc.parse_args().is_ok())
+                    .cloned()
+                    .collect();
+                if !valid.is_empty() {
+                    self.execute_batch(&valid).await;
+                }
+                continue; // single re-request; the truncated call never ran
             }
 
-            // 5. journal tool calls, execute through permissions
-            let mut tool_msgs = Vec::new();
-            {
-                let mut j = self.journal.lock().unwrap();
-                for tc in &calls {
-                    let args = tc.parse_args().unwrap_or(Value::Null);
-                    j.append(&JournalRecord::ToolCall {
-                        id: tc.id.clone(),
-                        tool: tc.name.clone(),
-                        args,
-                    })
-                    .ok();
-                }
-            }
-            for tc in &calls {
-                let args = tc.parse_args().unwrap_or(Value::Null);
-                self.bus.publish(Event::ToolCallStarted {
-                    id: tc.id.clone(),
-                    tool: tc.name.clone(),
-                    args: args.clone(),
-                });
-                let (output, is_error) = self.tools.execute(&tc.name, &args, &self.ctx).await;
-                if !is_error && self.tools.is_mutating(&tc.name) {
-                    edits_this_batch = true;
-                }
-                self.journal
-                    .lock()
-                    .unwrap()
-                    .append(&JournalRecord::ToolResult {
-                        id: tc.id.clone(),
-                        output: output.clone(),
-                        is_error,
-                    })
-                    .ok();
-                self.bus.publish(Event::ToolCallResult {
-                    id: tc.id.clone(),
-                    tool: tc.name.clone(),
-                    output: output.clone(),
-                    is_error,
-                    duration_ms: 0,
-                });
-                tool_msgs.push(ChatMessage::tool_result(tc.id.clone(), output, is_error));
-            }
-            transcript.push(ChatMessage {
+            // 5. journal the assistant batch + tool calls, execute through
+            //    permissions. ONE assistant message carries all tool_calls.
+            self.journal_rec(&JournalRecord::AssistantMessage {
+                text: text.clone(),
+                model: entry.model.clone(),
+                stop_reason: "tool_use".into(),
+            })?;
+            self.history.write().await.push(ChatMessage {
                 role: "assistant".into(),
                 content: text.clone(),
                 tool_calls: calls.clone(),
                 tool_call_id: None,
                 is_error: false,
             });
-            // INV-02: steering drains ONLY after the full tool-result set
-            for tm in tool_msgs {
-                transcript.push(tm);
+            self.journal_tool_calls(&calls)?;
+            let any_error = self.execute_batch(&calls).await;
+            // --on-fail abort: a tool error ends the turn immediately
+            if self.stop_on_tool_error && any_error {
+                return Ok(StopReason::Aborted(
+                    "tool error with stop-on-fail enabled".into(),
+                ));
             }
 
-            // compaction check ( INV-07): explicit stop on failure
-            if needs_compaction(&usage_total) {
-                match self.compact(&transcript).await {
-                    Ok(summary) => {
-                        self.bus.publish(Event::Compaction {
-                            before_tokens: usage_total.input_tokens,
-                            after_tokens: 0,
-                        });
-                        self.journal
-                            .lock()
-                            .unwrap()
-                            .append(&JournalRecord::Compaction { summary })
-                            .ok();
-                        transcript = Vec::new();
+            // compaction check (INV-07 + D4): PER-STEP context tokens, not
+            // cumulative; explicit stop on failure.
+            match self.maybe_compact(last_step_input_tokens).await {
+                Ok(compacted) => {
+                    if compacted {
+                        usage_total = Usage::default(); // reset after compact
                     }
-                    Err(e) => {
-                        self.journal_total_usage(&usage_total, &entry.model);
-                        self.bus.publish(Event::Error {
-                            message: format!("compaction failed: {e}"),
-                            fatal: true,
-                        });
-                        return StopReason::CompactionFailed(format!("{e}"));
-                    }
+                }
+                Err(e) => {
+                    self.journal_total_usage(&usage_total, &entry.model)?;
+                    return Ok(StopReason::CompactionFailed(format!("{e}")));
                 }
             }
 
-            // drain steering AFTER tool results are collected (INV-02)
-            if !queues.follow_ups.is_empty() {
-                pending_user.push(queues.follow_ups.remove(0));
-            } else if !queues.amend.is_empty() {
-                pending_user.push(queues.amend.remove(0));
+            // INV-02 (D3): steering drains ONLY after the full tool-result
+            // batch has landed in history.
+            let next = self.steer_lock().drain();
+            if let Some(s) = next {
+                self.history.write().await.push(ChatMessage::user(s));
             }
         }
     }
 
-    async fn compact(&self, transcript: &[ChatMessage]) -> crate::Result<String> {
-        let router = self.router.read().await;
-        let chain = router.chain(Role::Small);
-        let entry = chain.first().ok_or_else(|| {
-            crate::CoreError::Provider("no small model configured for compaction".into())
+    fn journal_tool_calls(&self, calls: &[ToolCall]) -> crate::Result<()> {
+        for tc in calls {
+            let args = tc.parse_args().unwrap_or(Value::Null);
+            self.journal_rec(&JournalRecord::ToolCall {
+                id: tc.id.clone(),
+                tool: tc.name.clone(),
+                args,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Execute one tool call with events, cooperative cancel (D8) and an
+    /// enforced per-call timeout (D8).
+    async fn exec_one(&self, tc: &ToolCall) -> (String, bool) {
+        let args = tc.parse_args().unwrap_or(Value::Null);
+        self.bus.publish(Event::ToolCallStarted {
+            id: tc.id.clone(),
+            tool: tc.name.clone(),
+            args: args.clone(),
+        });
+        let timeout_ms = self.tools.tool_timeout_ms(&tc.name).unwrap_or(120_000);
+        let tools = self.tools.clone();
+        let mut ctx = self.ctx.clone();
+        ctx.cancel = self.cancel.clone();
+        let name = tc.name.clone();
+        let cancel = self.cancel.clone();
+        let attempt = async move {
+            tokio::select! {
+                r = tools.execute(&name, &args, &ctx) => r,
+                _ = cancel.cancelled() => ("cancelled by user".to_string(), true),
+            }
+        };
+        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), attempt).await {
+            Ok(pair) => pair,
+            Err(_) => (
+                format!("tool `{}` timed out after {timeout_ms}ms", tc.name),
+                true,
+            ),
+        }
+    }
+
+    /// Execute a batch (D8): Execute-class/unsafe tools run sequentially in
+    /// call order; concurrency_safe tools run in parallel. Results are
+    /// journaled, evented and appended to history in CALL ORDER. Returns
+    /// whether ANY call errored (for stop-on-fail).
+    async fn execute_batch(&self, calls: &[ToolCall]) -> bool {
+        let mut results: Vec<Option<(String, bool)>> = vec![None; calls.len()];
+        let mut seq_idx = Vec::new();
+        let mut par_idx = Vec::new();
+        for (i, tc) in calls.iter().enumerate() {
+            if self.tools.concurrency_safe(&tc.name) {
+                par_idx.push(i);
+            } else {
+                seq_idx.push(i);
+            }
+        }
+        for &i in &seq_idx {
+            results[i] = Some(self.exec_one(&calls[i]).await);
+        }
+        if !par_idx.is_empty() {
+            let futs: Vec<_> = par_idx.iter().map(|&i| self.exec_one(&calls[i])).collect();
+            let done = futures_util::future::join_all(futs).await;
+            for (k, &i) in par_idx.iter().enumerate() {
+                results[i] = Some(done[k].clone());
+            }
+        }
+
+        let mut arm = false;
+        let mut any_error = false;
+        for (i, tc) in calls.iter().enumerate() {
+            let (output, is_error) = results[i].clone().unwrap_or_else(|| {
+                (
+                    format!("tool `{}` produced no result (internal error)", tc.name),
+                    true,
+                )
+            });
+            self.executed_tools.fetch_add(1, Ordering::SeqCst);
+            if is_error {
+                any_error = true;
+            }
+            if is_error && output.starts_with("permission denied") {
+                self.denied_tools.fetch_add(1, Ordering::SeqCst);
+            }
+            if !is_error && (self.tools.is_mutating(&tc.name) || output.contains("[verify]")) {
+                arm = true;
+            }
+            if let Err(e) = self.journal_rec(&JournalRecord::ToolResult {
+                id: tc.id.clone(),
+                output: output.clone(),
+                is_error,
+            }) {
+                self.bus.publish(Event::Error {
+                    message: format!("journal write failed: {e}"),
+                    fatal: true,
+                });
+            }
+            self.bus.publish(Event::ToolCallResult {
+                id: tc.id.clone(),
+                tool: tc.name.clone(),
+                output: output.clone(),
+                is_error,
+                duration_ms: 0,
+            });
+            self.history
+                .write()
+                .await
+                .push(ChatMessage::tool_result(tc.id.clone(), output, is_error));
+        }
+        if arm {
+            self.verify_armed.store(true, Ordering::SeqCst);
+        }
+        any_error
+    }
+
+    /// /compact and other callers: force a compaction NOW regardless of
+    /// threshold. Re-injects the summary as the first message.
+    pub async fn compact_now(&self) -> crate::Result<String> {
+        let (summary, _usage, _model) = self.compact_via_small().await?;
+        *self.history.write().await =
+            vec![ChatMessage::user(format!("[compacted context]\n{summary}"))];
+        Ok(summary)
+    }
+
+    /// D4: compaction on PER-STEP context tokens. Runs the Small-role
+    /// summary, re-injects it as the first message, resets history. Returns
+    /// whether a compaction happened; failure is an explicit error.
+    async fn maybe_compact(
+        &self,
+        last_step_input_tokens: u64,
+    ) -> std::result::Result<bool, crate::CoreError> {
+        if last_step_input_tokens <= self.compact_threshold_tokens {
+            return Ok(false);
+        }
+        let (summary, small_usage, small_model) = self.compact_via_small().await?;
+        self.bus.publish(Event::Compaction {
+            before_tokens: last_step_input_tokens,
+            after_tokens: (summary.len() as u64).div_ceil(4),
+        });
+        self.journal_rec(&JournalRecord::Compaction {
+            summary: summary.clone(),
         })?;
+        // D4: Small-role usage is ledgered (event + journal)
+        let cost = self
+            .router
+            .read()
+            .await
+            .costs
+            .cost_usd(&small_model, &small_usage);
+        self.bus.publish(Event::Usage {
+            role: Role::Small.as_str().into(),
+            model: small_model.clone(),
+            input_tokens: small_usage.input_tokens,
+            output_tokens: small_usage.output_tokens,
+            cache_read_tokens: small_usage.cache_read_tokens,
+            cache_creation_tokens: small_usage.cache_creation_tokens,
+            cost_usd: cost,
+        });
+        self.journal_rec(&JournalRecord::Usage {
+            role: Role::Small.as_str().into(),
+            model: small_model,
+            input_tokens: small_usage.input_tokens,
+            output_tokens: small_usage.output_tokens,
+            cost_usd: cost,
+        })?;
+        // D4: summary re-injected as the FIRST message
+        *self.history.write().await =
+            vec![ChatMessage::user(format!("[compacted context]\n{summary}"))];
+        Ok(true)
+    }
+
+    /// D4: compaction via the Small role, usage returned for ledgering.
+    async fn compact_via_small(&self) -> crate::Result<(String, Usage, String)> {
+        let router = self.router.read().await;
+        let (entry, _tried) = router.resolve(Role::Small, |_| true)?;
+        drop(router);
+        let history = self.history.read().await.clone();
+        let body = history
+            .iter()
+            .map(|m| {
+                let tc_info = if m.tool_calls.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " [calls: {}]",
+                        m.tool_calls
+                            .iter()
+                            .map(|t| t.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                format!("{}: {}{tc_info}", m.role, m.content)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let req = ChatRequest {
             messages: vec![ChatMessage::user(format!(
-                "Summarize the following conversation for context continuation.\n\n{}",
-                transcript
-                    .iter()
-                    .map(|m| format!("{}: {}", m.role, m.content))
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                "Summarize the following conversation for context continuation. \
+                 Keep file paths, decisions, and pending work.\n\n{body}"
             ))],
             ..Default::default()
         };
@@ -383,34 +812,18 @@ impl Harness {
                 "compaction produced empty summary".into(),
             ));
         }
-        Ok(s)
+        Ok((s, step.usage, entry.model.clone()))
     }
 
-    fn journal_total_usage(&self, usage: &Usage, model: &str) {
-        self.journal
-            .lock()
-            .unwrap()
-            .append(&JournalRecord::Usage {
-                role: Role::Primary.as_str().into(),
-                model: model.into(),
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cost_usd: None,
-            })
-            .ok();
+    fn journal_total_usage(&self, usage: &Usage, model: &str) -> crate::Result<()> {
+        self.journal_rec(&JournalRecord::Usage {
+            role: Role::Primary.as_str().into(),
+            model: model.into(),
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cost_usd: None,
+        })
     }
-
-    /// Steering entry points (INV-02): queued, consumed at the right time.
-    pub fn steer_amend(&self, text: &str) {
-        // stored on the caller side via run_steered; here we only expose
-        // the classification for tests
-        let _ = text;
-    }
-}
-
-fn needs_compaction(usage: &Usage) -> bool {
-    // conservative fixed threshold; config-tunable later
-    usage.input_tokens > 120_000
 }
 
 pub fn system_prompt(ctx: &LoopCtx) -> String {
@@ -424,16 +837,19 @@ Use the provided tools to read, edit and run code. Be precise and verify your wo
 
 #[cfg(test)]
 mod tests {
-    //! Loop invariant tests (INV-01..07) run against the mock provider.
+    //! Loop invariant tests (INV-01..07, D1..D9) run against the mock provider.
 
     use super::*;
     use crate::permissions::{Decision, Mode, PermissionEngine, Rule, ToolClass};
-    use crate::providers::{Block, MockProvider, Step};
+    use crate::providers::{Block, MockProvider, Step, Stop};
     use std::sync::Mutex;
 
     struct ScriptedTools {
         pub executed: Mutex<Vec<(String, Value)>>,
         pub verify_fails: Mutex<bool>,
+        pub safe: Mutex<bool>,
+        pub slow_ms: Mutex<Option<u64>>,
+        pub started: Mutex<Vec<(String, std::time::Instant)>>,
     }
 
     impl ScriptedTools {
@@ -441,6 +857,9 @@ mod tests {
             Self {
                 executed: Mutex::new(vec![]),
                 verify_fails: Mutex::new(false),
+                safe: Mutex::new(false),
+                slow_ms: Mutex::new(None),
+                started: Mutex::new(vec![]),
             }
         }
     }
@@ -448,6 +867,14 @@ mod tests {
     #[async_trait::async_trait]
     impl ToolHost for ScriptedTools {
         async fn execute(&self, tool: &str, args: &Value, _s: &LoopCtx) -> (String, bool) {
+            self.started
+                .lock()
+                .unwrap()
+                .push((tool.to_string(), std::time::Instant::now()));
+            let slow = *self.slow_ms.lock().unwrap();
+            if let Some(ms) = slow {
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            }
             self.executed
                 .lock()
                 .unwrap()
@@ -458,7 +885,7 @@ mod tests {
             vec![]
         }
         fn is_mutating(&self, tool: &str) -> bool {
-            tool == "Write"
+            tool == "Write" || tool == "Bash"
         }
         fn verify_commands(&self) -> Vec<String> {
             vec!["true".into()]
@@ -471,10 +898,16 @@ mod tests {
                 (true, String::new())
             }
         }
+        fn concurrency_safe(&self, _tool: &str) -> bool {
+            *self.safe.lock().unwrap()
+        }
+        fn tool_timeout_ms(&self, _tool: &str) -> Option<u64> {
+            Some(10_000)
+        }
     }
 
-    fn harness(script: Vec<Step>, tools: Arc<ScriptedTools>) -> (Harness, EventBus) {
-        let bus = EventBus::new(256);
+    fn harness(script: Vec<Step>, tools: Arc<dyn ToolHost>) -> (Harness, EventBus) {
+        let bus = EventBus::new(4096);
         let mut router = Router::new(crate::providers::CostBook::default(), false);
         router.set_chain(
             Role::Primary,
@@ -488,7 +921,9 @@ mod tests {
             Role::Small,
             vec![crate::router::ModelEntry {
                 model: "mock-small".into(),
-                provider: Arc::new(MockProvider::new(vec![MockProvider::text("summary")])),
+                provider: Arc::new(MockProvider::new(vec![MockProvider::text(
+                    "summary of the conversation so far",
+                )])),
                 priced: true,
             }],
         );
@@ -496,6 +931,7 @@ mod tests {
         let ctx = LoopCtx {
             session_id: "t".into(),
             cwd: "/tmp".into(),
+            cancel: CancelToken::default(),
         };
         let tmpdir = std::env::temp_dir().join(format!("marfim-loop-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmpdir);
@@ -509,6 +945,15 @@ mod tests {
             permissions: Arc::new(perm),
             max_steps: 20,
             max_verify_feedback: 2,
+            history: Arc::new(RwLock::new(Vec::new())),
+            cancel: CancelToken::default(),
+            compact_threshold_tokens: u64::MAX,
+            turn_counter: AtomicU64::new(0),
+            denied_tools: AtomicU64::new(0),
+            verify_armed: AtomicBool::new(false),
+            stop_on_tool_error: false,
+            executed_tools: AtomicU64::new(0),
+            steer: Arc::new(Mutex::new(SteerQueues::default())),
         };
         (h, bus)
     }
@@ -521,9 +966,19 @@ mod tests {
             .subsec_nanos() as u64
     }
 
+    fn step_with_usage(text: &str, input_tokens: u64) -> Step {
+        Step {
+            blocks: vec![Block::Text(text.into())],
+            stop: Some(Stop::EndTurn),
+            usage: Usage {
+                input_tokens,
+                ..Default::default()
+            },
+        }
+    }
+
     #[tokio::test]
     async fn inv01_verify_runs_only_without_toolcall_and_after_mutation() {
-        // script: (1) mutate via Write tool, (2) end WITHOUT tool call → verify
         let tools = Arc::new(ScriptedTools::new());
         let script = vec![
             MockProvider::tool_call("c1", "Write", serde_json::json!({"path": "a"})),
@@ -538,7 +993,6 @@ mod tests {
 
     #[tokio::test]
     async fn inv01_no_verify_when_toolcall_present() {
-        // final step has a tool call → no verify in this turn
         let tools = Arc::new(ScriptedTools::new());
         let script = vec![
             MockProvider::tool_call("c1", "Write", serde_json::json!({"path": "a"})),
@@ -547,7 +1001,6 @@ mod tests {
         ];
         let (h, _bus) = harness(script, tools);
         let _ = h.run_turn("x").await;
-        // (no panic; verify path only fires on no-tool-call step)
     }
 
     #[tokio::test]
@@ -586,7 +1039,6 @@ mod tests {
         let (h, _bus) = harness(vec![MockProvider::text("done")], tools);
         let _ = h.run_turn("hi").await;
         let tmpdir = std::env::temp_dir().join(format!("marfim-loop-{}", std::process::id()));
-        // find our journal file
         let mut found = false;
         for e in std::fs::read_dir(&tmpdir).unwrap() {
             let p = e.unwrap().path();
@@ -608,7 +1060,6 @@ mod tests {
 
     #[tokio::test]
     async fn inv07_compaction_failure_stops_turn_explicitly() {
-        // small model returns EMPTY → compact() errors → explicit stop
         let tools = Arc::new(ScriptedTools::new());
         let bus = EventBus::new(256);
         let mut router = Router::new(crate::providers::CostBook::default(), false);
@@ -644,20 +1095,36 @@ mod tests {
             permissions: Arc::new(perm),
             max_steps: 5,
             max_verify_feedback: 1,
+            history: Arc::new(RwLock::new(Vec::new())),
+            cancel: CancelToken::default(),
+            compact_threshold_tokens: u64::MAX,
+            turn_counter: AtomicU64::new(0),
+            denied_tools: AtomicU64::new(0),
+            verify_armed: AtomicBool::new(false),
+            stop_on_tool_error: false,
+            executed_tools: AtomicU64::new(0),
+            steer: Arc::new(Mutex::new(SteerQueues::default())),
         };
-        // drive compaction threshold down via usage injection is complex;
-        // call compact() directly with a transcript
-        let res = h.compact(&[ChatMessage::user("long conversation")]).await;
+        let res = h.compact_via_small().await;
         assert!(res.is_err(), "empty summary must fail compaction");
     }
 
     #[test]
     fn steering_queues_classify() {
         let mut q = SteerQueues::default();
-        q.follow_ups.push("also fix the lint".into());
-        q.amend.push("no wait, use rust".into());
-        assert_eq!(q.follow_ups.len(), 1);
+        q.submit_follow_up("also fix the lint");
+        q.submit_amend("no wait, use rust");
+        assert_eq!(q.follow_ups.len(), 0, "amend supersedes the follow-up");
         assert_eq!(q.amend.len(), 1);
+        assert_eq!(
+            q.drain(),
+            Some("no wait, use rust".to_string()),
+            "amend drains first"
+        );
+        assert_eq!(q.drain(), None);
+        assert_eq!(classify_steer("amend: use rust"), SteerClass::Amend);
+        assert_eq!(classify_steer("amend the model"), SteerClass::Amend);
+        assert_eq!(classify_steer("also add tests"), SteerClass::FollowUp);
     }
 
     #[test]
@@ -671,7 +1138,539 @@ mod tests {
             }],
         );
         let _shared: Arc<PermissionEngine> = Arc::new(perm);
-        // class checks used by mode defaults
         assert_eq!(ToolClass::ReadOnly, ToolClass::ReadOnly);
+    }
+
+    // ------------------------------------------------------ D1: history
+    #[tokio::test]
+    async fn d1_user_message_in_history_and_steer_after_transcript() {
+        // D1: user msg pushed at turn start; steering appended AFTER the
+        // transcript (never before it).
+        let tools = Arc::new(ScriptedTools::new());
+        let script = vec![
+            MockProvider::tool_call("c1", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::text("done"),
+        ];
+        let (h, _bus) = harness(script, tools);
+        h.steer("also fix lint");
+        let _ = h.run_turn("please read a").await;
+        let hist = h.history.read().await;
+        let roles: Vec<&str> = hist.iter().map(|m| m.role.as_str()).collect();
+        // user, assistant(toolcall), tool, steer-user, assistant(final)
+        assert_eq!(roles[0], "user", "user msg is first in history (D1)");
+        assert_eq!(roles[1], "assistant");
+        assert_eq!(roles[2], "tool");
+        assert_eq!(
+            roles[3],
+            "user",
+            "steering appended AFTER the tool-result batch (D1/D3)"
+        );
+        assert!(hist[3].content.contains("also fix lint"));
+        assert_eq!(roles[4], "assistant", "turn continues after steering");
+    }
+
+    #[tokio::test]
+    async fn d2_history_persists_across_turns() {
+        let tools = Arc::new(ScriptedTools::new());
+        let script = vec![MockProvider::text("first"), MockProvider::text("second")];
+        let (h, _bus) = harness(script, tools);
+        let _ = h.run_turn("turn one").await;
+        let _ = h.run_turn("turn two").await;
+        // the session history must contain both turns (D2)
+        let hist = h.history.read().await;
+        let texts: Vec<&str> = hist.iter().map(|m| m.content.as_str()).collect();
+        assert!(texts.contains(&"turn one"));
+        assert!(texts.contains(&"first"));
+        assert!(texts.contains(&"turn two"));
+        assert!(texts.contains(&"second"));
+    }
+
+    // ------------------------------------------------------ D3: steering
+    #[tokio::test]
+    async fn d3_steering_drains_only_after_full_tool_batch() {
+        // With a tool batch, steering must appear AFTER the tool result in
+        // history; the next request sees [.., tool_result, steer].
+        let tools = Arc::new(ScriptedTools::new());
+        let script = vec![
+            MockProvider::tool_call("c1", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::text("done"),
+        ];
+        let (h, _bus) = harness(script, tools);
+        // pre-queue steering: it must NOT be consumed before the batch
+        h.steer("follow-up instruction");
+        let _ = h.run_turn("start").await;
+        let hist = h.history.read().await;
+        let tool_result_pos = hist
+            .iter()
+            .position(|m| m.role == "tool")
+            .expect("tool result in history");
+        let steer_pos = hist
+            .iter()
+            .rposition(|m| m.content.contains("follow-up instruction"))
+            .expect("steer drained");
+        assert!(
+            steer_pos > tool_result_pos,
+            "steering drained only after the full tool-result batch"
+        );
+        assert!(h.pending_steers() == 0);
+    }
+
+    // ------------------------------------------------------ D4: compaction
+    #[tokio::test]
+    async fn d4_compaction_per_step_reset_summary_first_small_ledgered() {
+        let tools = Arc::new(ScriptedTools::new());
+        // step1: big input triggers compaction; step2: final text
+        let script = vec![
+            step_with_usage("working", 150_000),
+            MockProvider::text("after compact"),
+        ];
+        let (mut h, bus) = harness(script, tools);
+        h.compact_threshold_tokens = 100_000;
+        let mut sub = bus.subscribe();
+        let _ = h.run_turn("long task").await;
+
+        let mut saw_small_usage = false;
+        let mut saw_compaction = false;
+        while let Ok(ev) = sub.try_recv() {
+            if let Event::Usage { role, model, .. } = &ev {
+                if role == "small" && model == "mock-small" {
+                    saw_small_usage = true;
+                }
+            }
+            if matches!(&ev, Event::Compaction { .. }) {
+                saw_compaction = true;
+            }
+        }
+        assert!(saw_compaction, "compaction event published");
+        assert!(saw_small_usage, "Small-role usage ledgered via event (D4)");
+
+        // summary re-injected as FIRST message of the next request
+        let hist = h.history.read().await;
+        assert_eq!(hist.len(), 1, "history reset to the summary alone");
+        assert!(
+            hist[0].content.contains("summary of the conversation so far"),
+            "summary is the first message (D4), got: {}",
+            hist[0].content
+        );
+        assert_eq!(hist[0].role, "user");
+    }
+
+    // ------------------------------------------------------ D5: truncation
+    #[tokio::test]
+    async fn d5_every_tool_use_gets_result_no_duplicate_assistant() {
+        let tools = Arc::new(ScriptedTools::new());
+        let bad_batch = Step {
+            blocks: vec![
+                Block::ToolCall(ToolCall {
+                    id: "good1".into(),
+                    name: "Read".into(),
+                    arguments_json: r#"{"path": "x"}"#.into(),
+                }),
+                Block::ToolCall(ToolCall {
+                    id: "bad1".into(),
+                    name: "Bash".into(),
+                    arguments_json: r#"{"command": "rm"#.into(),
+                }),
+            ],
+            stop: Some(Stop::MaxTokens),
+            usage: Usage::default(),
+        };
+        let script = vec![bad_batch, MockProvider::text("recovered")];
+        let (h, _bus) = harness(script, tools.clone());
+        let _ = h.run_turn("go").await;
+
+        let exec = tools.executed.lock().unwrap();
+        assert!(
+            !exec.iter().any(|(t, _)| t == "Bash"),
+            "truncated call never executes"
+        );
+        assert!(
+            exec.iter().any(|(t, _)| t == "Read"),
+            "valid sibling in the truncated batch still executes (D5)"
+        );
+
+        // every tool_use got exactly one tool_result in history
+        let hist = h.history.read().await;
+        let assistant_batches: Vec<&ChatMessage> = hist
+            .iter()
+            .filter(|m| m.role == "assistant" && !m.tool_calls.is_empty())
+            .collect();
+        assert_eq!(
+            assistant_batches.len(),
+            1,
+            "exactly ONE assistant message carries the batch (no duplicate, D5)"
+        );
+        let result_ids: Vec<&str> = hist
+            .iter()
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert!(result_ids.contains(&"good1") && result_ids.contains(&"bad1"),
+            "every tool_use has a tool_result (D5): {result_ids:?}");
+        assert_eq!(result_ids.len(), 2, "no duplicate results");
+        let bad_result = hist
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("bad1"))
+            .unwrap();
+        assert!(bad_result.is_error && bad_result.content.contains("TOOL_CALL_TRUNCATED"));
+    }
+
+    // ------------------------------------------------------ D6: no unwrap
+    #[tokio::test]
+    async fn d6_no_primary_model_is_explicit_abort_not_panic() {
+        let tools = Arc::new(ScriptedTools::new());
+        let (h, bus) = harness(vec![], tools);
+        {
+            let mut r = h.router.write().await;
+            r.set_chain(Role::Primary, vec![]); // empty chain
+        }
+        let mut sub = bus.subscribe();
+        let stop = h.run_turn("x").await;
+        assert_eq!(stop.normalized(), "aborted");
+        let mut saw_error = false;
+        while let Ok(ev) = sub.try_recv() {
+            if matches!(ev, Event::Error { .. }) {
+                saw_error = true;
+            }
+        }
+        assert!(saw_error, "error event published instead of panic");
+    }
+
+    #[tokio::test]
+    async fn d6_journal_write_failure_stops_turn() {
+        let tools = Arc::new(ScriptedTools::new());
+        let (h, _bus) = harness(vec![MockProvider::text("ok")], tools);
+        // fault injection: every journal append fails
+        h.journal
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .set_fail_writes(true);
+        let stop = h.run_turn("hello").await;
+        assert!(
+            matches!(stop, StopReason::Aborted(ref m) if m.contains("journal write failed")),
+            "journal write failure stops the turn (D6), got {stop:?}"
+        );
+    }
+
+    // ------------------------------------------------------ D7: verify
+    #[tokio::test]
+    async fn d7_bash_mutation_arms_verify_and_resets_after_pass() {
+        let tools = Arc::new(ScriptedTools::new());
+        let script = vec![
+            MockProvider::tool_call("c1", "Bash", serde_json::json!({"command": "touch f"})),
+            MockProvider::text("ran it"),
+            MockProvider::text("final answer"),
+        ];
+        let (mut h, bus) = harness(script, tools);
+        h.max_steps = 10;
+        let mut sub = bus.subscribe();
+        let _ = h.run_turn("run").await;
+        let mut verify_count = 0;
+        while let Ok(ev) = sub.try_recv() {
+            if matches!(ev, Event::VerifyStarted { .. }) {
+                verify_count += 1;
+            }
+        }
+        assert_eq!(
+            verify_count, 1,
+            "Bash arms verify (D7) and it runs exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn d7_verify_output_marker_arms_verify() {
+        // A tool whose output carries `[verify]` arms verification even
+        // though it is not class-mutating (D7).
+        struct Marker;
+        #[async_trait::async_trait]
+        impl ToolHost for Marker {
+            async fn execute(&self, _t: &str, _a: &Value, _s: &LoopCtx) -> (String, bool) {
+                ("analysis done [verify] please".into(), false)
+            }
+            fn schemas(&self) -> Vec<Value> {
+                vec![]
+            }
+            fn is_mutating(&self, _t: &str) -> bool {
+                false
+            }
+            fn verify_commands(&self) -> Vec<String> {
+                vec!["true".into()]
+            }
+            async fn run_verify(&self, _s: &LoopCtx) -> (bool, String) {
+                (true, String::new())
+            }
+        }
+        let tools = Arc::new(Marker);
+        let script = vec![
+            MockProvider::tool_call("c1", "Think", serde_json::json!({"thought": "x"})),
+            MockProvider::text("done"),
+        ];
+        let (h, bus) = harness(script, tools);
+        let mut sub = bus.subscribe();
+        let _ = h.run_turn("analyse").await;
+        let mut verify_count = 0;
+        while let Ok(ev) = sub.try_recv() {
+            if matches!(ev, Event::VerifyStarted { .. }) {
+                verify_count += 1;
+            }
+        }
+        assert_eq!(
+            verify_count, 1,
+            "[verify] marker in tool output arms verification (D7)"
+        );
+    }
+
+    // ------------------------------------------------------ D8: cancel
+    #[tokio::test]
+    async fn d8_cancel_token_aborts_turn_and_tools() {
+        let tools = Arc::new(ScriptedTools::new());
+        *tools.slow_ms.lock().unwrap() = Some(2_000);
+        let script = vec![
+            MockProvider::tool_call("c1", "Read", serde_json::json!({"path": "a"})),
+        ];
+        let (h, _bus) = harness(script, tools.clone());
+        let cancel = h.cancel.clone();
+        let c2 = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            c2.cancel();
+        });
+        let t0 = std::time::Instant::now();
+        let stop = h.run_turn("slow tool").await;
+        assert!(
+            matches!(stop, StopReason::Aborted(ref m) if m.contains("cancelled")),
+            "cancel aborts the turn (D8), got {stop:?}"
+        );
+        assert!(
+            t0.elapsed() < std::time::Duration::from_millis(1_500),
+            "tool wait was cut short by cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn d8_concurrency_safe_tools_run_in_parallel() {
+        let tools = Arc::new(ScriptedTools::new());
+        *tools.safe.lock().unwrap() = true;
+        *tools.slow_ms.lock().unwrap() = Some(150);
+        let script = vec![MockProvider::text("done")];
+        let (h, _bus) = harness(script, tools.clone());
+        // two parallel-safe calls in one turn: exercise execute_batch
+        let calls = vec![
+            ToolCall {
+                id: "p1".into(),
+                name: "Read".into(),
+                arguments_json: r#"{"path":"a"}"#.into(),
+            },
+            ToolCall {
+                id: "p2".into(),
+                name: "Read".into(),
+                arguments_json: r#"{"path":"b"}"#.into(),
+            },
+        ];
+        h.history.write().await.push(ChatMessage::user("go"));
+        let t0 = std::time::Instant::now();
+        h.execute_batch(&calls).await;
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(280),
+            "two 150ms safe tools must overlap (D8), took {elapsed:?}"
+        );
+        let hist = h.history.read().await;
+        let ids: Vec<&str> = hist
+            .iter()
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .collect();
+        assert_eq!(ids, vec!["p1", "p2"], "results land in call order");
+    }
+
+    #[tokio::test]
+    async fn d8_tool_timeout_enforced() {
+        struct NeverTools;
+        #[async_trait::async_trait]
+        impl ToolHost for NeverTools {
+            async fn execute(&self, _t: &str, _a: &Value, _s: &LoopCtx) -> (String, bool) {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                ("never".to_string(), false)
+            }
+            fn schemas(&self) -> Vec<Value> {
+                vec![]
+            }
+            fn is_mutating(&self, _t: &str) -> bool {
+                false
+            }
+            fn verify_commands(&self) -> Vec<String> {
+                vec![]
+            }
+            async fn run_verify(&self, _s: &LoopCtx) -> (bool, String) {
+                (true, String::new())
+            }
+            fn tool_timeout_ms(&self, _t: &str) -> Option<u64> {
+                Some(100)
+            }
+        }
+        let bus = EventBus::new(64);
+        let mut router = Router::new(crate::providers::CostBook::default(), false);
+        router.set_chain(
+            Role::Primary,
+            vec![crate::router::ModelEntry {
+                model: "mock-primary".into(),
+                provider: Arc::new(MockProvider::new(vec![MockProvider::tool_call(
+                    "t1",
+                    "Read",
+                    serde_json::json!({}),
+                )])),
+                priced: true,
+            }],
+        );
+        let (perm, _rx) = PermissionEngine::new(Mode::Yolo, vec![]);
+        let tmpdir = std::env::temp_dir().join(format!("marfim-tmo-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmpdir);
+        let h = Harness {
+            bus: bus.clone(),
+            router: Arc::new(RwLock::new(router)),
+            tools: Arc::new(NeverTools),
+            journal: Arc::new(Mutex::new(
+                Journal::open(&tmpdir.join("t.jsonl")).unwrap(),
+            )),
+            ctx: LoopCtx::default(),
+            permissions: Arc::new(perm),
+            max_steps: 6,
+            max_verify_feedback: 1,
+            history: Arc::new(RwLock::new(Vec::new())),
+            cancel: CancelToken::default(),
+            compact_threshold_tokens: u64::MAX,
+            turn_counter: AtomicU64::new(0),
+            denied_tools: AtomicU64::new(0),
+            verify_armed: AtomicBool::new(false),
+            stop_on_tool_error: false,
+            executed_tools: AtomicU64::new(0),
+            steer: Arc::new(Mutex::new(SteerQueues::default())),
+        };
+        let stop = h.run_turn("hang").await;
+        assert_eq!(stop, StopReason::EndTurn, "timeout result feeds the model");
+        let hist = h.history.read().await;
+        let tr = hist
+            .iter()
+            .find(|m| m.tool_call_id.as_deref() == Some("t1"))
+            .expect("tool result present");
+        assert!(
+            tr.is_error && tr.content.contains("timed out after 100ms"),
+            "timeout enforced with explicit error result (D8): {}",
+            tr.content
+        );
+    }
+
+    // ------------------------------------------------------ D9: streaming
+    #[tokio::test]
+    async fn d9_stream_deltas_reach_the_bus() {
+        let tools = Arc::new(ScriptedTools::new());
+        let (h, bus) = harness(vec![MockProvider::text("streamed text")], tools);
+        let mut sub = bus.subscribe();
+        let _ = h.run_turn("hi").await;
+        let mut saw_delta = false;
+        while let Ok(ev) = sub.try_recv() {
+            if let Event::StreamDelta { kind, text } = ev {
+                if kind == "text" && text == "streamed text" {
+                    saw_delta = true;
+                }
+            }
+        }
+        assert!(saw_delta, "stream deltas published on the bus (D9)");
+    }
+
+    // ------------------------------------------------------ D11: failover
+    #[tokio::test]
+    async fn d11_failover_chain_recovers_from_transport_error() {
+        let tools = Arc::new(ScriptedTools::new());
+        let bus = EventBus::new(4096);
+        let mut router = Router::new(crate::providers::CostBook::default(), false);
+        let failing = Arc::new(MockProvider::from_actions(vec![MockProvider::error(
+            "HTTP 503 after retries",
+        )]));
+        let working = Arc::new(MockProvider::new(vec![MockProvider::text("backup worked")]));
+        router.set_chain(
+            Role::Primary,
+            vec![
+                crate::router::ModelEntry {
+                    model: "flaky".into(),
+                    provider: failing.clone(),
+                    priced: true,
+                },
+                crate::router::ModelEntry {
+                    model: "solid".into(),
+                    provider: working.clone(),
+                    priced: true,
+                },
+            ],
+        );
+        router.set_chain(
+            Role::Small,
+            vec![crate::router::ModelEntry {
+                model: "small".into(),
+                provider: Arc::new(MockProvider::new(vec![MockProvider::text(
+                    "summary long enough",
+                )])),
+                priced: true,
+            }],
+        );
+        let (perm, _rx) = PermissionEngine::new(Mode::Yolo, vec![]);
+        let tmpdir = std::env::temp_dir().join(format!("marfim-failover-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmpdir);
+        let h = Harness {
+            bus: bus.clone(),
+            router: Arc::new(RwLock::new(router)),
+            tools,
+            journal: Arc::new(Mutex::new(
+                Journal::open(&tmpdir.join("f.jsonl")).unwrap(),
+            )),
+            ctx: LoopCtx::default(),
+            permissions: Arc::new(perm),
+            max_steps: 6,
+            max_verify_feedback: 2,
+            history: Arc::new(RwLock::new(Vec::new())),
+            cancel: CancelToken::default(),
+            compact_threshold_tokens: u64::MAX,
+            turn_counter: AtomicU64::new(0),
+            denied_tools: AtomicU64::new(0),
+            verify_armed: AtomicBool::new(false),
+            stop_on_tool_error: false,
+            executed_tools: AtomicU64::new(0),
+            steer: Arc::new(Mutex::new(SteerQueues::default())),
+        };
+        let stop = h.run_turn("hi").await;
+        assert_eq!(stop, StopReason::EndTurn, "failover completes the turn");
+        assert_eq!(
+            working.request_count(),
+            1,
+            "second chain entry served the step (D11)"
+        );
+        // the flaky model is marked unavailable: the next resolve skips it
+        {
+            let r = h.router.read().await;
+            let (e, tried) = r.resolve(Role::Primary, |_| true).unwrap();
+            assert_eq!(e.model, "solid");
+            assert!(
+                tried.iter().any(|t| t.contains("flaky:unavailable")),
+                "flaky marked unavailable: {tried:?}"
+            );
+        }
+    }
+
+    // ------------------------------------------------------ D12: stop paths
+    #[tokio::test]
+    async fn d12_turn_emitted_on_every_stop_path() {
+        // budget-exceeded path emits TurnEnded too
+        let tools = Arc::new(ScriptedTools::new());
+        let (mut h, bus) = harness(vec![], tools);
+        h.max_steps = 0;
+        let mut sub = bus.subscribe();
+        let stop = h.run_turn("x").await;
+        assert_eq!(stop.normalized(), "budget_exceeded");
+        let mut ended = Vec::new();
+        while let Ok(ev) = sub.try_recv() {
+            if let Event::TurnEnded { stop_reason, .. } = ev {
+                ended.push(stop_reason);
+            }
+        }
+        assert_eq!(ended, vec!["budget_exceeded".to_string()]);
     }
 }

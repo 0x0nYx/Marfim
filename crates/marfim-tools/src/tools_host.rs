@@ -57,12 +57,12 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
 
     tool!(
         "Read",
-        "Read a file (line-numbered).",
+        "Read a file (line-numbered; offset/limit supported, truncation marked).",
         TC::ReadOnly,
         true,
         false,
         10_000,
-        serde_json::json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}),
+        serde_json::json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"0-based line offset"},"limit":{"type":"integer","description":"max lines returned"}}}),
         crate::fs::read
     );
     tool!(
@@ -268,7 +268,7 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
     tool!("Task", "Spawn a subagent (general|explore|plan|reviewer|security|silent-failure|build-resolver|evaluator).",
         TC::Execute, false, false, 600_000,
         serde_json::json!({"type":"object","required":["prompt"],"properties":{"agent":{"type":"string"},"prompt":{"type":"string"}}}),
-        crate::misc_tools::task);
+        crate::subagent::task);
     tool!(
         "TaskOutput",
         "Poll a subagent task.",
@@ -277,7 +277,7 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
         false,
         5_000,
         serde_json::json!({"type":"object","required":["task_id"],"properties":{"task_id":{"type":"string"}}}),
-        crate::misc_tools::task_output
+        crate::subagent::task_output
     );
     tool!(
         "WebFetch",
@@ -430,7 +430,8 @@ impl ToolHost for HostTools {
             return (format!("permission denied: {}", verdict.reason), true);
         }
 
-        // 3. dispatch (async tools run in-line; sync tools via block_in_place)
+        // 3. dispatch (async tools run in-line; sync tools via spawn_blocking
+        //    so they never stall the executor — D8)
         let out: ToolOutput = match (tool, self.registry.get(tool)) {
             ("Bash", _) => {
                 let cmd = args["command"].as_str().unwrap_or("").to_string();
@@ -444,7 +445,9 @@ impl ToolHost for HostTools {
                 let mut ctx2 = ctx.clone();
                 ctx2.cwd = std::path::PathBuf::from(cwd);
                 let sandbox = self.sandbox.clone();
-                let (text, err) = crate::bash::run_bash(&ctx2, &cmd, &sandbox, timeout).await;
+                let cancel = session.cancel.clone();
+                let (text, err) =
+                    crate::bash::run_bash(&ctx2, &cmd, &sandbox, timeout, &cancel).await;
                 ToolOutput {
                     output: text,
                     is_error: err,
@@ -463,8 +466,15 @@ impl ToolHost for HostTools {
                 }
             }
             (_, Some(def)) => {
+                // D8: sync tool fns run on the blocking pool with the
+                // registry-enforced timeout applied by the loop layer.
                 let ctx = self.state.clone();
-                (def.run)(&ctx, args)
+                let args = args.clone();
+                let run = def.run.clone();
+                match tokio::task::spawn_blocking(move || run(&ctx, &args)).await {
+                    Ok(out) => out,
+                    Err(e) => ToolOutput::err(format!("tool task join failed: {e}")),
+                }
             }
             (_, None) => ToolOutput::err(format!("unknown tool: {tool}")),
         };
@@ -479,10 +489,22 @@ impl ToolHost for HostTools {
     }
 
     fn is_mutating(&self, tool: &str) -> bool {
+        // D7: Bash counts as mutating — any shell execution can arm verify.
         matches!(
             self.registry.get(tool).map(|t| t.class),
-            Some(ToolClass::Edit)
+            Some(ToolClass::Edit | ToolClass::Execute)
         )
+    }
+
+    fn concurrency_safe(&self, tool: &str) -> bool {
+        self.registry
+            .get(tool)
+            .map(|t| t.concurrency_safe)
+            .unwrap_or(false)
+    }
+
+    fn tool_timeout_ms(&self, tool: &str) -> Option<u64> {
+        self.registry.get(tool).map(|t| t.timeout_ms)
     }
 
     fn verify_commands(&self) -> Vec<String> {
@@ -510,7 +532,9 @@ impl ToolHost for HostTools {
             } else {
                 std::path::PathBuf::from(&session.cwd)
             };
-            let (out, err) = crate::bash::run_bash(&ctx2, c, &self.sandbox, 300_000).await;
+            let cancel = session.cancel.clone();
+            let (out, err) =
+                crate::bash::run_bash(&ctx2, c, &self.sandbox, 300_000, &cancel).await;
             all_output.push_str(&format!("$ {c}\n{out}\n"));
             if err {
                 return (false, all_output);
@@ -547,6 +571,7 @@ mod tests {
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
+            subagent: Arc::new(crate::subagent::UnwiredSubagents),
         };
         (
             Arc::new(HostTools::new(
@@ -627,6 +652,7 @@ mod tests {
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
+            subagent: Arc::new(crate::subagent::UnwiredSubagents),
         };
         let h = HostTools::new(
             Arc::new(perm),
@@ -662,6 +688,15 @@ mod tests {
         assert!(h.is_mutating("Write"));
         assert!(h.is_mutating("Edit"));
         assert!(!h.is_mutating("Read"));
-        assert!(!h.is_mutating("Bash"));
+        assert!(h.is_mutating("Bash"), "Bash arms verify (D7)");
+    }
+
+    #[test]
+    fn concurrency_safety_and_timeouts_come_from_registry() {
+        let (h, _rx) = host(Mode::Default, vec![]);
+        assert!(h.concurrency_safe("Read"));
+        assert!(!h.concurrency_safe("Bash"));
+        assert_eq!(h.tool_timeout_ms("Bash"), Some(120_000));
+        assert_eq!(h.tool_timeout_ms("unknown"), None);
     }
 }

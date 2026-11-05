@@ -80,6 +80,9 @@ pub struct Journal {
     path: PathBuf,
     file: std::fs::File,
     len: u64,
+    /// Fault-injection hook (tests / chaos drills): when set, every append
+    /// fails so callers exercise their write-error paths (D6).
+    fail_writes: bool,
 }
 
 impl Journal {
@@ -96,10 +99,21 @@ impl Journal {
             path: path.to_path_buf(),
             file,
             len,
+            fail_writes: false,
         })
     }
 
+    /// Fault-injection hook (D6): fail every subsequent append.
+    pub fn set_fail_writes(&mut self, on: bool) {
+        self.fail_writes = on;
+    }
+
     pub fn append(&mut self, rec: &JournalRecord) -> Result<u64> {
+        if self.fail_writes {
+            return Err(CoreError::Session(
+                "injected journal write failure".into(),
+            ));
+        }
         let line = serde_json::to_string(rec)?;
         self.file.write_all(line.as_bytes())?;
         self.file.write_all(b"\n")?;

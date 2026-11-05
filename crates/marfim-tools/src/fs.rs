@@ -24,6 +24,9 @@ fn read_capped(path: &Path, max_bytes: usize) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{e}"))
 }
 
+/// D24: Read supports `offset`/`limit` (0-based line offset, max lines)
+/// and marks truncation EXPLICITLY — the model must never silently lose
+/// the tail of a file.
 pub fn read(_ctx: &ToolCtx, args: &Value) -> ToolOutput {
     let Some(path) = args["path"].as_str() else {
         return ToolOutput::err("missing `path`");
@@ -31,10 +34,32 @@ pub fn read(_ctx: &ToolCtx, args: &Value) -> ToolOutput {
     let full = resolve(&_ctx.cwd, path);
     match read_capped(&full, 512 * 1024) {
         Ok(text) => {
-            // line-numbered output (claude-code convention)
+            let lines: Vec<&str> = text.lines().collect();
+            let total = lines.len();
+            let offset = args["offset"].as_u64().unwrap_or(0) as usize; // 0-based
+            let limit = args["limit"]
+                .as_u64()
+                .map(|v| v as usize)
+                .unwrap_or(2000);
+            if offset >= total && total > 0 {
+                return ToolOutput::ok(format!(
+                    "[truncated: offset {offset} is past end of file ({total} lines)]"
+                ));
+            }
+            let start = offset.min(total);
+            let end = (start.saturating_add(limit)).min(total);
             let mut out = String::new();
-            for (i, line) in text.lines().enumerate().take(2000) {
-                out.push_str(&format!("{:>6}\t{line}\n", i + 1));
+            for (i, line) in lines[start..end].iter().enumerate() {
+                out.push_str(&format!("{:>6}\t{line}\n", start + i + 1));
+            }
+            if end < total {
+                out.push_str(&format!(
+                    "[truncated: showing lines {}-{} of {} — re-read with offset={} for more]\n",
+                    start + 1,
+                    end,
+                    total,
+                    end
+                ));
             }
             ToolOutput::ok(out)
         }
@@ -242,6 +267,7 @@ mod tests {
             background: Arc::new(crate::bash::BackgroundShells::default()),
             monitors: Arc::new(crate::monitor::Monitors::default()),
             last_repomap: Arc::new(Default::default()),
+            subagent: Arc::new(crate::subagent::UnwiredSubagents),
         }
     }
 
@@ -362,5 +388,49 @@ mod tests {
         let l = ls(&c, &serde_json::json!({}));
         assert!(l.output.contains("main.rs"));
         assert!(l.output.contains("src/"));
+    }
+
+    // --------------------------------------------------------- D24: Read
+    #[test]
+    fn read_offset_limit_and_explicit_truncation_marker() {
+        let (_t, c) = setup();
+        let body: String = (1..=3000)
+            .map(|i| format!("line {i}\n"))
+            .collect::<String>();
+        std::fs::write(c.cwd.join("big.txt"), &body).unwrap();
+
+        // default: 2000 lines + explicit marker (never a silent cut)
+        let o = read(&c, &serde_json::json!({"path": "big.txt"}));
+        assert!(!o.is_error);
+        assert!(o.output.contains("line 1\n"));
+        assert!(o.output.contains("line 2000\n"));
+        assert!(
+            o.output.contains("[truncated: showing lines 1-2000 of 3000"),
+            "explicit [truncated] marker missing (D24): {}",
+            o.output.lines().last().unwrap_or("")
+        );
+        assert!(!o.output.contains("line 2001\n"), "no silent overflow");
+
+        // offset+limit window
+        let o2 = read(
+            &c,
+            &serde_json::json!({"path": "big.txt", "offset": 2499, "limit": 2}),
+        );
+        assert!(o2.output.contains("line 2500\n"));
+        assert!(o2.output.contains("line 2501\n"));
+        assert!(!o2.output.contains("line 2502\n"));
+        assert!(o2.output.contains("[truncated: showing lines 2500-2501 of 3000"));
+
+        // offset past end is an explicit marker, not an empty result
+        let o3 = read(
+            &c,
+            &serde_json::json!({"path": "big.txt", "offset": 9999}),
+        );
+        assert!(o3.output.contains("[truncated: offset 9999 is past end"));
+
+        // small file: no marker
+        std::fs::write(c.cwd.join("small.txt"), "only line\n").unwrap();
+        let o4 = read(&c, &serde_json::json!({"path": "small.txt"}));
+        assert!(!o4.output.contains("[truncated"));
     }
 }

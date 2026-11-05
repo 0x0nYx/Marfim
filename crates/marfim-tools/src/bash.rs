@@ -61,11 +61,14 @@ fn cap(s: &mut String) {
 
 /// Synchronous-ish bash execution with hard timeout + process group kill.
 /// The PermissionEngine has ALREADY allowed this call by the time we run.
+/// Cooperative cancel (D8): if `cancel` fires mid-run the whole process
+/// group is killed and the call returns as an error.
 pub async fn run_bash(
     ctx: &ToolCtx,
     command: &str,
     sandbox: &marfim_core::sandbox::Sandbox,
     timeout_ms: u64,
+    cancel: &marfim_core::loop_::CancelToken,
 ) -> (String, bool) {
     let analysis = shellparse::analyze(command);
     // nested-exec / heredoc guard: never executed automatically (INV-08);
@@ -99,11 +102,21 @@ pub async fn run_bash(
     };
     let pid = child.id();
 
-    let res = tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        child.wait_with_output(),
-    )
-    .await;
+    let res = tokio::select! {
+        r = tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            child.wait_with_output(),
+        ) => r,
+        _ = cancel.cancelled() => {
+            if let Some(p) = pid {
+                marfim_core::sandbox::kill_process_group(p as i32).await;
+            }
+            return (
+                "cancelled by user (process group killed)".to_string(),
+                true,
+            );
+        }
+    };
     match res {
         Err(_) => {
             if let Some(p) = pid {
@@ -198,6 +211,7 @@ mod tests {
             background: Arc::new(BackgroundShells::default()),
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
+            subagent: Arc::new(crate::subagent::UnwiredSubagents),
         }
     }
 
@@ -205,7 +219,8 @@ mod tests {
     async fn bash_runs_simple_command() {
         let c = ctx();
         let sandbox = marfim_core::sandbox::Sandbox::probe();
-        let (out, err) = run_bash(&c, "echo hello-world", &sandbox, 5000).await;
+        let cancel = marfim_core::loop_::CancelToken::default();
+        let (out, err) = run_bash(&c, "echo hello-world", &sandbox, 5000, &cancel).await;
         assert!(!err, "{out}");
         assert!(out.contains("hello-world"));
     }
@@ -214,8 +229,9 @@ mod tests {
     async fn bash_timeout_kills() {
         let c = ctx();
         let sandbox = marfim_core::sandbox::Sandbox::probe();
+        let cancel = marfim_core::loop_::CancelToken::default();
         let t0 = std::time::Instant::now();
-        let (out, err) = run_bash(&c, "sleep 30", &sandbox, 700).await;
+        let (out, err) = run_bash(&c, "sleep 30", &sandbox, 700, &cancel).await;
         let elapsed = t0.elapsed();
         assert!(err);
         assert!(out.contains("timed out"), "{out}");
@@ -223,10 +239,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bash_cancel_kills_process_group() {
+        let c = ctx();
+        let sandbox = marfim_core::sandbox::Sandbox::probe();
+        let cancel = marfim_core::loop_::CancelToken::default();
+        let c2 = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            c2.cancel();
+        });
+        let t0 = std::time::Instant::now();
+        let (out, err) = run_bash(&c, "sleep 30", &sandbox, 60_000, &cancel).await;
+        assert!(err);
+        assert!(out.contains("cancelled"), "{out}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[tokio::test]
     async fn nested_exec_refused_without_approval() {
         let c = ctx();
         let sandbox = marfim_core::sandbox::Sandbox::probe();
-        let (out, err) = run_bash(&c, "echo $(whoami)", &sandbox, 5000).await;
+        let cancel = marfim_core::loop_::CancelToken::default();
+        let (out, err) = run_bash(&c, "echo $(whoami)", &sandbox, 5000, &cancel).await;
         assert!(err);
         assert!(out.contains("never auto-run"), "{out}");
     }
@@ -235,7 +269,8 @@ mod tests {
     async fn failing_command_reports_exit() {
         let c = ctx();
         let sandbox = marfim_core::sandbox::Sandbox::probe();
-        let (out, err) = run_bash(&c, "exit 7", &sandbox, 5000).await;
+        let cancel = marfim_core::loop_::CancelToken::default();
+        let (out, err) = run_bash(&c, "exit 7", &sandbox, 5000, &cancel).await;
         assert!(err);
         assert!(out.contains("[exit: 7]"), "{out}");
     }

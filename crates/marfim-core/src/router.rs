@@ -48,6 +48,8 @@ pub struct Router {
     pub costs: CostBook,
     /// When true, unpriced models fail closed (budget enforcement on).
     pub budgeted: bool,
+    /// Failover state (D11): models marked unavailable until an instant.
+    unavailable_until: std::collections::BTreeMap<(Role, String), std::time::Instant>,
 }
 
 impl Router {
@@ -56,6 +58,23 @@ impl Router {
             chains: Default::default(),
             costs,
             budgeted,
+            unavailable_until: Default::default(),
+        }
+    }
+
+    /// D11: mark a model unavailable after a transport error; the failover
+    /// chain skips it until the backoff window passes.
+    pub fn mark_unavailable(&mut self, role: Role, model: &str, backoff_ms: u64) {
+        self.unavailable_until.insert(
+            (role, model.to_string()),
+            std::time::Instant::now() + std::time::Duration::from_millis(backoff_ms),
+        );
+    }
+
+    pub fn is_available(&self, role: Role, model: &str) -> bool {
+        match self.unavailable_until.get(&(role, model.to_string())) {
+            Some(until) => std::time::Instant::now() >= *until,
+            None => true,
         }
     }
 
@@ -88,6 +107,12 @@ impl Router {
         for entry in &chain {
             if self.budgeted && !entry.priced {
                 tried.push(format!("{}: unpriced (fail closed)", entry.model));
+                continue;
+            }
+            // D11: models marked unavailable by a transport error are
+            // skipped until their backoff window passes.
+            if !self.is_available(role, &entry.model) {
+                tried.push(format!("{}:unavailable", entry.model));
                 continue;
             }
             if probe(entry) {

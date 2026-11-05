@@ -14,9 +14,11 @@ use serde_json::Value;
 
 pub mod anthropic;
 pub mod openai;
+pub mod validate;
 
 pub use anthropic::Anthropic;
 pub use openai::OpenAiCompat;
+pub use validate::{validate_anthropic_body, validate_openai_body};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
@@ -216,16 +218,35 @@ pub enum StreamEvent {
 /// ---------------------------------------------------------------- Mock
 /// Scripted deterministic provider for tests + fixtures.
 pub struct MockProvider {
-    pub script: std::sync::Mutex<Vec<Step>>,
+    pub script: std::sync::Mutex<Vec<MockAction>>,
     pub calls: std::sync::Mutex<Vec<ChatRequest>>,
+}
+
+/// One scripted turn: either a step or a transport error (for failover
+/// and retry tests).
+#[derive(Debug, Clone)]
+pub enum MockAction {
+    Step(Step),
+    Error(String),
 }
 
 impl MockProvider {
     pub fn new(steps: Vec<Step>) -> Self {
         Self {
-            script: std::sync::Mutex::new(steps),
+            script: std::sync::Mutex::new(steps.into_iter().map(MockAction::Step).collect()),
             calls: std::sync::Mutex::new(vec![]),
         }
+    }
+
+    pub fn from_actions(actions: Vec<MockAction>) -> Self {
+        Self {
+            script: std::sync::Mutex::new(actions),
+            calls: std::sync::Mutex::new(vec![]),
+        }
+    }
+
+    pub fn error(msg: &str) -> MockAction {
+        MockAction::Error(msg.to_string())
     }
 
     pub fn text(t: &str) -> Step {
@@ -262,12 +283,15 @@ impl Provider for MockProvider {
     async fn chat_step(&self, req: &ChatRequest) -> Result<Step> {
         self.calls.lock().unwrap().push(req.clone());
         let mut script = self.script.lock().unwrap();
-        if script.is_empty() {
-            return Ok(MockProvider::text(
+        match script.is_empty() {
+            true => Ok(MockProvider::text(
                 "mock provider: no scripted turns configured",
-            ));
+            )),
+            false => match script.remove(0) {
+                MockAction::Step(s) => Ok(s),
+                MockAction::Error(e) => Err(CoreError::Provider(e)),
+            },
         }
-        Ok(script.remove(0))
     }
 
     async fn chat_step_stream(

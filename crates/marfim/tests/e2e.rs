@@ -16,6 +16,19 @@ fn bin_path() -> std::path::PathBuf {
     p.join("marfim")
 }
 
+/// Hermetic child environment: journals land in a temp MARFIM_HOME.
+fn isolated_child(args: &[&str]) -> std::process::Command {
+    let home = std::env::temp_dir().join(format!(
+        "marfim-e2e-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::create_dir_all(&home);
+    let mut c = Command::new(bin_path());
+    c.args(args).env("MARFIM_HOME", &home).current_dir("/tmp");
+    c
+}
+
 #[test]
 fn version_and_doctor() {
     let out = Command::new(bin_path()).arg("--version").output().unwrap();
@@ -40,23 +53,95 @@ fn agents_profiles_are_unverified_by_default() {
 
 #[test]
 fn headless_json_contract() {
-    let out = Command::new(bin_path())
-        .args(["-p", "hello", "--output-format", "json"])
-        .output()
-        .unwrap();
+    // D11: the provider is EXPLICIT (mock here); no silent default exists.
+    let out = isolated_child(&[
+        "-p",
+        "hello",
+        "--provider",
+        "mock",
+        "--output-format",
+        "json",
+    ])
+    .output()
+    .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     let v: serde_json::Value =
         serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("not json: {e}: {text}"));
     assert_eq!(v["type"], "result");
     assert_eq!(v["stop"], "end_turn");
+    // D12: success exits 0
+    assert_eq!(out.status.code(), Some(0), "stdout: {text}");
+}
+
+#[test]
+fn headless_json_contract_via_config_file() {
+    // D13: the provider can come from the layered config file
+    let home = std::env::temp_dir().join(format!(
+        "marfim-e2e-cfg-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(home.join(".marfim")).unwrap();
+    std::fs::write(
+        home.join(".marfim").join("config.toml"),
+        "provider = \"mock\"\nmodel = \"mock-1\"\n",
+    )
+    .unwrap();
+    let mut c = Command::new(bin_path());
+    c.args(["-p", "hello", "--output-format", "json"])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .current_dir("/tmp");
+    let out = c.output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("not json: {e}: {text}"));
+    assert_eq!(v["type"], "result");
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn headless_without_provider_is_an_explicit_error_not_mock() {
+    // D11: no silent mock — missing provider config is a hard error
+    let home = std::env::temp_dir().join(format!(
+        "marfim-e2e-noprov-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::create_dir_all(&home);
+    let mut c = Command::new(bin_path());
+    c.args(["-p", "hello"])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .current_dir("/tmp");
+    let out = c.output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "must exit 1");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no provider configured"), "{err}");
+}
+
+#[test]
+fn headless_unknown_provider_errors_d12_exit_1() {
+    let out = isolated_child(&["-p", "hi", "--provider", "does-not-exist"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown provider"), "{err}");
 }
 
 #[test]
 fn headless_stream_json_events_are_jsonl() {
-    let out = Command::new(bin_path())
-        .args(["-p", "hi", "--output-format", "stream-json"])
-        .output()
-        .unwrap();
+    let out = isolated_child(&[
+        "-p",
+        "hi",
+        "--provider",
+        "mock",
+        "--output-format",
+        "stream-json",
+    ])
+    .output()
+    .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     assert!(!lines.is_empty());
@@ -65,6 +150,11 @@ fn headless_stream_json_events_are_jsonl() {
     assert_eq!(first["event"], "turn_started");
     let last: serde_json::Value = serde_json::from_str(lines[lines.len() - 1]).unwrap();
     assert_eq!(last["event"], "turn_end");
+    // D9: stream deltas ride the same bus
+    assert!(
+        lines.iter().any(|l| l.contains("stream_delta")),
+        "stream deltas in stream-json output"
+    );
 }
 
 #[test]

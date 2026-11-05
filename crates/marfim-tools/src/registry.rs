@@ -5,6 +5,7 @@
 use marfim_core::permissions::ToolClass;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
@@ -56,7 +57,7 @@ impl std::fmt::Debug for ToolDef {
 }
 
 /// Execution context handed to every tool.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ToolCtx {
     pub cwd: std::path::PathBuf,
     pub session_id: String,
@@ -68,6 +69,26 @@ pub struct ToolCtx {
     pub background: std::sync::Arc<crate::bash::BackgroundShells>,
     pub monitors: std::sync::Arc<crate::monitor::Monitors>,
     pub last_repomap: std::sync::Arc<std::sync::Mutex<String>>,
+    /// D16: real subagent spawner (UnwiredSubagents by default).
+    pub subagent: std::sync::Arc<dyn crate::subagent::SubagentSpawner>,
+}
+
+impl Default for ToolCtx {
+    fn default() -> Self {
+        Self {
+            cwd: std::path::PathBuf::new(),
+            session_id: String::new(),
+            board: Arc::new(Default::default()),
+            evidence: Arc::new(Default::default()),
+            memory: Arc::new(Default::default()),
+            todos: Arc::new(Default::default()),
+            plan_mode: Arc::new(Default::default()),
+            background: Arc::new(Default::default()),
+            monitors: Arc::new(Default::default()),
+            last_repomap: Arc::new(Default::default()),
+            subagent: Arc::new(crate::subagent::UnwiredSubagents),
+        }
+    }
 }
 
 pub struct ToolRegistry {
@@ -122,7 +143,8 @@ impl ToolRegistry {
 
     /// Wire schemas (OpenAI function-calling shape; dialect-agnostic core).
     pub fn schemas(&self, include_deferred: bool) -> Vec<Value> {
-        self.tools
+        let mut out: Vec<Value> = self
+            .tools
             .values()
             .filter(|t| include_deferred || !t.deferred)
             .map(|t| {
@@ -135,7 +157,19 @@ impl ToolRegistry {
                     }
                 })
             })
-            .collect()
+            .collect();
+        // D16: namespaced MCP tools are part of the visible catalog
+        for (name, _ref) in &self.mcp_tools {
+            out.push(serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": format!("MCP tool `{name}`"),
+                    "parameters": _ref.schema
+                }
+            }));
+        }
+        out
     }
 
     /// Keyword search across visible + deferred tools (ToolSearch).

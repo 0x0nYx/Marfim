@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://marfim.dev/schemas/openai-chat-completions.schema.json",
+  "title": "OpenAI chat/completions request body (vendored subset enforced by Marfim)",
+  "type": "object",
+  "required": ["model", "messages"],
+  "additionalProperties": true,
+  "properties": {
+    "model": { "type": "string", "minLength": 1 },
+    "stream": { "type": "boolean" },
+    "max_tokens": { "type": "integer", "minimum": 1 },
+    "max_completion_tokens": { "type": "integer", "minimum": 1 },
+    "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+    "reasoning_effort": { "enum": ["low", "medium", "high"] },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "function"],
+        "properties": {
+          "type": { "const": "function" },
+          "function": {
+            "type": "object",
+            "required": ["name", "parameters"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "description": { "type": "string" },
+              "parameters": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": { "enum": ["system", "developer", "user", "assistant", "tool"] },
+          "content": { "type": ["string", "null"] },
+          "tool_call_id": { "type": "string", "minLength": 1 },
+          "tool_calls": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "type", "function"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "type": { "const": "function" },
+                "function": {
+                  "type": "object",
+                  "required": ["name", "arguments"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "arguments": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
