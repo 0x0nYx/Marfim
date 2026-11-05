@@ -19,6 +19,7 @@ pub mod permissions;
 pub mod providers;
 pub mod router;
 pub mod sandbox;
+pub mod session;
 pub mod shellparse;
 pub mod skills;
 pub mod trust;

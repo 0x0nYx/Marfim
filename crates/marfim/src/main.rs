@@ -514,7 +514,7 @@ async fn build_session(
     router.set_chain(marfim_core::router::Role::Small, small);
 
     let ctx = LoopCtx {
-        session_id: paths.session_id,
+        session_id: paths.session_id.clone(),
         cwd: settings.cwd.to_string_lossy().to_string(),
         cancel: marfim_core::loop_::CancelToken::default(),
     };
@@ -530,6 +530,21 @@ async fn build_session(
         settings.compact_threshold_tokens,
         settings.stop_on_tool_error,
     ));
+    // P2 resume semantics: a resumed session rebuilds its conversation
+    // history from the journal (user/assistant turns + compaction
+    // summaries) — otherwise --resume would forget everything.
+    if settings.resume.is_some() {
+        match marfim_core::session::rebuild_history_from_journal(&harness, &paths.journal).await {
+            Ok(n) => eprintln!(
+                "resumed session {}: rebuilt {n} message(s) from journal",
+                paths.session_id
+            ),
+            Err(e) => eprintln!(
+                "warning: resume history rebuild failed for {}: {e}",
+                paths.journal.display()
+            ),
+        }
+    }
     (harness, bus, tool_ctx, perm, approval_rx)
 }
 
@@ -892,16 +907,24 @@ fn sessions_cmd(cli: &Cli) -> i32 {
     let cutoff = std::time::SystemTime::now()
         .checked_sub(std::time::Duration::from_secs(cli.days as u64 * 86_400))
         .unwrap_or(std::time::UNIX_EPOCH);
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if let Ok(meta) = e.metadata() {
-                let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                if mtime >= cutoff {
-                    println!("{}", p.display());
-                }
-            }
+    for s in marfim_core::session::list_sessions(&dir) {
+        let mtime = std::fs::metadata(&s.path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        if mtime < cutoff {
+            continue;
         }
+        let title = s.title.as_deref().unwrap_or("-");
+        println!(
+            "{}\t{}rec={}\t{}bytes\t{}\t{}\t{}",
+            s.session_id,
+            s.started_at,
+            s.records,
+            s.journal_bytes,
+            title,
+            s.cwd,
+            s.path.display()
+        );
     }
     0
 }

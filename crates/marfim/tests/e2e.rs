@@ -549,3 +549,73 @@ fn d8_ctrl_c_signal_wires_to_graceful_cancel() {
         "SIGINT → graceful exit took {waited:?}, expected well under the scripted 8s sleep"
     );
 }
+
+#[test]
+fn p2_resume_rebuilds_history_from_journal() {
+    let home = mock_config_home("p2resume");
+    // turn 1: creates the session
+    let out = Command::new(bin_path())
+        .args(["-p", "first question", "--output-format", "json"])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .env("MARFIM_MOCK_SCRIPT", r#"[{"text":"first answer"}]"#)
+        .current_dir("/tmp")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // find the session journal that was just created
+    let sessions = marfim_home_sessions(&home);
+    assert!(
+        !sessions.is_empty(),
+        "session journal exists after first run"
+    );
+
+    // turn 2: --resume must rebuild history from the journal (P2)
+    let sid = sessions
+        .iter()
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+        .next()
+        .unwrap();
+    let out2 = Command::new(bin_path())
+        .args([
+            "-p",
+            "second question",
+            "--output-format",
+            "json",
+            "--resume",
+            &sid,
+        ])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .env("MARFIM_MOCK_SCRIPT", r#"[{"text":"second answer"}]"#)
+        .current_dir("/tmp")
+        .output()
+        .unwrap();
+    let err2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(
+        err2.contains("rebuilt") && err2.contains("message(s) from journal"),
+        "resume must rebuild history from journal, stderr: {err2}"
+    );
+    assert_eq!(out2.status.code(), Some(0), "{err2}");
+}
+
+fn marfim_home_sessions(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let dir = home.join("sessions");
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("jsonl") {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}

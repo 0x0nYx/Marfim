@@ -56,6 +56,11 @@ pub enum JournalRecord {
     RewindMarker {
         to_record: u64,
     },
+    Fork {
+        from_session: String,
+        fork_session: String,
+        forked_at: String,
+    },
 }
 
 impl JournalRecord {
@@ -71,6 +76,7 @@ impl JournalRecord {
             JournalRecord::Steer { .. } => "steer",
             JournalRecord::Compaction { .. } => "compaction",
             JournalRecord::RewindMarker { .. } => "rewind_marker",
+            JournalRecord::Fork { .. } => "fork",
         }
     }
 }
@@ -154,8 +160,10 @@ impl Journal {
 
     /// Rewind: keep only records up to `byte_offset` (exclusive), i.e.
     /// truncate the file back to the checkpoint. The removed tail is
-    /// preserved in `<path>.pre-rewind` for audit.
-    pub fn rewind_to(&self, byte_offset: u64) -> Result<u64> {
+    /// preserved in `<path>.pre-rewind` for audit. Takes `&mut self` so the
+    /// tracked length stays in sync (offsets returned by later appends must
+    /// stay valid for future rewinds).
+    pub fn rewind_to(&mut self, byte_offset: u64) -> Result<u64> {
         use std::io::Seek;
         let mut src = std::fs::File::open(&self.path)?;
         let dropped = src.metadata()?.len().saturating_sub(byte_offset);
@@ -181,6 +189,7 @@ impl Journal {
             dst.sync_all()?;
         }
         std::fs::rename(&tmp, &self.path)?;
+        self.len = byte_offset;
         Ok(dropped)
     }
 }
