@@ -222,12 +222,15 @@ pub struct MockProvider {
     pub calls: std::sync::Mutex<Vec<ChatRequest>>,
 }
 
-/// One scripted turn: either a step or a transport error (for failover
-/// and retry tests).
+/// One scripted turn: either a step, a transport error (for failover
+/// and retry tests), or a pause before the next entry (for signal /
+/// timeout / cancel tests). Sleep is a test affordance only — never a
+/// silent-mock fallback (D11).
 #[derive(Debug, Clone)]
 pub enum MockAction {
     Step(Step),
     Error(String),
+    Sleep(u64),
 }
 
 impl MockProvider {
@@ -285,15 +288,24 @@ impl Provider for MockProvider {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(req.clone());
-        let mut script = self.script.lock().unwrap_or_else(|p| p.into_inner());
-        match script.is_empty() {
-            true => Ok(MockProvider::text(
-                "mock provider: no scripted turns configured",
-            )),
-            false => match script.remove(0) {
-                MockAction::Step(s) => Ok(s),
-                MockAction::Error(e) => Err(CoreError::Provider(e)),
-            },
+        loop {
+            // guard is scoped INSIDE the iteration: never held across await
+            let action = {
+                let mut script = self.script.lock().unwrap_or_else(|p| p.into_inner());
+                if script.is_empty() {
+                    return Ok(MockProvider::text(
+                        "mock provider: no scripted turns configured",
+                    ));
+                }
+                script.remove(0)
+            };
+            match action {
+                MockAction::Step(s) => return Ok(s),
+                MockAction::Error(e) => return Err(CoreError::Provider(e)),
+                MockAction::Sleep(ms) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                }
+            }
         }
     }
 

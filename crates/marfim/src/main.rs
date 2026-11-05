@@ -203,18 +203,36 @@ fn exit_code(stop: &StopReason, harness: &Harness) -> i32 {
 
 async fn drive_turn_with_ctrlc(harness: &Arc<Harness>, prompt: &str) -> StopReason {
     let c = harness.cancel.clone();
+    // The turn runs as a task so a Ctrl-C win can AWAIT its unwind instead
+    // of dropping it mid-flight: dropping the future would skip finish_turn,
+    // so TurnEnded would never be published and any event collector (the
+    // stream-json printer, D12's exactly-once contract) would block forever.
+    let mut turn = {
+        let h = harness.clone();
+        let prompt = prompt.to_string();
+        tokio::spawn(async move { h.run_turn(&prompt).await })
+    };
     tokio::select! {
-        stop = harness.run_turn(prompt) => stop,
+        joined = &mut turn => match joined {
+            Ok(stop) => stop,
+            Err(_) => StopReason::Aborted("turn task panicked".into()),
+        },
         _ = tokio::signal::ctrl_c() => {
             c.cancel();
-            // give the loop a moment to unwind through the cancel token
-            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                loop {
-                    if harness.cancel.is_cancelled() { break; }
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            // bounded wait: the loop observes the token and exits through
+            // finish_turn, which emits TurnEnded exactly once (D12)
+            match tokio::time::timeout(std::time::Duration::from_secs(5), turn).await {
+                Ok(Ok(stop)) => stop,
+                _ => {
+                    // turn did not unwind in time (or join failed): emit the
+                    // TurnEnded ourselves so downstream collectors never hang
+                    harness.bus.publish(Event::TurnEnded {
+                        turn: harness.turn_counter.load(std::sync::atomic::Ordering::SeqCst),
+                        stop_reason: "aborted".into(),
+                    });
+                    StopReason::Aborted("cancelled by user (ctrl-c)".into())
                 }
-            }).await.ok();
-            StopReason::Aborted("cancelled by user (ctrl-c)".into())
+            }
         }
     }
 }

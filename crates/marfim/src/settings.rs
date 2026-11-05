@@ -333,6 +333,8 @@ pub fn parse_mock_script(json: &str) -> Vec<marfim_core::providers::MockAction> 
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
                 MockAction::Step(MockProvider::tool_call(id, name, args))
+            } else if let Some(ms) = v.get("sleep_ms").and_then(|x| x.as_u64()) {
+                MockAction::Sleep(ms)
             } else if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
                 MockProvider::error(e)
             } else {

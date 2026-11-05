@@ -852,6 +852,8 @@ mod tests {
         pub safe: Mutex<bool>,
         pub slow_ms: Mutex<Option<u64>>,
         pub started: Mutex<Vec<(String, std::time::Instant)>>,
+        /// Tools scripted to return an error result (D12 stop-on-fail path).
+        pub fail_tools: Mutex<Vec<String>>,
     }
 
     impl ScriptedTools {
@@ -862,6 +864,7 @@ mod tests {
                 safe: Mutex::new(false),
                 slow_ms: Mutex::new(None),
                 started: Mutex::new(vec![]),
+                fail_tools: Mutex::new(vec![]),
             }
         }
     }
@@ -876,6 +879,9 @@ mod tests {
             let slow = *self.slow_ms.lock().unwrap();
             if let Some(ms) = slow {
                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            }
+            if self.fail_tools.lock().unwrap().iter().any(|t| t == tool) {
+                return (format!("{tool} failed (scripted error)"), true);
             }
             self.executed
                 .lock()
@@ -1677,5 +1683,158 @@ mod tests {
             }
         }
         assert_eq!(ended, vec!["budget_exceeded".to_string()]);
+    }
+
+    // ------------------------------------------------ D4 tighten: the
+    // compaction trigger is PER-STEP, and the turn-total usage ledger
+    // reflects the post-compaction reset.
+    #[tokio::test]
+    async fn d4_compaction_per_step_not_cumulative_and_usage_total_resets() {
+        let tools = Arc::new(ScriptedTools::new());
+        // step1: tool call carrying 150k input tokens (above threshold) →
+        // mid-turn compaction fires ONCE and usage_total resets;
+        // step2: 40k input (below threshold even though turn-cumulative
+        // would be 190k without the reset) → NO second compaction.
+        let mut big_call = MockProvider::tool_call("t1", "Read", serde_json::json!({"path": "a"}));
+        big_call.usage.input_tokens = 150_000;
+        let script = vec![big_call, step_with_usage("done", 40_000)];
+        let (mut h, bus) = harness(script, tools);
+        h.compact_threshold_tokens = 100_000;
+        let mut sub = bus.subscribe();
+        let stop = h.run_turn("long task").await;
+        assert_eq!(stop.normalized(), "end_turn");
+
+        let mut compactions = 0usize;
+        while let Ok(ev) = sub.try_recv() {
+            if matches!(ev, Event::Compaction { .. }) {
+                compactions += 1;
+            }
+        }
+        assert_eq!(
+            compactions, 1,
+            "per-step check compacts exactly once; a cumulative check would fire twice (D4)"
+        );
+
+        // history starts from the summary after compaction, then step2's text
+        let hist = h.history.read().await;
+        assert_eq!(hist.len(), 2);
+        assert!(hist[0]
+            .content
+            .contains("summary of the conversation so far"));
+        drop(hist);
+
+        // the journal's turn-total usage records the POST-RESET total (40k),
+        // not the cumulative 190k — the reset actually happened (D4).
+        let path = h
+            .journal
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .path()
+            .to_path_buf();
+        let recs = crate::journal::Journal::replay(&path).unwrap();
+        let usage_totals: Vec<u64> = recs
+            .iter()
+            .filter_map(|r| match r {
+                JournalRecord::Usage {
+                    role, input_tokens, ..
+                } if role == "primary" => Some(*input_tokens),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            usage_totals,
+            vec![40_000],
+            "turn-total usage reflects the post-compaction reset (D4), got {usage_totals:?}"
+        );
+    }
+
+    // ------------------------------------------------ D12 tighten: every
+    // stop path emits TurnEnded EXACTLY ONCE with the EXACT normalized
+    // reason.
+    async fn assert_one_turnended(sub: &mut tokio::sync::broadcast::Receiver<Event>, reason: &str) {
+        let mut count = 0usize;
+        let mut reasons = Vec::new();
+        while let Ok(ev) = sub.try_recv() {
+            if let Event::TurnEnded { stop_reason, .. } = ev {
+                count += 1;
+                reasons.push(stop_reason);
+            }
+        }
+        assert_eq!(
+            count, 1,
+            "exactly one TurnEnded expected for {reason}, got {count} ({reasons:?})"
+        );
+        assert_eq!(reasons[0], reason, "exact normalized stop reason (D12)");
+    }
+
+    #[tokio::test]
+    async fn d12_exact_reason_single_turnended_on_every_stop_path() {
+        // (a) clean end
+        let (h, bus) = harness(
+            vec![MockProvider::text("hi")],
+            Arc::new(ScriptedTools::new()),
+        );
+        let mut sub = bus.subscribe();
+        assert_eq!(h.run_turn("x").await.normalized(), "end_turn");
+        assert_one_turnended(&mut sub, "end_turn").await;
+
+        // (b) cancelled before the turn → aborted
+        let (h, bus) = harness(
+            vec![MockProvider::text("hi")],
+            Arc::new(ScriptedTools::new()),
+        );
+        h.cancel.cancel();
+        let mut sub = bus.subscribe();
+        assert_eq!(h.run_turn("x").await.normalized(), "aborted");
+        assert_one_turnended(&mut sub, "aborted").await;
+
+        // (c) tool error with stop-on-fail → aborted
+        let tools = Arc::new(ScriptedTools::new());
+        tools.fail_tools.lock().unwrap().push("Bash".into());
+        let (mut h, bus) = harness(
+            vec![MockProvider::tool_call(
+                "t1",
+                "Bash",
+                serde_json::json!({"command": "ls"}),
+            )],
+            tools,
+        );
+        h.stop_on_tool_error = true;
+        let mut sub = bus.subscribe();
+        assert_eq!(h.run_turn("x").await.normalized(), "aborted");
+        assert_one_turnended(&mut sub, "aborted").await;
+
+        // (d) verify feedback budget exhausted → verify_exhausted
+        let tools = Arc::new(ScriptedTools::new());
+        *tools.verify_fails.lock().unwrap() = true;
+        let (mut h, bus) = harness(
+            vec![
+                MockProvider::tool_call("m1", "Bash", serde_json::json!({"command": "make"})),
+                MockProvider::text("attempting fix"),
+            ],
+            tools,
+        );
+        h.max_verify_feedback = 0;
+        let mut sub = bus.subscribe();
+        assert_eq!(h.run_turn("x").await.normalized(), "verify_exhausted");
+        assert_one_turnended(&mut sub, "verify_exhausted").await;
+
+        // (e) step budget exceeded
+        let (mut h, bus) = harness(vec![], Arc::new(ScriptedTools::new()));
+        h.max_steps = 0;
+        let mut sub = bus.subscribe();
+        assert_eq!(h.run_turn("x").await.normalized(), "budget_exceeded");
+        assert_one_turnended(&mut sub, "budget_exceeded").await;
+
+        // (f) compaction failure (Small role unresolvable) → compaction_failed
+        let (mut h, bus) = harness(
+            vec![step_with_usage("big", 150_000)],
+            Arc::new(ScriptedTools::new()),
+        );
+        h.compact_threshold_tokens = 100_000;
+        h.router.write().await.set_chain(Role::Small, vec![]);
+        let mut sub = bus.subscribe();
+        assert_eq!(h.run_turn("x").await.normalized(), "compaction_failed");
+        assert_one_turnended(&mut sub, "compaction_failed").await;
     }
 }

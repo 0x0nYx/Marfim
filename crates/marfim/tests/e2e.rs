@@ -491,3 +491,61 @@ fn d14_repl_prints_errors_and_survives_across_turns() {
     };
     assert_eq!(status.code(), Some(0));
 }
+
+#[test]
+#[cfg(unix)]
+fn d8_ctrl_c_signal_wires_to_graceful_cancel() {
+    use std::time::{Duration, Instant};
+
+    let home = mock_config_home("d8sig");
+    let mut child = Command::new(bin_path())
+        .args(["-p", "hi", "--output-format", "stream-json"])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .env("MARFIM_MOCK_SCRIPT", r#"[{"sleep_ms": 8000}]"#)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir("/tmp")
+        .spawn()
+        .unwrap();
+
+    // give the runtime time to arm the tokio ctrl-c handler before signalling
+    std::thread::sleep(Duration::from_millis(1200));
+    let t0 = Instant::now();
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id() as i32),
+        nix::sys::signal::Signal::SIGINT,
+    )
+    .unwrap();
+
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break s;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(6),
+            "process ignored SIGINT (wiring broken) — waited {}ms",
+            t0.elapsed().as_millis()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let waited = t0.elapsed();
+
+    // graceful wiring: the turn unwinds through the cancel token and emits
+    // the turn_end event with the aborted reason — a default-action SIGKILL-
+    // style death could never produce this output.
+    let mut out = String::new();
+    use std::io::Read;
+    let mut stdout = child.stdout.take().unwrap();
+    let _ = stdout.read_to_string(&mut out);
+    assert!(
+        out.contains("turn_end") && out.contains("aborted"),
+        "expected graceful turn_end/aborted event after SIGINT, got: {out}"
+    );
+    assert_eq!(status.code(), Some(1), "aborted turn exits 1 (D12)");
+    assert!(
+        waited < Duration::from_secs(6),
+        "SIGINT → graceful exit took {waited:?}, expected well under the scripted 8s sleep"
+    );
+}

@@ -797,6 +797,7 @@ dependencies = [
  "marfim-gateway",
  "marfim-mcp",
  "marfim-tools",
+ "nix",
  "reqwest",
  "serde",
  "serde_json",

@@ -714,4 +714,37 @@ mod tests {
         assert_eq!(h.tool_timeout_ms("Bash"), Some(120_000));
         assert_eq!(h.tool_timeout_ms("unknown"), None);
     }
+
+    /// D8 tighten: sync (exec-class) tools must run via spawn_blocking, so
+    /// the async runtime keeps making progress while they block. With a
+    /// current-thread runtime, an inline blocking call would starve the
+    /// heartbeat task completely; spawn_blocking keeps it ticking.
+    #[tokio::test(flavor = "current_thread")]
+    async fn d8_sync_tools_run_on_blocking_pool_not_the_runtime() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (h, _rx) = host(Mode::Yolo, vec![]);
+        let beat = Arc::new(AtomicUsize::new(0));
+        let b2 = beat.clone();
+        let heart = tokio::task::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                b2.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        // Bash is exec-class (not concurrency-safe) → the spawn_blocking path
+        let (out, err) = h
+            .execute(
+                "Bash",
+                &serde_json::json!({"command": "sleep 0.4"}),
+                &marfim_core::loop_::LoopCtx::default(),
+            )
+            .await;
+        assert!(!err, "{out}");
+        heart.abort();
+        let beats = beat.load(Ordering::SeqCst);
+        assert!(
+            beats >= 20,
+            "async runtime starved during sync tool (not spawn_blocking?): {beats} beats in 400ms"
+        );
+    }
 }

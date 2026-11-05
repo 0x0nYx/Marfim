@@ -22,3 +22,8 @@ clap.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
 toml.workspace = true
+
+# SIGINT wiring tests need a real signal send; nix's safe API matches
+# marfim-core's no-unsafe stance.
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.29", default-features = false, features = ["signal"] }
