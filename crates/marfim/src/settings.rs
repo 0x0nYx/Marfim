@@ -308,6 +308,37 @@ pub fn resolve_preset(name: &str, config: &Config) -> Result<Preset, String> {
     ))
 }
 
+/// Test affordance: script the explicit `mock` provider from env.
+/// MARFIM_MOCK_SCRIPT is a JSON array; entries may be
+///   {"text": "..."}                                   — an assistant text step
+///   {"tool_call": {"id","name","arguments"}}          — an assistant tool-call step
+///   {"error": "..."}                                   — a provider error action
+/// Only consulted when the user EXPLICITLY selected provider `mock`
+/// (--provider mock / config / env) — D11's no-silent-mock rule is intact:
+/// real providers never read this variable.
+pub fn parse_mock_script(json: &str) -> Vec<marfim_core::providers::MockAction> {
+    use marfim_core::providers::{MockAction, MockProvider};
+    let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(json) else {
+        return vec![];
+    };
+    arr.into_iter()
+        .map(|v| {
+            if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                MockAction::Step(MockProvider::text(t))
+            } else if let Some(tc) = v.get("tool_call") {
+                let id = tc.get("id").and_then(|x| x.as_str()).unwrap_or("t1");
+                let name = tc.get("name").and_then(|x| x.as_str()).unwrap_or("Read");
+                let args = tc.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                MockAction::Step(MockProvider::tool_call(id, name, args))
+            } else if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
+                MockProvider::error(e)
+            } else {
+                MockAction::Step(MockProvider::text("(marfim mock: unrecognised script entry)"))
+            }
+        })
+        .collect()
+}
+
 /// Build a real provider from a preset. D11: the mock wire only exists via
 /// the explicit `mock` name — nothing falls back to it silently.
 pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>, String> {
@@ -343,7 +374,17 @@ pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>,
                 max_retries: 3,
             }))
         }
-        "mock" => Ok(Arc::new(marfim_core::providers::MockProvider::new(vec![]))),
+        "mock" => {
+            let script = std::env::var("MARFIM_MOCK_SCRIPT").ok()
+                .map(|s| parse_mock_script(&s))
+                .unwrap_or_default();
+            Ok(Arc::new(match script {
+                actions if !actions.is_empty() => {
+                    marfim_core::providers::MockProvider::from_actions(actions)
+                }
+                _ => marfim_core::providers::MockProvider::new(vec![]),
+            }))
+        }
         other => Err(format!(
             "provider wire `{other}` is not wired in this build (known wires: anthropic, openai, mock)"
         )),
@@ -769,5 +810,54 @@ mod tests {
         let p = resolve_preset("mirror", &cfg).unwrap();
         assert_eq!(p.base_url, "http://localhost:9999/v1");
         assert_eq!(p.default_model, "m1");
+    }
+
+    #[test]
+    fn mock_script_parses_text_toolcall_error_and_garbage() {
+        use marfim_core::providers::{MockAction, MockProvider};
+        let actions = parse_mock_script(
+            r#"[
+                {"text":"hi"},
+                {"tool_call":{"id":"t9","name":"Compute","arguments":{"expression":"1+1"}}},
+                {"error":"boom"},
+                {"nonsense":true},
+                "not even an object"
+            ]"#,
+        );
+        assert_eq!(actions.len(), 5, "every entry maps to an action");
+        assert!(matches!(actions[0], MockAction::Step(_)));
+        match &actions[1] {
+            MockAction::Step(s) => match &s.blocks[0] {
+                marfim_core::providers::Block::ToolCall(tc) => {
+                    assert_eq!(tc.id, "t9");
+                    assert_eq!(tc.name, "Compute");
+                }
+                other => panic!("expected tool call, got {other:?}"),
+            },
+            _ => panic!("entry 1 must be a step"),
+        }
+        assert!(matches!(actions[2], MockAction::Error(_)));
+        // garbage entries degrade to a visible placeholder, never a panic
+        assert!(matches!(actions[3], MockAction::Step(_)));
+        assert!(matches!(actions[4], MockAction::Step(_)));
+
+        // invalid JSON and empty string → empty script (unscripted mock)
+        assert!(parse_mock_script("not json").is_empty());
+        assert!(parse_mock_script("").is_empty());
+
+        // scripted provider really replays the script in order
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let p = MockProvider::from_actions(parse_mock_script(
+                r#"[{"error":"boom"},{"text":"ok"}]"#,
+            ));
+            assert!(p.chat_step(&make_req()).await.is_err());
+            let s = p.chat_step(&make_req()).await.unwrap();
+            assert_eq!(s.blocks.len(), 1);
+        });
+    }
+
+    fn make_req() -> marfim_core::providers::ChatRequest {
+        marfim_core::providers::ChatRequest::default()
     }
 }

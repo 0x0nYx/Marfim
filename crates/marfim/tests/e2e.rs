@@ -29,6 +29,25 @@ fn isolated_child(args: &[&str]) -> std::process::Command {
     c
 }
 
+/// Incrementally drain a child pipe into a shared buffer (line-by-line,
+/// so the test thread can poll progress before EOF).
+fn drain_into<R: std::io::Read + Send + 'static>(
+    stream: R,
+    buf: std::sync::Arc<std::sync::Mutex<String>>,
+) {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => *buf.lock().unwrap() += &line,
+            }
+        }
+    });
+}
+
 #[test]
 fn version_and_doctor() {
     let out = Command::new(bin_path()).arg("--version").output().unwrap();
@@ -332,4 +351,139 @@ fn serve_healthz_on_loopback() {
     assert!(text.contains("version"), "{text}");
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Hermetic MARFIM_HOME with a mock-provider config; returns (home, config dir).
+fn mock_config_home(tag: &str) -> std::path::PathBuf {
+    let home = std::env::temp_dir().join(format!(
+        "marfim-e2e-{tag}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(home.join(".marfim")).unwrap();
+    std::fs::write(
+        home.join(".marfim").join("config.toml"),
+        "provider = \"mock\"\nmodel = \"mock-1\"\n",
+    )
+    .unwrap();
+    home
+}
+
+// D12: exit code 2 — a run where the ONLY tool attempt is denied by the
+// permission engine exits 2 (permission-denied), not 0 and not 1.
+#[test]
+fn d12_headless_exit_code_2_when_every_tool_is_denied() {
+    let home = mock_config_home("d12");
+    std::fs::write(
+        home.join(".marfim").join("config.toml"),
+        "provider = \"mock\"\nmodel = \"mock-1\"\n\n[permissions]\ndeny = [\"Read\"]\n",
+    )
+    .unwrap();
+    let mut c = Command::new(bin_path());
+    c.args(["-p", "read the hostname file", "--output-format", "json"])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .env(
+            "MARFIM_MOCK_SCRIPT",
+            r#"[
+                {"tool_call":{"id":"t1","name":"Read","arguments":{"path":"/etc/hostname"}}},
+                {"text":"done despite denial"}
+            ]"#,
+        )
+        .current_dir("/tmp");
+    let out = c.output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(text.trim())
+        .unwrap_or_else(|e| panic!("not json: {e}: {text}"));
+    assert_eq!(v["type"], "result");
+    // D12 mapping: denied>0 && denied==executed => exit 2
+    assert_eq!(out.status.code(), Some(2), "stdout: {text}");
+}
+
+// D14: the REPL prints errors, owns stdin exactly once, and survives
+// across turns — including a provider error mid-session. Lines are sent
+// strictly AFTER the previous turn finishes (sending mid-turn would be
+// steering, which is a different feature).
+#[test]
+fn d14_repl_prints_errors_and_survives_across_turns() {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    let home = mock_config_home("d14");
+    let mut child = Command::new(bin_path())
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .env(
+            "MARFIM_MOCK_SCRIPT",
+            r#"[{"error":"boom"}]"#,
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir("/tmp")
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+
+    let out_buf = Arc::new(Mutex::new(String::new()));
+    let err_buf = Arc::new(Mutex::new(String::new()));
+    drain_into(stdout, out_buf.clone());
+    drain_into(stderr, err_buf.clone());
+
+    // send one line, then wait for the expected reply (bounded)
+    let mut send = |line: &str| {
+        writeln!(stdin, "{line}").unwrap();
+        let _ = stdin.flush();
+    };
+    let wait_for = |buf: &Arc<Mutex<String>>, needle: &str| {
+        let t0 = std::time::Instant::now();
+        loop {
+            assert!(
+                t0.elapsed() < Duration::from_secs(20),
+                "timed out waiting for {needle:?}; got: {}",
+                buf.lock().unwrap()
+            );
+            if buf.lock().unwrap().contains(needle) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    // banner proves the REPL is up
+    wait_for(&err_buf, "type /help for commands");
+
+    // slash commands work before any provider traffic
+    send("/help");
+    wait_for(&out_buf, "commands (65)");
+
+    // turn: provider error → printed on stderr EXACTLY ONCE, REPL stays alive
+    send("one");
+    wait_for(&err_buf, "boom");
+    std::thread::sleep(Duration::from_millis(500)); // allow any duplicate print to land
+    let boom_count = err_buf.lock().unwrap().matches("provider error: boom").count();
+    assert_eq!(boom_count, 1, "provider error printed {boom_count}x, expected 1");
+
+    // the SAME stdin owner still serves commands after the failed turn
+    // (the router keeps the failed mock unavailable — fail-closed failover —
+    // so the follow-up input is a slash command, not a second model turn)
+    send("/frobnicate");
+    wait_for(&out_buf, "unknown command /frobnicate");
+
+    send("/quit");
+    let t0 = std::time::Instant::now();
+    let status = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break st;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "REPL did not exit after /quit — stdin ownership or loop bug"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(0));
 }

@@ -609,6 +609,32 @@ async fn headless_stream_json(config: &Config, settings: &EffectiveSettings, pro
     exit_code(&stop, &harness)
 }
 
+/// D14: ONE place where REPL events become terminal output. Errors and
+/// tool failures go to stderr; assistant text and stream deltas to stdout.
+fn print_repl_event(ev: &Event, stream: bool) {
+    match ev {
+        Event::StreamDelta { text, .. } if stream => {
+            print!("{text}");
+            let _ = std::io::stdout().flush();
+        }
+        Event::AssistantMessage { text } => {
+            println!();
+            println!("{text}");
+        }
+        Event::Error { message, .. } => {
+            eprintln!("error: {message}");
+        }
+        Event::ToolCallResult {
+            tool, output, is_error, ..
+        } => {
+            if *is_error {
+                eprintln!("[{tool}] {output}");
+            }
+        }
+        _ => {}
+    }
+}
+
 async fn repl(_cli: Cli, config: Config, settings: EffectiveSettings) -> i32 {
     eprintln!(
         "marfim {} (rust) — type /help for commands",
@@ -650,32 +676,57 @@ async fn repl(_cli: Cli, config: Config, settings: EffectiveSettings) -> i32 {
                     }
                     continue;
                 }
-                // run the turn while STILL owning stdin: steering + approvals
+                // run the turn while STILL owning stdin: steering + approvals.
+                // The turn future MUST be polled inside this select — it is
+                // the engine that produces the events below.
                 let mut sub = bus.subscribe();
                 let turn = harness.run_turn(&line);
                 tokio::pin!(turn);
+                let mut turn_err: Option<String> = None;
                 loop {
                     tokio::select! {
+                        stop = &mut turn => {
+                            // TurnEnded is published before run_turn resolves;
+                            // drain the remaining queued events briefly so the
+                            // transcript is complete before the next prompt.
+                            let deadline = tokio::time::Instant::now()
+                                + std::time::Duration::from_millis(250);
+                            while let Ok(Ok(ev)) =
+                                tokio::time::timeout_at(deadline, sub.recv()).await
+                            {
+                                if let Event::Error { message, .. } = &ev {
+                                    turn_err = Some(message.clone());
+                                }
+                                if matches!(ev, Event::TurnEnded { .. }) {
+                                    break;
+                                }
+                                print_repl_event(&ev, settings.stream);
+                            }
+                            // D14: non-EndTurn stops are printed as errors —
+                            // unless the very same error was already printed
+                            // from its Error event (no double print).
+                            match &stop {
+                                StopReason::EndTurn => {}
+                                StopReason::Aborted(m)
+                                    if turn_err.as_deref() == Some(m.as_str()) => {}
+                                StopReason::Aborted(m)
+                                | StopReason::CompactionFailed(m)
+                                | StopReason::VerifyExhausted(m)
+                                | StopReason::BudgetExceeded(m) => {
+                                    eprintln!("error: {m}");
+                                }
+                            }
+                            break;
+                        }
                         ev = sub.recv() => {
                             match ev {
-                                Ok(Event::StreamDelta { text, .. }) if settings.stream => {
-                                    print!("{text}");
-                                    let _ = std::io::stdout().flush();
-                                }
-                                Ok(Event::AssistantMessage { text }) => {
-                                    println!();
-                                    println!("{text}");
-                                }
-                                Ok(Event::Error { message, .. }) => {
-                                    eprintln!("error: {message}");
-                                }
-                                Ok(Event::ToolCallResult { tool, output, is_error, .. }) => {
-                                    if is_error {
-                                        eprintln!("[{tool}] {output}");
-                                    }
-                                }
                                 Ok(Event::TurnEnded { .. }) => break,
-                                Ok(_) => {}
+                                Ok(ev) => {
+                                    if let Event::Error { message, .. } = &ev {
+                                        turn_err = Some(message.clone());
+                                    }
+                                    print_repl_event(&ev, settings.stream);
+                                }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                                 Err(_) => break,
                             }
