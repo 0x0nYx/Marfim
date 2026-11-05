@@ -285,9 +285,9 @@ impl Harness {
 
     fn journal_rec(&self, rec: &JournalRecord) -> crate::Result<()> {
         let mut j = self.journal.lock().unwrap_or_else(|p| p.into_inner());
-        j.append(rec).map(|_| ()).map_err(|e| {
-            crate::CoreError::Session(format!("journal write failed: {e}"))
-        })
+        j.append(rec)
+            .map(|_| ())
+            .map_err(|e| crate::CoreError::Session(format!("journal write failed: {e}")))
     }
 
     fn steer_lock(&self) -> std::sync::MutexGuard<'_, SteerQueues> {
@@ -372,11 +372,15 @@ impl Harness {
                 });
                 let bus = self.bus.clone();
                 let cancel = self.cancel.clone();
-                let mut on_ev = |ev: StreamEvent| {
-                    match ev {
-                        StreamEvent::Text(t) => bus.publish(Event::StreamDelta { kind: "text".into(), text: t }),
-                        StreamEvent::Thinking(t) => bus.publish(Event::StreamDelta { kind: "thinking".into(), text: t }),
-                    }
+                let mut on_ev = |ev: StreamEvent| match ev {
+                    StreamEvent::Text(t) => bus.publish(Event::StreamDelta {
+                        kind: "text".into(),
+                        text: t,
+                    }),
+                    StreamEvent::Thinking(t) => bus.publish(Event::StreamDelta {
+                        kind: "thinking".into(),
+                        text: t,
+                    }),
                 };
                 match tokio::select! {
                     r = e.provider.chat_step_stream(&req, &mut on_ev) => r,
@@ -399,10 +403,7 @@ impl Harness {
                             return Err(err);
                         }
                         self.bus.publish(Event::Error {
-                            message: format!(
-                                "provider `{}` failed ({err}); failing over",
-                                e.model
-                            ),
+                            message: format!("provider `{}` failed ({err}); failing over", e.model),
                             fatal: false,
                         });
                     }
@@ -411,9 +412,8 @@ impl Harness {
             let entry = entry.ok_or_else(|| {
                 crate::CoreError::Provider("no provider entry after failover".into())
             })?;
-            let step = step.ok_or_else(|| {
-                crate::CoreError::Provider("no step after failover".into())
-            })?;
+            let step =
+                step.ok_or_else(|| crate::CoreError::Provider("no step after failover".into()))?;
             usage_total.add(&step.usage);
             last_step_input_tokens = step.usage.input_tokens;
             self.bus.publish(Event::Usage {
@@ -455,7 +455,8 @@ impl Harness {
                     .push(ChatMessage::assistant(text.clone()));
 
                 // INV: verify only when no tool call AND a mutation armed it
-                if self.verify_armed.load(Ordering::SeqCst) && !self.tools.verify_commands().is_empty()
+                if self.verify_armed.load(Ordering::SeqCst)
+                    && !self.tools.verify_commands().is_empty()
                 {
                     if verify_used >= self.max_verify_feedback {
                         self.journal_total_usage(&usage_total, &entry.model)?;
@@ -706,10 +707,11 @@ impl Harness {
                 is_error,
                 duration_ms: 0,
             });
-            self.history
-                .write()
-                .await
-                .push(ChatMessage::tool_result(tc.id.clone(), output, is_error));
+            self.history.write().await.push(ChatMessage::tool_result(
+                tc.id.clone(),
+                output,
+                is_error,
+            ));
         }
         if arm {
             self.verify_armed.store(true, Ordering::SeqCst);
@@ -1161,8 +1163,7 @@ mod tests {
         assert_eq!(roles[1], "assistant");
         assert_eq!(roles[2], "tool");
         assert_eq!(
-            roles[3],
-            "user",
+            roles[3], "user",
             "steering appended AFTER the tool-result batch (D1/D3)"
         );
         assert!(hist[3].content.contains("also fix lint"));
@@ -1248,7 +1249,9 @@ mod tests {
         let hist = h.history.read().await;
         assert_eq!(hist.len(), 1, "history reset to the summary alone");
         assert!(
-            hist[0].content.contains("summary of the conversation so far"),
+            hist[0]
+                .content
+                .contains("summary of the conversation so far"),
             "summary is the first message (D4), got: {}",
             hist[0].content
         );
@@ -1279,15 +1282,17 @@ mod tests {
         let (h, _bus) = harness(script, tools.clone());
         let _ = h.run_turn("go").await;
 
-        let exec = tools.executed.lock().unwrap();
-        assert!(
-            !exec.iter().any(|(t, _)| t == "Bash"),
-            "truncated call never executes"
-        );
-        assert!(
-            exec.iter().any(|(t, _)| t == "Read"),
-            "valid sibling in the truncated batch still executes (D5)"
-        );
+        {
+            let exec = tools.executed.lock().unwrap();
+            assert!(
+                !exec.iter().any(|(t, _)| t == "Bash"),
+                "truncated call never executes"
+            );
+            assert!(
+                exec.iter().any(|(t, _)| t == "Read"),
+                "valid sibling in the truncated batch still executes (D5)"
+            );
+        }
 
         // every tool_use got exactly one tool_result in history
         let hist = h.history.read().await;
@@ -1304,8 +1309,10 @@ mod tests {
             .iter()
             .filter_map(|m| m.tool_call_id.as_deref())
             .collect();
-        assert!(result_ids.contains(&"good1") && result_ids.contains(&"bad1"),
-            "every tool_use has a tool_result (D5): {result_ids:?}");
+        assert!(
+            result_ids.contains(&"good1") && result_ids.contains(&"bad1"),
+            "every tool_use has a tool_result (D5): {result_ids:?}"
+        );
         assert_eq!(result_ids.len(), 2, "no duplicate results");
         let bad_result = hist
             .iter()
@@ -1424,9 +1431,11 @@ mod tests {
     async fn d8_cancel_token_aborts_turn_and_tools() {
         let tools = Arc::new(ScriptedTools::new());
         *tools.slow_ms.lock().unwrap() = Some(2_000);
-        let script = vec![
-            MockProvider::tool_call("c1", "Read", serde_json::json!({"path": "a"})),
-        ];
+        let script = vec![MockProvider::tool_call(
+            "c1",
+            "Read",
+            serde_json::json!({"path": "a"}),
+        )];
         let (h, _bus) = harness(script, tools.clone());
         let cancel = h.cancel.clone();
         let c2 = cancel.clone();
@@ -1528,9 +1537,7 @@ mod tests {
             bus: bus.clone(),
             router: Arc::new(RwLock::new(router)),
             tools: Arc::new(NeverTools),
-            journal: Arc::new(Mutex::new(
-                Journal::open(&tmpdir.join("t.jsonl")).unwrap(),
-            )),
+            journal: Arc::new(Mutex::new(Journal::open(&tmpdir.join("t.jsonl")).unwrap())),
             ctx: LoopCtx::default(),
             permissions: Arc::new(perm),
             max_steps: 6,
@@ -1619,9 +1626,7 @@ mod tests {
             bus: bus.clone(),
             router: Arc::new(RwLock::new(router)),
             tools,
-            journal: Arc::new(Mutex::new(
-                Journal::open(&tmpdir.join("f.jsonl")).unwrap(),
-            )),
+            journal: Arc::new(Mutex::new(Journal::open(&tmpdir.join("f.jsonl")).unwrap())),
             ctx: LoopCtx::default(),
             permissions: Arc::new(perm),
             max_steps: 6,

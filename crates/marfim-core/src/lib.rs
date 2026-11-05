@@ -34,11 +34,13 @@ pub fn user_agent() -> String {
 }
 
 /// Shared reqwest client with the canonical UA (single version source).
+/// Builder failure (broken TLS backend) degrades to a plain client rather
+/// than panicking at request time.
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(user_agent())
         .build()
-        .expect("reqwest client")
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 #[derive(Debug, thiserror::Error)]

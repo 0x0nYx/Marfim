@@ -40,9 +40,7 @@ pub fn agent_permissions(agent: &str) -> (marfim_core::permissions::Mode, String
             (Mode::Plan, "read-only analyst".into())
         }
         // builders: default mode (edits allow, execution asks)
-        "general" | "build-resolver" | "silent-failure" => {
-            (Mode::Default, "builder".into())
-        }
+        "general" | "build-resolver" | "silent-failure" => (Mode::Default, "builder".into()),
         _ => (Mode::Default, "builder (unknown persona falls back)".into()),
     }
 }
@@ -134,7 +132,10 @@ impl TaskTable {
             agent: agent.to_string(),
             worktree: None,
         }));
-        self.inner.lock().unwrap().insert(id, slot.clone());
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id, slot.clone());
         (id, slot)
     }
 }
@@ -200,7 +201,15 @@ mod tests {
         run(&["init", "-q"]);
         std::fs::write(repo.join("README.md"), "# test repo\n").unwrap();
         run(&["add", "."]);
-        let commit = run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+        let commit = run(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "init",
+        ]);
         assert!(
             commit.status.success(),
             "test repo setup failed: {}",
@@ -209,7 +218,10 @@ mod tests {
         {
             let guard = WorktreeGuard::create(&repo).unwrap();
             assert!(guard.path.is_dir(), "worktree created");
-            assert_ne!(guard.path, repo, "subagent does NOT run in the main checkout");
+            assert_ne!(
+                guard.path, repo,
+                "subagent does NOT run in the main checkout"
+            );
         }
         // after drop the worktree is gone
         let list = run(&["worktree", "list"]);

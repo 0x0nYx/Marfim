@@ -37,10 +37,7 @@ pub fn read(_ctx: &ToolCtx, args: &Value) -> ToolOutput {
             let lines: Vec<&str> = text.lines().collect();
             let total = lines.len();
             let offset = args["offset"].as_u64().unwrap_or(0) as usize; // 0-based
-            let limit = args["limit"]
-                .as_u64()
-                .map(|v| v as usize)
-                .unwrap_or(2000);
+            let limit = args["limit"].as_u64().map(|v| v as usize).unwrap_or(2000);
             if offset >= total && total > 0 {
                 return ToolOutput::ok(format!(
                     "[truncated: offset {offset} is past end of file ({total} lines)]"
@@ -405,7 +402,8 @@ mod tests {
         assert!(o.output.contains("line 1\n"));
         assert!(o.output.contains("line 2000\n"));
         assert!(
-            o.output.contains("[truncated: showing lines 1-2000 of 3000"),
+            o.output
+                .contains("[truncated: showing lines 1-2000 of 3000"),
             "explicit [truncated] marker missing (D24): {}",
             o.output.lines().last().unwrap_or("")
         );
@@ -419,13 +417,12 @@ mod tests {
         assert!(o2.output.contains("line 2500\n"));
         assert!(o2.output.contains("line 2501\n"));
         assert!(!o2.output.contains("line 2502\n"));
-        assert!(o2.output.contains("[truncated: showing lines 2500-2501 of 3000"));
+        assert!(o2
+            .output
+            .contains("[truncated: showing lines 2500-2501 of 3000"));
 
         // offset past end is an explicit marker, not an empty result
-        let o3 = read(
-            &c,
-            &serde_json::json!({"path": "big.txt", "offset": 9999}),
-        );
+        let o3 = read(&c, &serde_json::json!({"path": "big.txt", "offset": 9999}));
         assert!(o3.output.contains("[truncated: offset 9999 is past end"));
 
         // small file: no marker

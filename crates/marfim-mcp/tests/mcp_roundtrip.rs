@@ -55,13 +55,9 @@ done
 #[tokio::test]
 async fn client_full_roundtrip_with_strict_id_matching() {
     let script = write_id_echo_server("full");
-    let c = McpClient::spawn(
-        "echo",
-        "/bin/sh",
-        &[script.to_string_lossy().to_string()],
-    )
-    .await
-    .expect("handshake (initialize + tools/list) must succeed");
+    let c = McpClient::spawn("echo", "/bin/sh", &[script.to_string_lossy().to_string()])
+        .await
+        .expect("handshake (initialize + tools/list) must succeed");
 
     // tools/list answered with the right id and the listing was namespaced
     let names = c.tool_names().await;

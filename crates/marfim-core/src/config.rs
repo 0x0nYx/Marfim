@@ -308,10 +308,9 @@ mod tests {
 
     #[test]
     fn nested_section_keys_are_strict() {
-        let c = Config::from_toml_str(
-            "[mcpServers.files]\ncommand = \"mcp-fileserver\"\nbadKey = 1\n",
-        )
-        .unwrap();
+        let c =
+            Config::from_toml_str("[mcpServers.files]\ncommand = \"mcp-fileserver\"\nbadKey = 1\n")
+                .unwrap();
         let err = c.validate_consumed_sections().unwrap_err();
         assert!(format!("{err}").contains("badKey"), "{err}");
 

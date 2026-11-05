@@ -243,7 +243,7 @@ impl OpenAiCompat {
                         arguments_json: String::new(),
                     }));
                 }
-                let slot = acc
+                let Some(slot) = acc
                     .blocks
                     .iter_mut()
                     .filter_map(|b| match b {
@@ -251,7 +251,9 @@ impl OpenAiCompat {
                         _ => None,
                     })
                     .nth(idx)
-                    .expect("slot exists");
+                else {
+                    continue;
+                };
                 if let Some(id) = &tc.id {
                     slot.id = id.clone();
                 }

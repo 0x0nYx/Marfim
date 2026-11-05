@@ -32,7 +32,7 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
         if !pending.is_empty() {
             msgs.push(serde_json::json!({
                 "role": "user",
-                "content": pending.drain(..).collect::<Vec<_>>()
+                "content": std::mem::take(pending)
             }));
         }
     };

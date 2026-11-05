@@ -51,7 +51,10 @@ pub fn validate_anthropic_body(body: &serde_json::Value) -> Result<(), String> {
         match &m["content"] {
             serde_json::Value::String(_) => {}
             c if is_block_array(c) => {
-                for (j, b) in c.as_array().unwrap().iter().enumerate() {
+                let Some(blocks) = c.as_array() else {
+                    return Err(format!("messages[{i}].content must be an array of blocks"));
+                };
+                for (j, b) in blocks.iter().enumerate() {
                     let Some(btype) = b["type"].as_str() else {
                         return Err(format!("messages[{i}].content[{j}] missing block `type`"));
                     };
@@ -132,7 +135,9 @@ pub fn validate_anthropic_body(body: &serde_json::Value) -> Result<(), String> {
                 }
             }
             _ => {
-                return Err(format!("messages[{i}].content must be string or block array"));
+                return Err(format!(
+                    "messages[{i}].content must be string or block array"
+                ));
             }
         }
     }
@@ -175,7 +180,9 @@ pub fn validate_openai_body(body: &serde_json::Value) -> Result<(), String> {
     let first = msgs[0]["role"].as_str().unwrap_or("");
     if first == "system" || first == "developer" {
         if msgs.len() < 2 || msgs[1]["role"].as_str() != Some("user") {
-            return Err("conversation must start with a user message after the system preamble".into());
+            return Err(
+                "conversation must start with a user message after the system preamble".into(),
+            );
         }
     } else if first != "user" {
         return Err("conversation must start with a user message".into());
@@ -201,9 +208,7 @@ pub fn validate_openai_body(body: &serde_json::Value) -> Result<(), String> {
             answered.insert(tid.to_string());
             // OpenAI tool content: string (or null)
             if !(m["content"].is_string() || m["content"].is_null()) {
-                return Err(format!(
-                    "messages[{i}] tool content must be a string (D10)"
-                ));
+                return Err(format!("messages[{i}] tool content must be a string (D10)"));
             }
         }
         if role == "assistant" {
@@ -302,19 +307,31 @@ mod tests {
 
         let mut b = anthropic_good_body();
         b["messages"][2] = json!({"role": "user", "content": "results dropped"});
-        assert!(validate_anthropic_body(&b).is_err(), "tool_use t1/t2 unanswered");
+        assert!(
+            validate_anthropic_body(&b).is_err(),
+            "tool_use t1/t2 unanswered"
+        );
 
         let mut b = anthropic_good_body();
         b["messages"][2]["content"][0]["tool_use_id"] = json!("nope");
-        assert!(validate_anthropic_body(&b).unwrap_err().contains("unknown/unprior"));
+        assert!(validate_anthropic_body(&b)
+            .unwrap_err()
+            .contains("unknown/unprior"));
 
         let mut b = anthropic_good_body();
         b["messages"][2]["content"][1]["is_error"] = json!("yes");
-        assert!(validate_anthropic_body(&b).unwrap_err().contains("is_error"));
+        assert!(validate_anthropic_body(&b)
+            .unwrap_err()
+            .contains("is_error"));
 
         let mut b = anthropic_good_body();
-        b["tools"][0].as_object_mut().unwrap().remove("input_schema");
-        assert!(validate_anthropic_body(&b).unwrap_err().contains("input_schema"));
+        b["tools"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("input_schema");
+        assert!(validate_anthropic_body(&b)
+            .unwrap_err()
+            .contains("input_schema"));
     }
 
     #[test]
@@ -322,7 +339,10 @@ mod tests {
         let mut b = anthropic_good_body();
         b["messages"][2]["role"] = json!("assistant");
         let err = validate_anthropic_body(&b).unwrap_err();
-        assert!(err.contains("tool_result must be inside a user message"), "{err}");
+        assert!(
+            err.contains("tool_result must be inside a user message"),
+            "{err}"
+        );
     }
 
     fn openai_good_body() -> serde_json::Value {
@@ -350,15 +370,24 @@ mod tests {
     #[test]
     fn openai_rejects_wrong_shapes() {
         let mut b = openai_good_body();
-        b["messages"][3].as_object_mut().unwrap().remove("tool_call_id");
-        assert!(validate_openai_body(&b).unwrap_err().contains("missing `tool_call_id`"));
+        b["messages"][3]
+            .as_object_mut()
+            .unwrap()
+            .remove("tool_call_id");
+        assert!(validate_openai_body(&b)
+            .unwrap_err()
+            .contains("missing `tool_call_id`"));
 
         let mut b = openai_good_body();
         b["messages"].as_array_mut().unwrap().remove(3);
-        assert!(validate_openai_body(&b).unwrap_err().contains("has no tool message"));
+        assert!(validate_openai_body(&b)
+            .unwrap_err()
+            .contains("has no tool message"));
 
         let mut b = openai_good_body();
         b["messages"][3]["content"] = json!([{"type": "text", "text": "arr"}]);
-        assert!(validate_openai_body(&b).unwrap_err().contains("must be a string"));
+        assert!(validate_openai_body(&b)
+            .unwrap_err()
+            .contains("must be a string"));
     }
 }

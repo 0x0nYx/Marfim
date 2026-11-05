@@ -533,8 +533,7 @@ impl ToolHost for HostTools {
                 std::path::PathBuf::from(&session.cwd)
             };
             let cancel = session.cancel.clone();
-            let (out, err) =
-                crate::bash::run_bash(&ctx2, c, &self.sandbox, 300_000, &cancel).await;
+            let (out, err) = crate::bash::run_bash(&ctx2, c, &self.sandbox, 300_000, &cancel).await;
             all_output.push_str(&format!("$ {c}\n{out}\n"));
             if err {
                 return (false, all_output);
@@ -549,6 +548,22 @@ mod tests {
     use super::*;
     use marfim_core::permissions::{Decision, Mode, Rule};
     use std::sync::Arc;
+
+    /// The built-in tool table must register cleanly into a fresh registry —
+    /// this is the test that justifies the allowlisted startup `expect` in
+    /// the `tool!` macro (a duplicate name is a programmer error).
+    #[test]
+    fn every_builtin_registers_cleanly() {
+        let mut reg = crate::registry::ToolRegistry::new();
+        register_builtins(&mut reg);
+        let mut names: Vec<&str> = reg.list_visible().iter().map(|t| t.name).collect();
+        names.extend(reg.list_deferred().iter().map(|t| t.name));
+        assert!(!names.is_empty(), "tool table registered nothing");
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "duplicate tool names registered");
+    }
 
     fn host(
         mode: Mode,

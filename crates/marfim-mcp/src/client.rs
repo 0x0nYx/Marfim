@@ -32,8 +32,13 @@ impl McpClient {
         command: &str,
         args: &[String],
     ) -> Result<Arc<Self>, String> {
-        Self::spawn_with_timeout(server_name, command, args, std::time::Duration::from_secs(30))
-            .await
+        Self::spawn_with_timeout(
+            server_name,
+            command,
+            args,
+            std::time::Duration::from_secs(30),
+        )
+        .await
     }
 
     /// Like [`McpClient::spawn`] with an explicit per-call deadline.

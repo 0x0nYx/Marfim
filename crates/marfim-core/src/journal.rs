@@ -110,9 +110,7 @@ impl Journal {
 
     pub fn append(&mut self, rec: &JournalRecord) -> Result<u64> {
         if self.fail_writes {
-            return Err(CoreError::Session(
-                "injected journal write failure".into(),
-            ));
+            return Err(CoreError::Session("injected journal write failure".into()));
         }
         let line = serde_json::to_string(rec)?;
         self.file.write_all(line.as_bytes())?;

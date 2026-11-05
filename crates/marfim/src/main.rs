@@ -28,10 +28,16 @@ use std::sync::Arc;
 
 fn main() {
     let cli = Cli::parse();
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("tokio runtime");
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("marfim: cannot start tokio runtime: {e}");
+            std::process::exit(1);
+        }
+    };
     runtime.block_on(async_main(cli));
 }
 
@@ -146,14 +152,26 @@ fn new_session(cwd: &str, title: Option<&str>) -> (Journal, SessionPaths) {
         .as_millis();
     let session_id = format!("s{ts}");
     let path = dir.join(format!("{session_id}.jsonl"));
-    let mut j = Journal::open(&path).expect("journal opens");
+    let mut j = match Journal::open(&path) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("error: cannot open session journal {}: {e}", path.display());
+            std::process::exit(1);
+        }
+    };
     let _ = j.append(&JournalRecord::SessionMeta {
         session_id: session_id.clone(),
         cwd: cwd.to_string(),
         title: title.map(String::from),
         started_at: iso_now(),
     });
-    (j, SessionPaths { journal: path, session_id })
+    (
+        j,
+        SessionPaths {
+            journal: path,
+            session_id,
+        },
+    )
 }
 
 /// --var k=v substitution on the prompt (consumes the vars flag).
@@ -167,8 +185,12 @@ fn apply_vars(prompt: &str, vars: &[(String, String)]) -> String {
 
 /// D12: exit code mapping — 0 ok, 1 error, 2 permission-denied.
 fn exit_code(stop: &StopReason, harness: &Harness) -> i32 {
-    let denied = harness.denied_tools.load(std::sync::atomic::Ordering::SeqCst);
-    let executed = harness.executed_tools.load(std::sync::atomic::Ordering::SeqCst);
+    let denied = harness
+        .denied_tools
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let executed = harness
+        .executed_tools
+        .load(std::sync::atomic::Ordering::SeqCst);
     if denied > 0 && denied == executed {
         // every tool attempt was blocked by the permission engine
         return 2;
@@ -179,10 +201,7 @@ fn exit_code(stop: &StopReason, harness: &Harness) -> i32 {
     }
 }
 
-async fn drive_turn_with_ctrlc(
-    harness: &Arc<Harness>,
-    prompt: &str,
-) -> StopReason {
+async fn drive_turn_with_ctrlc(harness: &Arc<Harness>, prompt: &str) -> StopReason {
     let c = harness.cancel.clone();
     tokio::select! {
         stop = harness.run_turn(prompt) => stop,
@@ -259,7 +278,9 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
             tokio::spawn(async move {
                 // subagents never prompt the user: asks fail closed
                 while let Some(job) = approval_rx.recv().await {
-                    let _ = job.respond.send(marfim_core::permissions::ApprovalAnswer::Deny);
+                    let _ = job
+                        .respond
+                        .send(marfim_core::permissions::ApprovalAnswer::Deny);
                 }
             });
             let tool_ctx = ToolCtx {
@@ -293,10 +314,21 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
                 Arc::new(tokio::sync::RwLock::new(router)),
                 Arc::new(host),
                 Arc::new(std::sync::Mutex::new(
-                    marfim_core::journal::Journal::open(
+                    match marfim_core::journal::Journal::open(
                         &std::env::temp_dir().join(format!("marfim-task-{id}.jsonl")),
-                    )
-                    .expect("task journal"),
+                    ) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            // D6: fail the subagent honestly instead of panicking
+                            // the spawned task
+                            let mut s = slot.lock().unwrap_or_else(|p| p.into_inner());
+                            s.status = Some(marfim_tools::subagent::TaskStatus::Failed {
+                                error: format!("task journal: {e}"),
+                            });
+                            drop(guard); // worktree removed
+                            return;
+                        }
+                    },
                 )),
                 ctx,
                 Arc::new(perm),
@@ -305,7 +337,9 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
                 120_000,
                 false,
             );
-            let stop = harness.run_turn(&format!("[subagent {agent} — {kind}] {prompt}")).await;
+            let stop = harness
+                .run_turn(&format!("[subagent {agent} — {kind}] {prompt}"))
+                .await;
             let hist = harness.history.read().await;
             let output = hist
                 .iter()
@@ -328,14 +362,13 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
             }
             drop(guard); // worktree removed here
         });
-        let _ = handle;
+        // detach: the subagent runs to completion independently; TaskOutput
+        // polls the task table slot
+        drop(handle);
         Ok(id)
     }
 
-    fn poll(
-        &self,
-        task_id: u64,
-    ) -> Result<marfim_tools::subagent::TaskStatus, String> {
+    fn poll(&self, task_id: u64) -> Result<marfim_tools::subagent::TaskStatus, String> {
         let slot = self
             .tasks
             .inner
@@ -375,7 +408,8 @@ async fn build_session(
 ) {
     let bus = EventBus::new(4096);
     let sandbox = Sandbox::probe();
-    let (perm, approval_rx) = PermissionEngine::new(settings.permission_mode, settings.rules.clone());
+    let (perm, approval_rx) =
+        PermissionEngine::new(settings.permission_mode, settings.rules.clone());
     let perm = Arc::new(perm);
 
     // D16: real subagent host — Task/TaskOutput spawn nested agent loops
@@ -425,10 +459,20 @@ async fn build_session(
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "resumed".into());
-                    (Journal::open(&path).expect("journal opens"), SessionPaths {
-                        journal: path,
-                        session_id: sid,
-                    })
+                    let journal = match Journal::open(&path) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            eprintln!("error: cannot open journal {}: {e}", path.display());
+                            std::process::exit(1);
+                        }
+                    };
+                    (
+                        journal,
+                        SessionPaths {
+                            journal: path,
+                            session_id: sid,
+                        },
+                    )
                 }
                 false => {
                     eprintln!("error: no session journal at {}", path.display());
@@ -436,18 +480,14 @@ async fn build_session(
                 }
             }
         }
-        None => new_session(
-            &settings.cwd.to_string_lossy(),
-            settings.title.as_deref(),
-        ),
+        None => new_session(&settings.cwd.to_string_lossy(), settings.title.as_deref()),
     };
 
     let mut router = Router::new(CostBook::default(), settings.budgeted);
-    let primary = settings::build_primary_chain(settings, config)
-        .unwrap_or_else(|e| {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        });
+    let primary = settings::build_primary_chain(settings, config).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    });
     router.set_chain(marfim_core::router::Role::Primary, primary);
     let small = settings::build_small_chain(settings, config).unwrap_or_else(|e| {
         eprintln!("error: {e}");
@@ -490,7 +530,8 @@ fn latest_session(dir: &std::path::Path) -> PathBuf {
             }
         }
     }
-    best.map(|(_, p)| p).unwrap_or_else(|| dir.join("missing.jsonl"))
+    best.map(|(_, p)| p)
+        .unwrap_or_else(|| dir.join("missing.jsonl"))
 }
 
 async fn headless_text(config: &Config, settings: &EffectiveSettings, prompt: &str) -> i32 {
@@ -498,7 +539,9 @@ async fn headless_text(config: &Config, settings: &EffectiveSettings, prompt: &s
     // D14: headless has NO stdin owner — approvals fail closed (deny).
     tokio::spawn(async move {
         while let Some(job) = approval_rx.recv().await {
-            let _ = job.respond.send(marfim_core::permissions::ApprovalAnswer::Deny);
+            let _ = job
+                .respond
+                .send(marfim_core::permissions::ApprovalAnswer::Deny);
         }
     });
     let mut sub = bus.subscribe();
@@ -542,7 +585,9 @@ async fn headless_json(config: &Config, settings: &EffectiveSettings, prompt: &s
     let (harness, bus, _tc, _perm, mut approval_rx) = build_session(config, settings).await;
     tokio::spawn(async move {
         while let Some(job) = approval_rx.recv().await {
-            let _ = job.respond.send(marfim_core::permissions::ApprovalAnswer::Deny);
+            let _ = job
+                .respond
+                .send(marfim_core::permissions::ApprovalAnswer::Deny);
         }
     });
     let mut sub = bus.subscribe();
@@ -583,7 +628,9 @@ async fn headless_stream_json(config: &Config, settings: &EffectiveSettings, pro
     let (harness, bus, _tc, _perm, mut approval_rx) = build_session(config, settings).await;
     tokio::spawn(async move {
         while let Some(job) = approval_rx.recv().await {
-            let _ = job.respond.send(marfim_core::permissions::ApprovalAnswer::Deny);
+            let _ = job
+                .respond
+                .send(marfim_core::permissions::ApprovalAnswer::Deny);
         }
     });
     let mut sub = bus.subscribe();
@@ -625,11 +672,12 @@ fn print_repl_event(ev: &Event, stream: bool) {
             eprintln!("error: {message}");
         }
         Event::ToolCallResult {
-            tool, output, is_error, ..
+            tool,
+            output,
+            is_error: true,
+            ..
         } => {
-            if *is_error {
-                eprintln!("[{tool}] {output}");
-            }
+            eprintln!("[{tool}] {output}");
         }
         _ => {}
     }
@@ -640,8 +688,7 @@ async fn repl(_cli: Cli, config: Config, settings: EffectiveSettings) -> i32 {
         "marfim {} (rust) — type /help for commands",
         marfim_core::VERSION
     );
-    let (harness, bus, tool_ctx, _perm, mut approval_rx) =
-        build_session(&config, &settings).await;
+    let (harness, bus, tool_ctx, _perm, mut approval_rx) = build_session(&config, &settings).await;
     use tokio::io::AsyncBufReadExt;
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let (lines_tx, mut lines_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -789,7 +836,12 @@ fn doctor_cmd(
         .provider
         .clone()
         .or_else(|| std::env::var("MARFIM_PROVIDER").ok())
-        .or_else(|| config.get("provider").and_then(|v| v.as_str()).map(String::from))
+        .or_else(|| {
+            config
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
         .unwrap_or_else(|| "(none configured)".into());
     println!("provider: {provider}");
     println!("permission-mode: {}", cli.permission_mode);
@@ -809,9 +861,7 @@ fn doctor_cmd(
 }
 
 fn agents_cmd() -> i32 {
-    println!(
-        "external agent profiles (no-invention rule: unverified until owner runs them):"
-    );
+    println!("external agent profiles (no-invention rule: unverified until owner runs them):");
     for (name, cmd, args, enabled, verified) in marfim_gateway::acp::external_agent_catalog() {
         println!("  {name}: {cmd} {args:?} enabled={enabled} verified={verified}");
     }
@@ -822,9 +872,7 @@ fn sessions_cmd(cli: &Cli) -> i32 {
     // --days consumed: only list journals touched within the window
     let dir = sessions_dir();
     let cutoff = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(
-            cli.days as u64 * 86_400,
-        ))
+        .checked_sub(std::time::Duration::from_secs(cli.days as u64 * 86_400))
         .unwrap_or(std::time::UNIX_EPOCH);
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.flatten() {

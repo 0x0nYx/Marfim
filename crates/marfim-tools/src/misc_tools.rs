@@ -6,7 +6,7 @@ use serde_json::Value;
 
 pub fn enter_plan_mode(ctx: &ToolCtx, args: &Value) -> ToolOutput {
     let _ = args;
-    *ctx.plan_mode.lock().unwrap() = true;
+    *ctx.plan_mode.lock().unwrap_or_else(|p| p.into_inner()) = true;
     ToolOutput::ok(
         "plan mode ON: read-only until ExitPlanMode. Research the codebase, then present the plan.",
     )
@@ -17,7 +17,7 @@ pub fn exit_plan_mode(ctx: &ToolCtx, args: &Value) -> ToolOutput {
     if plan.trim().is_empty() {
         return ToolOutput::err("missing `plan` (the implementation plan text)");
     }
-    *ctx.plan_mode.lock().unwrap() = false;
+    *ctx.plan_mode.lock().unwrap_or_else(|p| p.into_inner()) = false;
     ToolOutput::ok("plan mode OFF; plan recorded:\n".to_string() + plan)
 }
 
@@ -58,7 +58,11 @@ pub fn notebook_edit(_ctx: &ToolCtx, args: &Value) -> ToolOutput {
     if !found {
         return ToolOutput::err(format!("cell `{cell_id}` not found"));
     }
-    match std::fs::write(&full, serde_json::to_string_pretty(&nb).unwrap()) {
+    let serialized = match serde_json::to_string_pretty(&nb) {
+        Ok(s) => s,
+        Err(e) => return ToolOutput::err(format!("serialize notebook failed: {e}")),
+    };
+    match std::fs::write(&full, &serialized) {
         Ok(_) => ToolOutput::ok(format!("replaced cell {cell_id} in {path}")),
         Err(e) => ToolOutput::err(format!("write failed: {e}")),
     }
@@ -327,17 +331,27 @@ pub fn memory_tool(ctx: &ToolCtx, args: &Value) -> ToolOutput {
             let Some(text) = args["text"].as_str() else {
                 return ToolOutput::err("missing `text`");
             };
-            let mut m = ctx.memory.lock().unwrap();
+            let mut m = ctx.memory.lock().unwrap_or_else(|p| p.into_inner());
             let id = m.remember(text, args["safety"].as_bool().unwrap_or(false));
             ToolOutput::ok(format!("remembered as {id}"))
         }
-        Some("recall") => ToolOutput::ok(ctx.memory.lock().unwrap().render()),
+        Some("recall") => ToolOutput::ok(
+            ctx.memory
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .render(),
+        ),
         Some("forget") => {
             let Some(id) = args["id"].as_str() else {
                 return ToolOutput::err("missing `id`");
             };
             let confirm = args["confirm"].as_bool().unwrap_or(false);
-            match ctx.memory.lock().unwrap().forget(id, confirm) {
+            match ctx
+                .memory
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .forget(id, confirm)
+            {
                 Ok(_) => ToolOutput::ok(format!("forgot {id}")),
                 Err(e) => ToolOutput::err(format!("{e}")),
             }
@@ -371,12 +385,12 @@ mod tests {
     #[test]
     fn plan_mode_toggles() {
         let c = ctx();
-        assert!(!*c.plan_mode.lock().unwrap());
+        assert!(!*c.plan_mode.lock().unwrap_or_else(|p| p.into_inner()));
         enter_plan_mode(&c, &serde_json::json!({}));
-        assert!(*c.plan_mode.lock().unwrap());
+        assert!(*c.plan_mode.lock().unwrap_or_else(|p| p.into_inner()));
         let o = exit_plan_mode(&c, &serde_json::json!({"plan": "do x then y"}));
         assert!(!o.is_error);
-        assert!(!*c.plan_mode.lock().unwrap());
+        assert!(!*c.plan_mode.lock().unwrap_or_else(|p| p.into_inner()));
         let o2 = exit_plan_mode(&c, &serde_json::json!({}));
         assert!(o2.is_error);
     }
@@ -534,7 +548,7 @@ pub fn todo_write(ctx: &ToolCtx, args: &Value) -> ToolOutput {
     match crate::todo::validate(list) {
         Ok(todos) => {
             let rendered = crate::todo::render(&todos);
-            *ctx.todos.lock().unwrap() = todos;
+            *ctx.todos.lock().unwrap_or_else(|p| p.into_inner()) = todos;
             ToolOutput::ok(rendered)
         }
         Err(e) => ToolOutput::err(e),
@@ -576,7 +590,7 @@ pub fn repo_map(ctx: &ToolCtx, args: &Value) -> ToolOutput {
         return ToolOutput::ok("(no source files found)");
     }
     let map = crate::repomap::build(&files, budget);
-    *ctx.last_repomap.lock().unwrap() = map.clone();
+    *ctx.last_repomap.lock().unwrap_or_else(|p| p.into_inner()) = map.clone();
     ToolOutput::ok(map)
 }
 

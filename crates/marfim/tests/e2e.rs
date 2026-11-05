@@ -393,8 +393,8 @@ fn d12_headless_exit_code_2_when_every_tool_is_denied() {
         .current_dir("/tmp");
     let out = c.output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
-    let v: serde_json::Value = serde_json::from_str(text.trim())
-        .unwrap_or_else(|e| panic!("not json: {e}: {text}"));
+    let v: serde_json::Value =
+        serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("not json: {e}: {text}"));
     assert_eq!(v["type"], "result");
     // D12 mapping: denied>0 && denied==executed => exit 2
     assert_eq!(out.status.code(), Some(2), "stdout: {text}");
@@ -413,10 +413,7 @@ fn d14_repl_prints_errors_and_survives_across_turns() {
     let mut child = Command::new(bin_path())
         .env("MARFIM_HOME", &home)
         .env_remove("MARFIM_PROVIDER")
-        .env(
-            "MARFIM_MOCK_SCRIPT",
-            r#"[{"error":"boom"}]"#,
-        )
+        .env("MARFIM_MOCK_SCRIPT", r#"[{"error":"boom"}]"#)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -425,8 +422,8 @@ fn d14_repl_prints_errors_and_survives_across_turns() {
         .unwrap();
 
     let mut stdin = child.stdin.take().unwrap();
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
 
     let out_buf = Arc::new(Mutex::new(String::new()));
     let err_buf = Arc::new(Mutex::new(String::new()));
@@ -464,8 +461,15 @@ fn d14_repl_prints_errors_and_survives_across_turns() {
     send("one");
     wait_for(&err_buf, "boom");
     std::thread::sleep(Duration::from_millis(500)); // allow any duplicate print to land
-    let boom_count = err_buf.lock().unwrap().matches("provider error: boom").count();
-    assert_eq!(boom_count, 1, "provider error printed {boom_count}x, expected 1");
+    let boom_count = err_buf
+        .lock()
+        .unwrap()
+        .matches("provider error: boom")
+        .count();
+    assert_eq!(
+        boom_count, 1,
+        "provider error printed {boom_count}x, expected 1"
+    );
 
     // the SAME stdin owner still serves commands after the failed turn
     // (the router keeps the failed mock unavailable — fail-closed failover —

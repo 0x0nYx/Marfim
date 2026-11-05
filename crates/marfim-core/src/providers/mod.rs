@@ -270,7 +270,7 @@ impl MockProvider {
     }
 
     pub fn request_count(&self) -> usize {
-        self.calls.lock().unwrap().len()
+        self.calls.lock().unwrap_or_else(|p| p.into_inner()).len()
     }
 }
 
@@ -281,8 +281,11 @@ impl Provider for MockProvider {
     }
 
     async fn chat_step(&self, req: &ChatRequest) -> Result<Step> {
-        self.calls.lock().unwrap().push(req.clone());
-        let mut script = self.script.lock().unwrap();
+        self.calls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(req.clone());
+        let mut script = self.script.lock().unwrap_or_else(|p| p.into_inner());
         match script.is_empty() {
             true => Ok(MockProvider::text(
                 "mock provider: no scripted turns configured",

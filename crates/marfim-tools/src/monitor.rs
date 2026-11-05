@@ -23,17 +23,20 @@ impl Monitors {
         let baseline = std::fs::metadata(path)
             .and_then(|m| m.modified())
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        self.list.lock().unwrap().push(MonitorRec {
-            id,
-            path: path.into(),
-            baseline_mtime: baseline,
-            active: true,
-        });
+        self.list
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(MonitorRec {
+                id,
+                path: path.into(),
+                baseline_mtime: baseline,
+                active: true,
+            });
         id
     }
 
     pub fn kill(&self, id: u64) -> bool {
-        let mut list = self.list.lock().unwrap();
+        let mut list = self.list.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(m) = list.iter_mut().find(|m| m.id == id && m.active) {
             m.active = false;
             true
@@ -45,7 +48,12 @@ impl Monitors {
     /// Returns monitors whose target changed since their baseline.
     pub fn poll(&self) -> Vec<u64> {
         let mut changed = Vec::new();
-        for m in self.list.lock().unwrap().iter_mut() {
+        for m in self
+            .list
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter_mut()
+        {
             if !m.active {
                 continue;
             }

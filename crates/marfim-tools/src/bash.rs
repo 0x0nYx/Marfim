@@ -30,7 +30,7 @@ impl BackgroundShells {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst) + 1;
         self.shells
             .lock()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .push(std::sync::Arc::new(ShellRecord {
                 id,
                 command: command.into(),
@@ -44,7 +44,7 @@ impl BackgroundShells {
     pub fn get(&self, id: u64) -> Option<std::sync::Arc<ShellRecord>> {
         self.shells
             .lock()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .iter()
             .find(|s| s.id == id)
             .cloned()
@@ -161,9 +161,9 @@ pub fn bash_output(ctx: &ToolCtx, args: &Value) -> ToolOutput {
     };
     match ctx.background.get(id) {
         Some(rec) => {
-            let out = rec.output.lock().unwrap().clone();
-            let done = *rec.done.lock().unwrap();
-            let code = *rec.exit_code.lock().unwrap();
+            let out = rec.output.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let done = *rec.done.lock().unwrap_or_else(|p| p.into_inner());
+            let code = *rec.exit_code.lock().unwrap_or_else(|p| p.into_inner());
             ToolOutput::ok(format!(
                 "shell {id} ({}): done={done} exit={:?}\n{}",
                 rec.command,
@@ -185,8 +185,8 @@ pub fn kill_shell(ctx: &ToolCtx, args: &Value) -> ToolOutput {
     };
     match ctx.background.get(id) {
         Some(rec) => {
-            *rec.done.lock().unwrap() = true;
-            *rec.exit_code.lock().unwrap() = Some(-1);
+            *rec.done.lock().unwrap_or_else(|p| p.into_inner()) = true;
+            *rec.exit_code.lock().unwrap_or_else(|p| p.into_inner()) = Some(-1);
             ToolOutput::ok(format!("killed shell {id}"))
         }
         None => ToolOutput::err(format!("no background shell {id}")),

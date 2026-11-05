@@ -12,15 +12,71 @@ use marfim_tools::registry::ToolCtx;
 use std::path::PathBuf;
 
 pub const COMMANDS: &[&str] = &[
-    "accounts", "agents", "architect", "audit", "btw", "budget", "cachehealth",
-    "capabilities", "checks", "clear", "commit", "compact", "context",
-    "copy-context", "cost", "cron", "diff", "diffs", "dig", "doctor", "editor",
-    "explain", "export", "forecast", "fork", "goal", "handoff", "help", "hooks",
-    "hot", "init", "map", "mcp", "memory", "model", "models", "new",
-    "permissions", "plan", "plugins", "policy", "profile", "provider", "quit",
-    "recall", "recipes", "replay", "resume", "review", "rewind", "sandbox",
-    "sdiff", "skills", "smoke", "stats", "status", "swarm", "theme", "tree",
-    "undo", "usage", "verify", "wal", "workflow", "yolo",
+    "accounts",
+    "agents",
+    "architect",
+    "audit",
+    "btw",
+    "budget",
+    "cachehealth",
+    "capabilities",
+    "checks",
+    "clear",
+    "commit",
+    "compact",
+    "context",
+    "copy-context",
+    "cost",
+    "cron",
+    "diff",
+    "diffs",
+    "dig",
+    "doctor",
+    "editor",
+    "explain",
+    "export",
+    "forecast",
+    "fork",
+    "goal",
+    "handoff",
+    "help",
+    "hooks",
+    "hot",
+    "init",
+    "map",
+    "mcp",
+    "memory",
+    "model",
+    "models",
+    "new",
+    "permissions",
+    "plan",
+    "plugins",
+    "policy",
+    "profile",
+    "provider",
+    "quit",
+    "recall",
+    "recipes",
+    "replay",
+    "resume",
+    "review",
+    "rewind",
+    "sandbox",
+    "sdiff",
+    "skills",
+    "smoke",
+    "stats",
+    "status",
+    "swarm",
+    "theme",
+    "tree",
+    "undo",
+    "usage",
+    "verify",
+    "wal",
+    "workflow",
+    "yolo",
 ];
 
 pub const ALIASES: &[(&str, &str)] = &[("q", "quit"), ("?", "help"), ("ls-cmds", "help")];
@@ -127,7 +183,7 @@ pub async fn dispatch(
                     JournalRecord::Compaction { summary } => {
                         format!("compaction: {}", abbrev(summary, 60))
                     }
-                    other => format!("{}", other.kind()),
+                    other => other.kind().to_string(),
                 })
                 .collect();
             if tail.is_empty() {
@@ -221,7 +277,7 @@ pub async fn dispatch(
                     }
                 }
             }
-            entries.sort_by(|a, b| b.0.cmp(&a.0));
+            entries.sort_by_key(|e| std::cmp::Reverse(e.0));
             for (_, p) in entries.iter().take(10) {
                 s.push_str(&format!("  {p}\n"));
             }
@@ -258,8 +314,10 @@ pub async fn dispatch(
                 .unwrap_or_default()
                 .as_millis();
             let sid = format!("s{ts}");
-            let mut j = marfim_core::journal::Journal::open(&dir.join(format!("{sid}.jsonl")))
-                .expect("journal opens");
+            let mut j = match marfim_core::journal::Journal::open(&dir.join(format!("{sid}.jsonl"))) {
+                Ok(j) => j,
+                Err(e) => return format!("new session failed: cannot open journal: {e}"),
+            };
             let _ = j.append(&JournalRecord::SessionMeta {
                 session_id: sid.clone(),
                 cwd: harness.ctx.cwd.clone(),
@@ -774,7 +832,7 @@ pub async fn dispatch(
                 }
             }
             let mut v: Vec<(String, usize)> = counts.into_iter().collect();
-            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v.sort_by_key(|e| std::cmp::Reverse(e.1));
             if v.is_empty() {
                 "no tool activity yet".into()
             } else {
@@ -933,7 +991,9 @@ async fn switch_primary_model(
     chain[0].model = model.to_string();
     chain[0].provider = provider;
     r.set_chain(marfim_core::router::Role::Primary, chain);
-    Ok(format!("primary model switched to {model} (takes effect next step)"))
+    Ok(format!(
+        "primary model switched to {model} (takes effect next step)"
+    ))
 }
 
 fn git_in(ctx: &ToolCtx, args: &str) -> Result<String, String> {
@@ -965,7 +1025,7 @@ mod tests {
 
     use super::*;
     use crate::settings::{self, Cli};
-    use clap::{CommandFactory, Parser};
+    use clap::Parser;
     use marfim_core::journal::Journal;
     use marfim_core::permissions::{Mode, PermissionEngine};
     use marfim_core::providers::{CostBook, MockProvider};
@@ -1006,7 +1066,9 @@ mod tests {
             title: None,
             started_at: "2026-01-01T00:00:00Z".into(),
         });
-        let _ = journal.append(&JournalRecord::UserMessage { text: "hello".into() });
+        let _ = journal.append(&JournalRecord::UserMessage {
+            text: "hello".into(),
+        });
         let h = Harness::new(
             bus,
             Arc::new(tokio::sync::RwLock::new(router)),
@@ -1024,7 +1086,10 @@ mod tests {
             u64::MAX,
             false,
         );
-        h.history.write().await.push(marfim_core::providers::ChatMessage::user("hello"));
+        h.history
+            .write()
+            .await
+            .push(marfim_core::providers::ChatMessage::user("hello"));
         Arc::new(h)
     }
 
@@ -1050,10 +1115,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let harness = test_harness(&tmp).await;
-        let mut ctx = ToolCtx::default();
-        ctx.cwd = tmp.clone();
-        ctx.session_id = "sess-test".into();
-        let config = Config::from_json_str(r#"{"provider": "mock", "mcpServers": {"files": {"command": "mcp-fs"}}}"#).unwrap();
+        let ctx = ToolCtx {
+            cwd: tmp.clone(),
+            session_id: "sess-test".into(),
+            ..Default::default()
+        };
+        let config = Config::from_json_str(
+            r#"{"provider": "mock", "mcpServers": {"files": {"command": "mcp-fs"}}}"#,
+        )
+        .unwrap();
         let cli = Cli::parse_from(["marfim", "--provider", "mock"]);
         let settings = settings::effective(&cli, &config, tmp.clone()).unwrap();
         (tmp, ctx, harness, config, settings)
@@ -1083,32 +1153,56 @@ mod tests {
     behaviour!(help_lists_all_65, "/help", contains = ["commands (65)"]);
     behaviour!(status_real, "/status", contains = ["sess-test", "mock"]);
     behaviour!(stats_real, "/stats", contains = ["tool results"]);
-    behaviour!(audit_kinds, "/audit", contains = ["session_meta", "user_message"]);
+    behaviour!(
+        audit_kinds,
+        "/audit",
+        contains = ["session_meta", "user_message"]
+    );
     behaviour!(wal_tail, "/wal", contains = ["user: hello"]);
     behaviour!(replay_last, "/replay 2", contains = ["replay last 2"]);
     behaviour!(tree_renders, "/tree", contains = ["turn 1: hello"]);
     behaviour!(resume_lists, "/resume", contains = ["sessions"]);
     behaviour!(provider_report, "/provider", contains = ["mock", "wire"]);
     behaviour!(accounts_list, "/accounts", contains = ["anthropic", "xai"]);
-    behaviour!(models_chains, "/models", contains = ["primary: mock-primary"]);
+    behaviour!(
+        models_chains,
+        "/models",
+        contains = ["primary: mock-primary"]
+    );
     behaviour!(model_current, "/model", contains = ["mock-1"]);
-    behaviour!(permissions_report, "/permissions", contains = ["permission mode: Default"]);
+    behaviour!(
+        permissions_report,
+        "/permissions",
+        contains = ["permission mode: Default"]
+    );
     behaviour!(policy_report, "/policy", contains = ["mode: Default"]);
     behaviour!(yolo_report, "/yolo", contains = ["yolo mode is"]);
     behaviour!(plan_report, "/plan", contains = ["plan mode is"]);
     behaviour!(sandbox_probe, "/sandbox", contains = ["sandbox: unshare"]);
-    behaviour!(capabilities_list, "/capabilities", contains = ["Read", "Write"]);
+    behaviour!(
+        capabilities_list,
+        "/capabilities",
+        contains = ["Read", "Write"]
+    );
     behaviour!(checks_report, "/checks", contains = ["verify"]);
     behaviour!(map_runs, "/map", contains = ["no source files found"]);
     behaviour!(memory_runs, "/memory", contains = ["no memories"]);
     behaviour!(recall_runs, "/recall", contains = ["no memories"]);
-    behaviour!(explain_runs, "/explain why", contains = ["noted; no side effects"]);
+    behaviour!(
+        explain_runs,
+        "/explain why",
+        contains = ["noted; no side effects"]
+    );
     behaviour!(skills_empty, "/skills", contains = ["no skills"]);
     behaviour!(plugins_counts, "/plugins", contains = ["external agents:"]);
     behaviour!(mcp_lists_config, "/mcp", contains = ["files: mcp-fs"]);
     behaviour!(agents_lists, "/agents", contains = ["builtin personas"]);
     behaviour!(hooks_report, "/hooks", contains = ["no hooks"]);
-    behaviour!(context_counts, "/context", contains = ["context: 1 messages"]);
+    behaviour!(
+        context_counts,
+        "/context",
+        contains = ["context: 1 messages"]
+    );
     behaviour!(copy_context, "/copy-context", contains = ["context copied"]);
     behaviour!(handoff_writes, "/handoff", contains = ["handoff written"]);
     behaviour!(editor_report, "/editor", contains = ["editor:"]);
@@ -1116,16 +1210,32 @@ mod tests {
     behaviour!(hot_empty, "/hot", contains = ["no tool activity"]);
     behaviour!(cron_honest, "/cron", contains = ["no cron facility"]);
     behaviour!(swarm_honest, "/swarm", contains = ["swarm"]);
-    behaviour!(doctor_real, "/doctor", contains = ["marfim", "provider: mock"]);
+    behaviour!(
+        doctor_real,
+        "/doctor",
+        contains = ["marfim", "provider: mock"]
+    );
     behaviour!(theme_report, "/theme", contains = ["theme: default"]);
     behaviour!(profile_report, "/profile", contains = ["provider mock"]);
     behaviour!(cost_zero, "/cost", contains = ["session cost: $0"]);
     behaviour!(usage_ledger, "/usage", contains = ["usage ledger"]);
     behaviour!(budget_report, "/budget", contains = ["budget mode: false"]);
     behaviour!(forecast_math, "/forecast", contains = ["forecast:"]);
-    behaviour!(cachehealth_honest, "/cachehealth", contains = ["cache tokens"]);
-    behaviour!(unknown_command, "/frobnicate", contains = ["unknown command"]);
-    behaviour!(architect_report, "/architect", contains = ["architect role:"]);
+    behaviour!(
+        cachehealth_honest,
+        "/cachehealth",
+        contains = ["cache tokens"]
+    );
+    behaviour!(
+        unknown_command,
+        "/frobnicate",
+        contains = ["unknown command"]
+    );
+    behaviour!(
+        architect_report,
+        "/architect",
+        contains = ["architect role:"]
+    );
     behaviour!(review_report, "/review", contains = ["review role:"]);
     behaviour!(init_creates, "/init", contains = ["initialised"]);
     behaviour!(recipes_dir, "/recipes", contains = ["recipes"]);
@@ -1133,7 +1243,11 @@ mod tests {
     behaviour!(clear_ansi, "/clear", contains = ["\x1b[2J"]);
     behaviour!(verify_runs, "/verify", contains = ["verify"]);
     behaviour!(smoke_real, "/smoke", contains = ["smoke: journal ok"]);
-    behaviour!(fork_copies, "/fork forked-name", contains = ["forked session"]);
+    behaviour!(
+        fork_copies,
+        "/fork forked-name",
+        contains = ["forked session"]
+    );
     behaviour!(export_copies, "/export", contains = ["journal exported"]);
     behaviour!(rewind_one, "/rewind 1", contains = ["rewound 1 record"]);
     behaviour!(undo_no_tool, "/undo", contains = ["undo failed"]);
@@ -1166,11 +1280,13 @@ mod tests {
     async fn compact_real_summarizes_via_small_role() {
         let (_t, ctx, h, c, s) = fixture().await;
         let h = Arc::into_inner(h).unwrap();
-        let mut h = h;
         let h = Arc::new(h);
-        h.history.write().await.push(marfim_core::providers::ChatMessage::user(
-            "discussing the parser fix in src/parse.rs",
-        ));
+        h.history
+            .write()
+            .await
+            .push(marfim_core::providers::ChatMessage::user(
+                "discussing the parser fix in src/parse.rs",
+            ));
         let out = dispatch("/compact", &ctx, &h, &c, &s).await;
         assert!(out.contains("compacted"), "{out}");
     }
@@ -1187,7 +1303,10 @@ mod tests {
     #[tokio::test]
     async fn new_session_swaps_journal_and_clears_history() {
         let (_t, ctx, h, c, s) = fixture().await;
-        h.history.write().await.push(marfim_core::providers::ChatMessage::user("old"));
+        h.history
+            .write()
+            .await
+            .push(marfim_core::providers::ChatMessage::user("old"));
         let out = dispatch("/new", &ctx, &h, &c, &s).await;
         assert!(out.contains("new session"), "{out}");
         assert!(h.history.read().await.is_empty(), "history cleared");
@@ -1215,12 +1334,11 @@ mod tests {
         }
         let out = dispatch("/undo", &ctx, &h, &c, &s).await;
         assert!(out.contains("undid tool batch"), "{out}");
-        let recs = marfim_core::journal::Journal::replay(
-            &j.lock().unwrap().path().to_path_buf(),
-        )
-        .unwrap();
+        let recs = marfim_core::journal::Journal::replay(j.lock().unwrap().path()).unwrap();
         assert!(
-            !recs.iter().any(|r| matches!(r, JournalRecord::ToolCall { .. })),
+            !recs
+                .iter()
+                .any(|r| matches!(r, JournalRecord::ToolCall { .. })),
             "tool call records gone after undo"
         );
     }

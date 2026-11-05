@@ -117,11 +117,19 @@ pub async fn guarded_fetch(url: &str, max_bytes: usize) -> Result<String, String
 
 /// Strip HTML tags down to readable text (script/style bodies removed).
 pub fn html_to_text(html: &str) -> String {
-    // remove script/style blocks (dot-matches-newline) before tag stripping
-    let script_re = regex::Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
-    let style_re = regex::Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap();
-    let filtered = script_re.replace_all(html, "");
-    let filtered = style_re.replace_all(&filtered, "");
+    // remove script/style blocks (dot-matches-newline) before tag stripping.
+    // The patterns are static and provably valid; if compilation ever failed
+    // anyway we degrade to plain tag-stripping instead of panicking.
+    let filtered = match (
+        regex::Regex::new(r"(?is)<script[^>]*>.*?</script>"),
+        regex::Regex::new(r"(?is)<style[^>]*>.*?</style>"),
+    ) {
+        (Ok(script_re), Ok(style_re)) => {
+            let f = script_re.replace_all(html, "");
+            style_re.replace_all(&f, "").into_owned()
+        }
+        _ => html.to_string(),
+    };
     let mut out = String::new();
     let mut in_tag = false;
     let mut last_ws = false;

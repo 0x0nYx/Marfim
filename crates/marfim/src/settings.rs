@@ -328,12 +328,17 @@ pub fn parse_mock_script(json: &str) -> Vec<marfim_core::providers::MockAction> 
             } else if let Some(tc) = v.get("tool_call") {
                 let id = tc.get("id").and_then(|x| x.as_str()).unwrap_or("t1");
                 let name = tc.get("name").and_then(|x| x.as_str()).unwrap_or("Read");
-                let args = tc.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                let args = tc
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
                 MockAction::Step(MockProvider::tool_call(id, name, args))
             } else if let Some(e) = v.get("error").and_then(|e| e.as_str()) {
                 MockProvider::error(e)
             } else {
-                MockAction::Step(MockProvider::text("(marfim mock: unrecognised script entry)"))
+                MockAction::Step(MockProvider::text(
+                    "(marfim mock: unrecognised script entry)",
+                ))
             }
         })
         .collect()
@@ -402,27 +407,47 @@ pub struct EffectiveSettings {
     pub rules: Vec<Rule>,
     pub working_globs: Vec<String>,
     pub budgeted: bool,
+    // Consumed from config (D13 coverage) and carried for the Phase 3
+    // provider-request wiring; not yet read downstream.
+    #[allow(dead_code)]
     pub max_tokens: Option<u64>,
+    #[allow(dead_code)]
     pub temperature: Option<f64>,
+    #[allow(dead_code)]
     pub thinking_budget: Option<u64>,
     pub compact_threshold_tokens: u64,
     pub stream: bool,
+    // Carried for the Phase 6 TUI palette wiring; not yet read downstream.
+    #[allow(dead_code)]
     pub theme: String,
+    // Consumed from config/CLI (D13 coverage); surfaced by the Phase 6 UI.
+    #[allow(dead_code)]
     pub verbose: bool,
     pub verify_commands: Option<Vec<String>>,
     pub stop_on_tool_error: bool,
+    // Consumed from config (D13); wired as the Bash default in Phase 5.
+    #[allow(dead_code)]
     pub bash_default_timeout_ms: u64,
     pub cwd: PathBuf,
     pub title: Option<String>,
     pub resume: Option<String>,
     pub output_format: String,
+    // Consumed from CLI (D13); stdin ingestion modes land with Phase 2.
+    #[allow(dead_code)]
     pub input_format: String,
     pub prompt: Option<String>,
     pub prompt_vars: Vec<(String, String)>,
+    // Consumed from CLI (D13 consumption contract); the subcommands read
+    // these from `Cli` directly until the Phase 2 session actor unifies them.
+    #[allow(dead_code)]
     pub days: u32,
+    #[allow(dead_code)]
     pub port: u16,
+    #[allow(dead_code)]
     pub host: String,
+    #[allow(dead_code)]
     pub token: Option<String>,
+    #[allow(dead_code)]
     pub debounce: Option<f64>,
 }
 
@@ -450,11 +475,7 @@ fn parse_failover_spec(spec: &str) -> Vec<(String, String)> {
 
 /// Consume every flag + config key into effective settings. Errors on
 /// unknown providers — the silent-mock fallback is gone (D11).
-pub fn effective(
-    cli: &Cli,
-    config: &Config,
-    cwd: PathBuf,
-) -> Result<EffectiveSettings, String> {
+pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSettings, String> {
     // --- provider + model (flag > config > preset default; env MARFIM_*) ---
     let provider_name = cli
         .provider
@@ -501,17 +522,14 @@ pub fn effective(
     } else if let Some(arr) = config.get("failover").and_then(|v| v.as_array()) {
         arr.iter()
             .filter_map(|v| v.as_str())
-            .map(|s| parse_failover_spec(s))
-            .flatten()
+            .flat_map(parse_failover_spec)
             .collect()
     } else {
         Vec::new()
     };
 
     // --- permissions (config section + --permission-mode + --glob) ---
-    let mut permission_mode = cli
-        .permission_mode
-        .as_str();
+    let mut permission_mode = cli.permission_mode.as_str();
     let mut rules: Vec<Rule> = Vec::new();
     let mut working_globs = cli.glob.clone();
     if let Some(perms) = config.get("permissions") {
@@ -530,7 +548,11 @@ pub fn effective(
                         let (tool, argv) = match spec.split_once(':') {
                             Some((t, rest)) => (
                                 t.trim().to_string(),
-                                Some(rest.trim().split_whitespace().map(String::from).collect::<Vec<String>>()),
+                                Some(
+                                    rest.split_whitespace()
+                                        .map(String::from)
+                                        .collect::<Vec<String>>(),
+                                ),
                             ),
                             None => (spec.trim().to_string(), None),
                         };
@@ -553,21 +575,22 @@ pub fn effective(
     let _ = config.get("tools");
 
     // --- budget ---
-    let budget_spec = cli
-        .budget
-        .clone()
-        .or_else(|| config.get("budget").and_then(|v| v.as_str()).map(String::from));
-    let budgeted = budget_spec.as_deref().unwrap_or("") != "";
+    let budget_spec = cli.budget.clone().or_else(|| {
+        config
+            .get("budget")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    });
+    let budgeted = !budget_spec.as_deref().unwrap_or("").is_empty();
 
     // --- sampling + context knobs ---
-    let max_tokens = config
-        .get("maxTokens")
-        .and_then(|v| v.as_u64())
-        .or(if cli.max_mode.as_deref() == Some("thinking") {
+    let max_tokens = config.get("maxTokens").and_then(|v| v.as_u64()).or(
+        if cli.max_mode.as_deref() == Some("thinking") {
             Some(32_768)
         } else {
             None
-        });
+        },
+    );
     let temperature = config.get("temperature").and_then(|v| v.as_f64());
     let mut thinking_budget = config.get("thinkingBudget").and_then(|v| v.as_u64());
     if cli.max_mode.is_some() && thinking_budget.is_none() {
@@ -581,13 +604,19 @@ pub fn effective(
     let _ = config.get("steerMode");
 
     // --- stream + display ---
-    let stream = config.get("stream").and_then(|v| v.as_bool()).unwrap_or(true);
+    let stream = config
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     let theme = config
         .get("theme")
         .and_then(|v| v.as_str())
         .unwrap_or("default")
         .to_string();
-    let verbose = config.get("verbose").and_then(|v| v.as_bool()).unwrap_or(false);
+    let verbose = config
+        .get("verbose")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // --- verify overrides ---
     let verify_commands = config
@@ -687,7 +716,11 @@ pub fn build_primary_chain(
     }];
     for (prov, model) in &settings.failover {
         let p = resolve_preset(prov, config)?;
-        let m = if model.is_empty() { &p.default_model } else { model };
+        let m = if model.is_empty() {
+            &p.default_model
+        } else {
+            model
+        };
         chain.push(ModelEntry {
             model: m.clone(),
             provider: build_provider(&p, m)?,
@@ -740,7 +773,10 @@ mod tests {
                 "config key `{k}` is accepted but never consumed"
             );
         }
-        assert_eq!(CONSUMED_CONFIG_KEYS.len(), marfim_core::config::KNOWN_KEYS.len());
+        assert_eq!(
+            CONSUMED_CONFIG_KEYS.len(),
+            marfim_core::config::KNOWN_KEYS.len()
+        );
     }
 
     #[test]
@@ -761,10 +797,8 @@ mod tests {
 
     #[test]
     fn failover_flag_overrides_config() {
-        let cfg = Config::from_json_str(
-            r#"{"provider":"anthropic","failover":["xai:grok-4"]}"#,
-        )
-        .unwrap();
+        let cfg =
+            Config::from_json_str(r#"{"provider":"anthropic","failover":["xai:grok-4"]}"#).unwrap();
         let mut c = cli();
         c.failover = Some("openai:gpt-5-mini".into());
         let s = effective(&c, &cfg, PathBuf::from(".")).unwrap();
@@ -774,10 +808,7 @@ mod tests {
         );
 
         let s2 = effective(&cli(), &cfg, PathBuf::from(".")).unwrap();
-        assert_eq!(
-            s2.failover,
-            vec![("xai".to_string(), "grok-4".to_string())]
-        );
+        assert_eq!(s2.failover, vec![("xai".to_string(), "grok-4".to_string())]);
     }
 
     #[test]

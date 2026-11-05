@@ -54,7 +54,9 @@ pub fn parse_patch(text: &str) -> Result<Vec<FilePatch>, String> {
             let mut hunks = Vec::new();
             while let Some(l) = lines.peek() {
                 if l.starts_with("@@") {
-                    let l = lines.next().unwrap();
+                    let Some(l) = lines.next() else {
+                        unreachable!("peek() returned Some");
+                    };
                     let hunk = parse_hunk_header(l, &mut lines)?;
                     hunks.push(hunk);
                 } else if l.starts_with("--- ") || l.starts_with("diff ") {
@@ -111,13 +113,17 @@ fn parse_hunk_header(
         if l.starts_with("@@") || l.starts_with("--- ") || l.starts_with("diff ") {
             break;
         }
-        let l = lines.next().unwrap();
+        let Some(l) = lines.next() else {
+            unreachable!("peek() returned Some");
+        };
         if l.is_empty() {
             hunk_lines.push(HunkLine::Ctx(String::new()));
             continue;
         }
         let mut chars = l.chars();
-        let marker = chars.next().unwrap();
+        let Some(marker) = chars.next() else {
+            return Err(format!("bad hunk line: {l:?}"));
+        };
         let body: String = chars.collect();
         match marker {
             ' ' => hunk_lines.push(HunkLine::Ctx(body)),

@@ -104,14 +104,24 @@ impl Event {
     }
 
     pub fn to_json_line(&self) -> String {
-        let mut v = serde_json::to_value(self).expect("event serializes");
+        // Serialization of a plain data enum is infallible by construction;
+        // the fallback keeps the stream well-formed (fail-visible) instead
+        // of panicking a telemetry path (D6).
+        let mut v = serde_json::to_value(self).unwrap_or_else(
+            |_| serde_json::json!({"event": "serialization_error", "kind": self.kind()}),
+        );
         if let Some(o) = v.as_object_mut() {
             o.insert(
                 "event".into(),
                 serde_json::Value::String(self.kind().into()),
             );
         }
-        serde_json::to_string(&v).expect("event serializes")
+        serde_json::to_string(&v).unwrap_or_else(|_| {
+            format!(
+                "{{\"event\":\"serialization_error\",\"kind\":\"{}\"}}",
+                self.kind()
+            )
+        })
     }
 }
 

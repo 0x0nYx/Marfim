@@ -90,7 +90,11 @@ fn anthropic_body_matches_vendored_schema_and_semantics() {
         "tool results of one batch must merge into ONE user message (D10)"
     );
     let blocks = result_msgs[0]["content"].as_array().unwrap();
-    assert_eq!(blocks.len(), 2, "both tool_result blocks in that one message");
+    assert_eq!(
+        blocks.len(),
+        2,
+        "both tool_result blocks in that one message"
+    );
     assert_eq!(blocks[0]["type"], "tool_result");
     assert_eq!(blocks[0]["tool_use_id"], "t1");
     assert_eq!(blocks[1]["is_error"], true, "error flag rides the block");
@@ -125,10 +129,7 @@ fn openai_body_matches_vendored_schema_and_semantics() {
         "openai tool content is a string (D10)"
     );
     assert!(
-        msgs[4]["content"]
-            .as_str()
-            .unwrap()
-            .starts_with("[error]"),
+        msgs[4]["content"].as_str().unwrap().starts_with("[error]"),
         "error tool results are marked in-band"
     );
 }
