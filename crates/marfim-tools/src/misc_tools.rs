@@ -379,6 +379,7 @@ mod tests {
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
+            bash_default_timeout_ms: 120_000,
         }
     }
 
@@ -668,6 +669,7 @@ mod tests_extra {
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
+            bash_default_timeout_ms: 120_000,
         }
     }
 

@@ -7,14 +7,15 @@
 
 ```bash
 cargo build --release            # static marfim binary
-cargo test                       # 475 tests incl. 17 oracle-differential suites
+cargo test                       # 491 tests incl. 18 oracle-differential suites
 ./target/release/marfim doctor
 ./target/release/marfim -p "fix the failing test" --output-format stream-json
 ./target/release/marfim tui                    # ratatui over the session actor
-./target/release/marfim serve --port 7900      # HTTP+SSE gateway
+./target/release/marfim serve --port 7900      # HTTP+SSE gateway (bearer token auto-generated, printed once)
 ./target/release/marfim mcp                    # MCP server over stdio
 ./target/release/marfim lsp                    # LSP server over stdio
-./target/release/marfim acp                    # ACP agent over stdio
+./target/release/marfim acp                    # ACP agent over stdio (real session actor)
+./target/release/marfim agents                 # external agent catalog; `agents run <name> <prompt>` delegates one ACP turn
 ./target/release/marfim sessions               # list journals, --resume <id>
 ./target/release/marfim models                 # offline models.dev catalog
 ./target/release/marfim --routing bandit -p "…"  # UCB1 model routing
@@ -55,51 +56,49 @@ marfim doctor           # environment check
 ## Quick start
 
 ```bash
-# 1. pick any provider (20 presets; keys come from the standard env vars)
+# 1. pick any provider (9 presets; keys come from the standard env vars)
 export OPENROUTER_API_KEY=sk-or-...
-marfim models free                  # browse zero-cost models (models.dev catalog)
+marfim models                       # browse the models.dev catalog (free models included)
 marfim --provider openrouter --model deepseek/deepseek-chat-v3.1:free
 
 # 2. chat
 marfim                              # interactive REPL
 marfim -p "explain this repo"       # headless one-shot
-marfim -p "fix the failing test" -y --output-format json   # autonomous + JSON
+marfim -p "fix the failing test" --permission-mode bypass --output-format json   # autonomous + JSON
 
 # 3. sessions
-marfim session list
+marfim sessions
 marfim --resume last
 ```
 
 ### Example: wire up MCP servers + hooks + roles (`.marfim/config.toml`)
 
 ```toml
-default_provider = "groq"
-default_model    = "llama-3.3-70b-versatile"
-
-[model_roles]
-plan  = "openai/o4-mini"
-task  = "groq/llama-3.3-70b-versatile"
+provider = "groq"
+model    = "llama-3.3-70b-versatile"
+architectModel = "openai/o4-mini"    # plan subagents
+reviewModel    = "groq/llama-3.3-70b-versatile"
 
 [permissions]
 mode  = "accept-edits"
 allow = ["Bash(git *)", "Bash(pytest *)"]
 deny  = ["Bash(sudo *)", "Bash(rm -rf *)"]
 
-[mcp_servers.filesystem]
+[mcpServers.filesystem]
 command = "npx"
 args    = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 
 [hooks]
 PreToolUse = ["./examples/hooks/pre-tool-use-secret-guard.sh"]   # exit 2 vetoes the tool call
 
-[sandbox]
-mode = "bubblewrap"          # or "seatbelt" on macOS, "none" to disable
+[bash]
+defaultTimeoutMs = 120000
 ```
 
 ## Feature surface
 
 - **Providers** — OpenAI-compatible + Anthropic wire protocols (SSE streaming, tool calls,
-  usage accounting), 20 presets incl. local (Ollama/LM Studio/vLLM), live models.dev
+  usage accounting), 9 presets incl. local (Ollama/LM Studio/vLLM), live models.dev
   catalog (235 providers / 8,935 models) with 24h cache and offline fallback, free-model
   onboarding, custom `base_url` providers, mock provider for tests/CI.
 - **Agent loop** — streaming turns, tool dispatch with schema validation, exponential-backoff

@@ -130,6 +130,16 @@ impl StopReason {
     }
 }
 
+/// Sampling overrides applied to EVERY primary provider request (config
+/// truth: `maxTokens`/`temperature`/`thinkingBudget` from settings reach
+/// the wire instead of dying in an unused struct field).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Sampling {
+    pub max_completion_tokens: Option<u64>,
+    pub temperature: Option<f64>,
+    pub thinking_budget: Option<u64>,
+}
+
 pub struct Harness {
     pub bus: EventBus,
     pub router: Arc<RwLock<Router>>,
@@ -145,6 +155,8 @@ pub struct Harness {
     pub cancel: CancelToken,
     /// Per-step context-token threshold that triggers compaction (D4).
     pub compact_threshold_tokens: u64,
+    /// Sampling overrides for provider requests (config truth).
+    pub sampling: Sampling,
     /// Monotonic turn counter (TurnStarted/TurnEnded carry the real turn).
     pub turn_counter: AtomicU64,
     /// Tool calls denied by the permission engine this session (D12 exit 2).
@@ -238,6 +250,7 @@ impl Harness {
             history: Arc::new(RwLock::new(Vec::new())),
             cancel: CancelToken::default(),
             compact_threshold_tokens,
+            sampling: Sampling::default(),
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             verify_armed: AtomicBool::new(false),
@@ -371,7 +384,9 @@ impl Harness {
                 tools: self.tools.schemas(),
                 cache_breakpoints: true,
                 system: Some(system_prompt(&self.ctx)),
-                ..Default::default()
+                max_completion_tokens: self.sampling.max_completion_tokens,
+                temperature: self.sampling.temperature,
+                thinking_budget: self.sampling.thinking_budget,
             };
 
             // P4 pre_model hook (observational)
@@ -812,6 +827,31 @@ impl Harness {
         if last_step_input_tokens <= self.compact_threshold_tokens {
             return Ok(false);
         }
+        // Stage 1: micro-compaction — elide stale tool results (cheap,
+        // pure, no provider call). Protected tail keeps the live exchange
+        // intact; errors are never elided.
+        {
+            let mut history = self.history.write().await;
+            let removed =
+                crate::compact::micro_compact(&mut history, self.compact_threshold_tokens, 6);
+            if removed > 0 {
+                let after =
+                    (history.iter().map(|m| m.content.len() as u64).sum::<u64>()).div_ceil(4);
+                self.bus.publish(Event::Compaction {
+                    before_tokens: last_step_input_tokens,
+                    after_tokens: after,
+                });
+                self.journal_rec(&JournalRecord::Compaction {
+                    summary: format!(
+                        "micro-compaction: elided {removed} bytes of stale tool results"
+                    ),
+                })?;
+                if after <= self.compact_threshold_tokens {
+                    return Ok(true); // micro stage was enough
+                }
+            }
+        }
+        // Stage 2: full summarization via the Small role.
         let (summary, small_usage, small_model) = self.compact_via_small().await?;
         self.bus.publish(Event::Compaction {
             before_tokens: last_step_input_tokens,
@@ -1030,6 +1070,7 @@ mod tests {
             history: Arc::new(RwLock::new(Vec::new())),
             cancel: CancelToken::default(),
             compact_threshold_tokens: u64::MAX,
+            sampling: Sampling::default(),
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -1181,6 +1222,7 @@ mod tests {
             history: Arc::new(RwLock::new(Vec::new())),
             cancel: CancelToken::default(),
             compact_threshold_tokens: u64::MAX,
+            sampling: Sampling::default(),
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -1627,6 +1669,7 @@ mod tests {
             history: Arc::new(RwLock::new(Vec::new())),
             cancel: CancelToken::default(),
             compact_threshold_tokens: u64::MAX,
+            sampling: Sampling::default(),
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -1717,6 +1760,7 @@ mod tests {
             history: Arc::new(RwLock::new(Vec::new())),
             cancel: CancelToken::default(),
             compact_threshold_tokens: u64::MAX,
+            sampling: Sampling::default(),
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),

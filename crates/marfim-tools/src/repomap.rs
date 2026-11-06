@@ -201,8 +201,10 @@ fn strip<'a>(line: &'a str, kw: &str) -> Option<&'a str> {
     line.strip_prefix(kw)
 }
 
-/// Build the map: symbols per file ranked by how often their names are
-/// referenced by OTHER files. Output capped to `budget` lines.
+/// Build the map: symbols per file ranked by personalized PageRank over
+/// the file-level reference graph (a file references a symbol's definer →
+/// a directed edge; rank flows back to definers), with the reference
+/// count kept as a tiebreak. Output capped to `budget` lines.
 pub fn build(files: &[(std::path::PathBuf, String)], budget: usize) -> String {
     let mut symbols: BTreeMap<String, Vec<(std::path::PathBuf, usize)>> = BTreeMap::new();
     let mut all_text: Vec<(std::path::PathBuf, String)> = Vec::new();
@@ -215,8 +217,28 @@ pub fn build(files: &[(std::path::PathBuf, String)], budget: usize) -> String {
         }
         all_text.push((p.clone(), text.clone()));
     }
-    // reference counts: name mentioned in other files
-    let mut refs: Vec<(usize, String, &std::path::PathBuf, usize)> = Vec::new();
+    // file-level reference graph: edge src → dst when src mentions a
+    // symbol DEFINED in dst (src is not itself a definer of that symbol)
+    let mut graph: BTreeMap<usize, BTreeMap<usize, f64>> = BTreeMap::new();
+    for (name, defs) in &symbols {
+        for (p, text) in &all_text {
+            let in_this = defs.iter().any(|(dp, _)| dp == p);
+            if in_this || !text.contains(name.as_str()) {
+                continue;
+            }
+            let src = all_text.iter().position(|(q, _)| q == p).unwrap_or(0);
+            for (dp, _line) in defs {
+                let dst = all_text.iter().position(|(q, _)| q == dp).unwrap_or(0);
+                if src != dst {
+                    *graph.entry(src).or_default().entry(dst).or_insert(0.0) += 1.0;
+                }
+            }
+        }
+    }
+    let ranks = personalized_pagerank(&graph, all_text.len(), 40, 0.85);
+    // score per symbol definition: PageRank of its defining file, plus the
+    // plain cross-file reference count as a deterministic tiebreak
+    let mut refs: Vec<(f64, usize, String, &std::path::PathBuf, usize)> = Vec::new();
     for (name, defs) in &symbols {
         let mut count = 0usize;
         for (p, text) in &all_text {
@@ -226,12 +248,20 @@ pub fn build(files: &[(std::path::PathBuf, String)], budget: usize) -> String {
             }
         }
         for (p, line) in defs {
-            refs.push((count, name.clone(), p, *line));
+            let idx = all_text.iter().position(|(q, _)| q == p).unwrap_or(0);
+            let rank = ranks.get(idx).copied().unwrap_or(0.0);
+            refs.push((rank, count, name.clone(), p, *line));
         }
     }
-    refs.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    // sort: rank desc, then refs desc, then name asc (deterministic)
+    refs.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
     let mut out = String::new();
-    for (count, name, path, line) in refs.into_iter().take(budget) {
+    for (_rank, count, name, path, line) in refs.into_iter().take(budget) {
         out.push_str(&format!(
             "{}:{}: {} (refs: {count})\n",
             path.display(),
@@ -240,6 +270,44 @@ pub fn build(files: &[(std::path::PathBuf, String)], budget: usize) -> String {
         ));
     }
     out
+}
+
+/// Personalized PageRank over a directed weighted graph, uniform personal
+/// vector. Deterministic: BTreeMap iteration, fixed iteration count, no
+/// RNG. Convergence is bounded by `iters` (40 is plenty at damping 0.85
+/// for repo-sized graphs; the result is stable to well under the ranking
+/// resolution).
+fn personalized_pagerank(
+    graph: &BTreeMap<usize, BTreeMap<usize, f64>>,
+    n: usize,
+    iters: usize,
+    damping: f64,
+) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut rank = vec![1.0 / n as f64; n];
+    // precompute out-weights (deterministic order via BTreeMap)
+    let mut out_total = vec![0.0f64; n];
+    for (src, outs) in graph {
+        let t: f64 = outs.values().sum();
+        out_total[*src] = t;
+    }
+    for _ in 0..iters {
+        let mut next = vec![damping / n as f64; n];
+        for (src, outs) in graph {
+            let total = out_total[*src];
+            if total <= 0.0 {
+                continue;
+            }
+            let share = damping * rank[*src] / total;
+            for (dst, w) in outs {
+                next[*dst] += share * w;
+            }
+        }
+        rank = next;
+    }
+    rank
 }
 
 #[cfg(test)]
@@ -270,6 +338,51 @@ mod tests {
     #[test]
     fn unknown_language_is_empty() {
         assert!(extract(Path::new("a.txt"), "def f(): pass").is_empty());
+    }
+
+    #[test]
+    fn pagerank_ranks_hub_files_above_leaves() {
+        // hub.rs defines `hub_fn` referenced by four files; leaf.rs defines
+        // `leaf_fn` referenced by nobody. PageRank must put the hub first.
+        let files = vec![
+            (PathBuf::from("hub.rs"), "pub fn hub_fn() {}".to_string()),
+            (PathBuf::from("leaf.rs"), "pub fn leaf_fn() {}".to_string()),
+            (PathBuf::from("a.rs"), "fn x() { hub_fn(); }".to_string()),
+            (PathBuf::from("b.rs"), "fn y() { hub_fn(); }".to_string()),
+            (PathBuf::from("c.rs"), "fn z() { hub_fn(); }".to_string()),
+            (PathBuf::from("d.rs"), "fn w() { hub_fn(); }".to_string()),
+        ];
+        let map = build(&files, 10);
+        let hub_line = map
+            .lines()
+            .position(|l| l.contains("hub_fn"))
+            .unwrap_or(usize::MAX);
+        let leaf_line = map
+            .lines()
+            .position(|l| l.contains("leaf_fn"))
+            .unwrap_or(usize::MAX);
+        assert!(hub_line < leaf_line, "hub must outrank leaf:\n{map}");
+        // determinism: same input, same output
+        let again = build(&files, 10);
+        assert_eq!(map, again);
+    }
+
+    #[test]
+    fn pagerank_deterministic_on_cycle() {
+        // a→b→c→a cycle: every rank equal, order decided by the name
+        // tiebreak — and identical across calls.
+        let files = vec![
+            (PathBuf::from("x.rs"), "pub fn aa() {}".to_string()),
+            (
+                PathBuf::from("y.rs"),
+                "fn q() { aa(); } pub fn bb() {}".to_string(),
+            ),
+            (PathBuf::from("z.rs"), "fn r() { bb(); }".to_string()),
+        ];
+        let m1 = build(&files, 10);
+        let m2 = build(&files, 10);
+        assert_eq!(m1, m2);
+        assert!(!m1.is_empty());
     }
 
     #[test]

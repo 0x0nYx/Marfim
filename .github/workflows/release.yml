@@ -6,38 +6,58 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_INCREMENTAL: 0
 
 jobs:
   build:
     strategy:
       matrix:
         include:
+          # linux: TRUE static binaries (musl, no glibc tie-in)
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact: marfim-linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: marfim-linux-aarch64
+          # macOS: both architectures
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: marfim-macos-aarch64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: marfim-macos-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Build pinned binary for ${{ matrix.target }}
+        uses: houseabsolute/actions-rust-cross@v1
         with:
-          targets: ${{ matrix.target }}
-      - name: Build static binary
-        env:
-          CARGO_INCREMENTAL: 0
-        run: cargo build --release --target ${{ matrix.target }} -p marfim
-      - name: Collect artifact + checksum
+          command: build
+          target: ${{ matrix.target }}
+          profile: release
+          args: -p marfim
+      - name: Size gate (<25 MB)
         run: |
-          cp "target/${{ matrix.target }}/release/marfim" "${{ matrix.artifact }}"
-          sha256sum "${{ matrix.artifact }}" >> SHA256SUMS.txt || shasum -a 256 "${{ matrix.artifact }}" >> SHA256SUMS.txt
+          BIN="target/${{ matrix.target }}/release/marfim"
+          SIZE=$(stat -c%s "$BIN" 2>/dev/null || stat -f%z "$BIN")
+          echo "${{ matrix.artifact }}: $SIZE bytes"
+          test "$SIZE" -lt 26214400
+      - name: Version smoke
+        run: target/${{ matrix.target }}/release/marfim --version
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: target/${{ matrix.target }}/release/marfim
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            ${{ matrix.artifact }}
-            SHA256SUMS.txt
+          path: target/${{ matrix.target }}/release/marfim
+          if-no-files-found: error
 
   publish:
     needs: build
@@ -47,8 +67,24 @@ jobs:
         with:
           merge-multiple: true
           path: dist
+      - name: Stage assets
+        run: |
+          cd dist
+          for f in marfim-linux-x86_64 marfim-linux-aarch64 marfim-macos-aarch64 marfim-macos-x86_64; do
+            test -f "$f" || { echo "missing asset $f"; exit 1; }
+          done
+      - name: ONE SHA256SUMS covering every asset
+        run: |
+          cd dist
+          sha256sum marfim-linux-x86_64 marfim-linux-aarch64 marfim-macos-aarch64 marfim-macos-x86_64 > SHA256SUMS
+          cat SHA256SUMS
+          LINES=$(wc -l < SHA256SUMS)
+          test "$LINES" -eq 4
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/marfim-*
-            dist/SHA256SUMS.txt
+            dist/marfim-linux-x86_64
+            dist/marfim-linux-aarch64
+            dist/marfim-macos-aarch64
+            dist/marfim-macos-x86_64
+            dist/SHA256SUMS

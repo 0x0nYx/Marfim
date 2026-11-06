@@ -71,6 +71,9 @@ pub struct ToolCtx {
     pub last_repomap: std::sync::Arc<std::sync::Mutex<String>>,
     /// D16: real subagent spawner (UnwiredSubagents by default).
     pub subagent: std::sync::Arc<dyn crate::subagent::SubagentSpawner>,
+    /// Config truth: `bash.defaultTimeoutMs` reaches the Bash tool here
+    /// (explicit per-call `timeout_ms` still wins).
+    pub bash_default_timeout_ms: u64,
 }
 
 impl Default for ToolCtx {
@@ -87,6 +90,7 @@ impl Default for ToolCtx {
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
+            bash_default_timeout_ms: 120_000,
         }
     }
 }

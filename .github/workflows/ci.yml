@@ -7,7 +7,8 @@ on:
 
 jobs:
   # Pinned toolchain (rust-toolchain.toml): fmt + clippy -D warnings +
-  # full tests + release size budget, on both CI operating systems.
+  # full tests (incl. wire-golden differentials + docs-as-tests) + release
+  # size budget, on both CI operating systems.
   pinned:
     strategy:
       fail-fast: false
@@ -25,7 +26,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
-      - name: Tests (incl. wire-golden differentials, loopback only)
+      - name: Tests (incl. wire-golden differentials, docs-as-tests)
         run: cargo test --all
       - name: Release binary + size budget
         run: |

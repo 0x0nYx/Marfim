@@ -845,7 +845,14 @@ pub async fn dispatch(
             }
         }
         "cron" => "no cron facility in this build — schedule via your OS (crontab/systemd)".into(),
-        "swarm" => "swarm/distswarm land with the brain wave (Phase 4 port of src/core)".into(),
+        "swarm" => {
+            // honest: the swarm/distswarm oracle port is not in this build
+            // (the preservation bundle was never delivered); nothing is
+            // faked here — the command states its absence plainly.
+            "swarm/distswarm is not available in this build (oracle preservation \
+             bundle missing; see docs/PORT-LEDGER.md 'Not yet ported')"
+                .into()
+        }
 
         // ---------------------------------------------------------- repo
         "commit" | "diff" | "diffs" | "sdiff" => {
@@ -889,7 +896,47 @@ pub async fn dispatch(
                 harness.ctx.session_id
             )
         }
-        "theme" => format!("theme: {} (TUI palette lands with the ratatui wave)", settings.theme),
+        "theme" => {
+            // The TUI palette is live (Palette::from_theme): validate the
+            // requested accent against the real theme set.
+            let known = [
+                "default",
+                "cyan",
+                "red",
+                "green",
+                "blue",
+                "magenta",
+                "yellow",
+                "white",
+                "gray",
+                "grey",
+                "dark-gray",
+                "darkgrey",
+                "light-red",
+                "light-green",
+                "light-blue",
+                "light-cyan",
+                "light-magenta",
+                "light-yellow",
+            ];
+            let requested = rest.split_whitespace().next().unwrap_or("");
+            if requested.is_empty() {
+                format!(
+                    "theme: {} (accent set in config `[theme]`; NO_COLOR forces monochrome; known accents: {})",
+                    settings.theme,
+                    known.join(", ")
+                )
+            } else if known.contains(&requested.to_ascii_lowercase().as_str()) {
+                format!(
+                    "theme: {requested} — applies to the TUI palette on next session start (set `theme = \"{requested}\"` in config to persist)"
+                )
+            } else {
+                let hint = marfim_core::levenshtein::did_you_mean(requested, known.as_slice())
+                    .map(|s| format!(" (did you mean `{s}`?)"))
+                    .unwrap_or_default();
+                format!("unknown theme `{requested}`{hint}; known: {}", known.join(", "))
+            }
+        }
         "profile" => format!(
             "profile: provider {} model {} (failover entries: {})",
             settings.provider_name,

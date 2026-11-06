@@ -261,6 +261,159 @@ pub fn external_agent_catalog() -> Vec<AgentProfile> {
     out
 }
 
+/// Drive ONE prompt turn against an external ACP agent over stdio.
+/// Returns (concatenated text updates, stopReason). Fails closed on any
+/// protocol deviation — a broken agent never hangs the caller.
+pub fn acp_client_turn(
+    cmd: &str,
+    args: &[String],
+    prompt: &str,
+    workdir: &std::path::Path,
+) -> Result<(String, String), String> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(cmd)
+        .args(args)
+        .current_dir(workdir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("spawn {cmd}: {e}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "agent stdin unavailable".to_string())?;
+    let send = |stdin: &mut std::process::ChildStdin, v: Value| -> Result<(), String> {
+        writeln!(stdin, "{v}").map_err(|e| format!("agent write: {e}"))
+    };
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+                           "params":{"protocolVersion":1}}),
+    )?;
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc":"2.0","id":2,"method":"session/new",
+                           "params":{"cwd": workdir.display().to_string()}}),
+    )?;
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"session/prompt",
+                           "params":{"content":[{"type":"text","text":prompt}]}}),
+    )?;
+    // stdin closed: an agent that awaits more input still terminates.
+    drop(stdin);
+
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "agent stdout unavailable".to_string())?;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut read_byte = || -> std::io::Result<Option<u8>> {
+        use std::io::Read;
+        let mut b = [0u8; 1];
+        match stdout.read(&mut b)? {
+            0 => Ok(None),
+            _ => Ok(Some(b[0])),
+        }
+    };
+    let mut text = String::new();
+    let mut stop = String::new();
+    // newline-delimited JSON only (our agents use `acp` = newline mode)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("agent turn exceeded 300s".into());
+        }
+        let byte = match read_byte() {
+            Ok(Some(b)) => b,
+            Ok(None) => break,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("agent read: {e}"));
+            }
+        };
+        if byte != b'\n' {
+            buf.push(byte);
+            continue;
+        }
+        if buf.is_empty() {
+            continue;
+        }
+        let line = String::from_utf8_lossy(&buf).to_string();
+        buf.clear();
+        let v: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue, // noise lines are skipped, never fatal
+        };
+        if v["method"] == "session/update" {
+            if let Some(t) = v["params"]["update"]["content"]["text"].as_str() {
+                text.push_str(t);
+            }
+        } else if v["id"] == 3 {
+            stop = v["result"]["stopReason"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+            break;
+        } else if v["error"].is_object() {
+            let msg = v["error"]["message"].as_str().unwrap_or("agent error");
+            let _ = child.wait();
+            return Err(msg.to_string());
+        }
+    }
+    let _ = child.wait();
+    if stop.is_empty() {
+        return Err("agent closed before answering".into());
+    }
+    Ok((text, stop))
+}
+
+/// `marfim agents run <name> <prompt>`: gate on the catalog (fail-closed:
+/// disabled/unverified agents refuse), isolate in a worktree for git
+/// repos, then delegate the turn over ACP. The caller prints the result —
+/// the same shape a permission-gated tool result would carry.
+pub fn run_external_agent(name: &str, prompt: &str) -> Result<String, String> {
+    let cat = external_agent_catalog();
+    let profile = cat
+        .iter()
+        .find(|(n, _, _, _, _)| n == name)
+        .ok_or_else(|| {
+            format!(
+                "unknown agent `{name}` (known: {})",
+                cat.iter()
+                    .map(|(n, _, _, _, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+    let (name, cmd, args, enabled, verified) = profile;
+    if !enabled {
+        return Err(format!(
+            "agent `{name}` is not enabled: the `{cmd}` binary is not on PATH"
+        ));
+    }
+    if !verified {
+        return Err(format!(
+            "agent `{name}` is present but UNVERIFIED (no-invention rule): confirm its ACP flags before delegation"
+        ));
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let guard = marfim_tools::subagent::WorktreeGuard::create(&cwd)
+        .map_err(|e| format!("worktree isolation refused: {e}"))?;
+    let (text, stop) = acp_client_turn(cmd, args, prompt, &guard.path)?;
+    if stop != "end_turn" {
+        return Err(format!(
+            "agent {name} stopped: {stop}; partial output:\n{text}"
+        ));
+    }
+    Ok(text)
+}
+
 fn which(binary: &str) -> bool {
     if binary.contains('/') {
         return std::path::Path::new(binary).exists();

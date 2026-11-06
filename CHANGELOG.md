@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — engineering round 2 (2026-11-06)
+## 1.0.0 — engineering round 2 (2026-11-06)
 
 ### Step 2: MCP wired end-to-end
 - `McpClient` connects per config `mcpServers` — stdio AND streamable
@@ -105,11 +105,14 @@
   (public; 478 Python files; `assistant/core/*.py` matches the
   `Python origin:` headers embedded in the oracle's `src/intel`).
 
-## 1.0.0 — one binary, one brain (2026-11-05)
+### 1.0.0 baseline — one binary, one brain (2026-11-05)
 
 The terminal 1.0.0: a single Rust workspace, a single static `marfim`
 binary, and the intelligence modules ported differentially from the Node
-oracle. 475 tests green. The Python harness and its test suite are gone
+oracle. 501 tests green across 6 crates. This hardening pass also made
+the P1 gateway contract real (hyper + SessionHost + token auth), applied
+config truth to the wire, and replaced doc claims with docs-as-tests. The
+Python harness and its test suite are gone
 (the porting reference lives in git history under the `archive/` tags
 and in the preservation bundles).
 

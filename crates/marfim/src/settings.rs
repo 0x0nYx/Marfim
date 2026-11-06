@@ -11,71 +11,6 @@ use marfim_core::router::ModelEntry;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Every flag the CLI defines — the coverage test asserts this list is
-/// exactly `Cli::command()`'s argument ids.
-#[allow(dead_code)] // consumed by the coverage test below
-pub const CONSUMED_FLAGS: &[&str] = &[
-    "prompt",
-    "output_format",
-    "input_format",
-    "model",
-    "provider",
-    "resume",
-    "permission_mode",
-    "cwd",
-    "title",
-    "profile",
-    "budget",
-    "routing",
-    "failover",
-    "glob",
-    "on_fail",
-    "debounce",
-    "port",
-    "host",
-    "token",
-    "max_mode",
-    "vars",
-    "days",
-    "help",
-    "version",
-];
-
-/// Config keys read by `effective()` — the coverage test asserts this list
-/// covers every entry of `KNOWN_KEYS` that can meaningfully be consumed.
-#[allow(dead_code)] // consumed by the coverage test below
-pub const CONSUMED_CONFIG_KEYS: &[&str] = &[
-    "model",
-    "provider",
-    "providers",
-    "smallModel",
-    "architectModel",
-    "reviewModel",
-    "failover",
-    "budget",
-    "permissions",
-    "sandbox",
-    "bash",
-    "tools",
-    "mcpServers",
-    "hooks",
-    "lsp",
-    "wal",
-    "compaction",
-    "autoCompactThreshold",
-    "steerMode",
-    "stream",
-    "theme",
-    "env",
-    "skills",
-    "verify",
-    "unattended",
-    "verbose",
-    "maxTokens",
-    "temperature",
-    "thinkingBudget",
-];
-
 #[derive(Parser, Clone)]
 #[command(
     name = "marfim",
@@ -131,9 +66,6 @@ pub struct Cli {
     #[arg(long = "on-fail", default_value = "continue")]
     pub on_fail: String,
 
-    #[arg(long = "debounce")]
-    pub debounce: Option<f64>,
-
     #[arg(long = "port", default_value_t = 7900)]
     pub port: u16,
 
@@ -156,6 +88,19 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+#[derive(Clone, Subcommand)]
+pub enum AgentsCmd {
+    /// List known external agents and their gate state
+    List,
+    /// Delegate ONE prompt turn to an external agent over ACP
+    Run {
+        /// Profile name from the catalog (opencode, hermes)
+        agent: String,
+        /// The prompt (single argument; quote it)
+        prompt: String,
+    },
+}
+
 #[derive(Subcommand, Clone)]
 pub enum Command {
     /// HTTP+SSE gateway backed by the real session actor
@@ -170,8 +115,12 @@ pub enum Command {
     Tui,
     /// Inspect/configure marfim (doctor, config get/set)
     Doctor,
-    /// Manage external agent profiles (list)
-    Agents,
+    /// Manage external agent profiles: list, or run <name> <prompt> to
+    /// delegate one ACP turn (worktree-isolated, fail-closed gates)
+    Agents {
+        #[command(subcommand)]
+        cmd: Option<AgentsCmd>,
+    },
     /// Show session journals
     Sessions,
     /// List models from the offline models.dev catalog (--provider filters)
@@ -442,48 +391,27 @@ pub struct EffectiveSettings {
     pub budgeted: bool,
     /// "chain" | "bandit" (P3 UCB1 routing).
     pub routing: String,
-    // Consumed from config (D13 coverage) and carried for the Phase 3
-    // provider-request wiring; not yet read downstream.
-    #[allow(dead_code)]
+    // Sampling overrides: consumed by the Harness (config truth) — every
+    // primary request carries maxTokens/temperature/thinkingBudget.
     pub max_tokens: Option<u64>,
-    #[allow(dead_code)]
     pub temperature: Option<f64>,
-    #[allow(dead_code)]
     pub thinking_budget: Option<u64>,
     pub compact_threshold_tokens: u64,
     pub stream: bool,
-    // Carried for the Phase 6 TUI palette wiring; not yet read downstream.
-    #[allow(dead_code)]
+    // Consumed by the TUI palette (`Palette::detect`) and /theme.
     pub theme: String,
-    // Consumed from config/CLI (D13 coverage); surfaced by the Phase 6 UI.
-    #[allow(dead_code)]
+    // Consumed by the headless/REPL printers (full tool calls + results).
     pub verbose: bool,
     pub verify_commands: Option<Vec<String>>,
     pub stop_on_tool_error: bool,
-    // Consumed from config (D13); wired as the Bash default in Phase 5.
-    #[allow(dead_code)]
+    // Consumed by build_session: the Bash tool's default timeout.
     pub bash_default_timeout_ms: u64,
     pub cwd: PathBuf,
     pub title: Option<String>,
     pub resume: Option<String>,
     pub output_format: String,
-    // Consumed from CLI (D13); stdin ingestion modes land with Phase 2.
-    #[allow(dead_code)]
-    pub input_format: String,
     pub prompt: Option<String>,
     pub prompt_vars: Vec<(String, String)>,
-    // Consumed from CLI (D13 consumption contract); the subcommands read
-    // these from `Cli` directly until the Phase 2 session actor unifies them.
-    #[allow(dead_code)]
-    pub days: u32,
-    #[allow(dead_code)]
-    pub port: u16,
-    #[allow(dead_code)]
-    pub host: String,
-    #[allow(dead_code)]
-    pub token: Option<String>,
-    #[allow(dead_code)]
-    pub debounce: Option<f64>,
 }
 
 /// Permission rules from the config `permissions` section only (no CLI):
@@ -766,14 +694,8 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         title: cli.title.clone(),
         resume: cli.resume.clone().filter(|s| !s.is_empty()),
         output_format: cli.output_format.clone(),
-        input_format: cli.input_format.clone(),
         prompt: cli.prompt.clone(),
         prompt_vars,
-        days: cli.days,
-        port: cli.port,
-        host: cli.host.clone(),
-        token: cli.token.clone(),
-        debounce: cli.debounce,
     })
 }
 
@@ -819,6 +741,66 @@ pub fn build_small_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// D13 coverage lists live with the tests that enforce them: parsed-
+    /// but-unread flags/keys are bugs, not dead-code suppressions.
+    pub const CONSUMED_FLAGS: &[&str] = &[
+        "prompt",
+        "output_format",
+        "input_format",
+        "model",
+        "provider",
+        "resume",
+        "permission_mode",
+        "cwd",
+        "title",
+        "profile",
+        "budget",
+        "routing",
+        "failover",
+        "glob",
+        "on_fail",
+        "port",
+        "host",
+        "token",
+        "max_mode",
+        "vars",
+        "days",
+        "help",
+        "version",
+    ];
+
+    pub const CONSUMED_CONFIG_KEYS: &[&str] = &[
+        "model",
+        "provider",
+        "providers",
+        "smallModel",
+        "architectModel",
+        "reviewModel",
+        "failover",
+        "budget",
+        "permissions",
+        "sandbox",
+        "bash",
+        "tools",
+        "mcpServers",
+        "hooks",
+        "lsp",
+        "wal",
+        "compaction",
+        "autoCompactThreshold",
+        "steerMode",
+        "stream",
+        "theme",
+        "env",
+        "skills",
+        "verify",
+        "unattended",
+        "verbose",
+        "maxTokens",
+        "temperature",
+        "thinkingBudget",
+    ];
+
     use clap::CommandFactory;
 
     fn cli() -> Cli {
@@ -960,6 +942,86 @@ mod tests {
             let s = p.chat_step(&make_req()).await.unwrap();
             assert_eq!(s.blocks.len(), 1);
         });
+    }
+
+    #[test]
+    fn preset_count_claim_matches_the_builtin_table() {
+        // docs-as-tests: the README preset count is GENERATED, never
+        // hand-counted — drift is a test failure.
+        let readme =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
+                .unwrap_or_else(|e| panic!("read README: {e}"));
+        let mut claimed: Option<u32> = None;
+        for line in readme.lines() {
+            if let Some(idx) = line.find(" presets") {
+                let before = &line[..idx];
+                let digits: String = before
+                    .chars()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                if !digits.is_empty() {
+                    claimed = digits.parse::<u32>().ok();
+                }
+            }
+        }
+        let actual = builtin_presets().len() as u32;
+        let claimed = claimed.unwrap_or_else(|| panic!("README must state the preset count"));
+        assert_eq!(
+            claimed, actual,
+            "README claims {claimed} presets, builtin_presets() has {actual}"
+        );
+    }
+
+    #[test]
+    fn one_version_source_across_cli_and_changelog() {
+        let cli = Cli::command();
+        let ver = cli
+            .get_version()
+            .unwrap_or_else(|| panic!("Cli must declare its version"))
+            .to_string();
+        assert_eq!(ver, env!("CARGO_PKG_VERSION"));
+        let changelog =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md"))
+                .unwrap_or_else(|e| panic!("read CHANGELOG: {e}"));
+        let top = changelog
+            .lines()
+            .find(|l| l.starts_with("## "))
+            .unwrap_or_else(|| panic!("CHANGELOG must have a `## X.Y.Z` entry"));
+        let claimed = top
+            .trim_start_matches("## ")
+            .split([' ', '-'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_start_matches('v');
+        assert_eq!(
+            claimed,
+            env!("CARGO_PKG_VERSION"),
+            "CHANGELOG top `{claimed}` must equal workspace version"
+        );
+    }
+
+    #[test]
+    fn every_subcommand_declares_help() {
+        let cmd = Cli::command();
+        for sub in cmd.get_subcommands() {
+            let name = sub.get_name().to_string();
+            assert!(
+                sub.get_about().is_some() || sub.get_long_about().is_some(),
+                "subcommand `{name}` ships without help text"
+            );
+            for sub2 in sub.get_subcommands() {
+                let n2 = format!("{name} {}", sub2.get_name());
+                assert!(
+                    sub2.get_about().is_some() || sub2.get_long_about().is_some(),
+                    "subcommand `{n2}` ships without help text"
+                );
+            }
+        }
     }
 
     fn make_req() -> marfim_core::providers::ChatRequest {

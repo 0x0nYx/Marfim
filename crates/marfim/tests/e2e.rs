@@ -361,6 +361,35 @@ fn serve_healthz_on_loopback() {
         "healthz never healthy: {text}"
     );
     assert!(text.contains("version"), "{text}");
+
+    // P1 hardening contract: a 1 TiB declared body must 413 (never OOM,
+    // never a hang) and the process must SURVIVE the abuse.
+    let mut oversized = String::new();
+    for _ in 0..10 {
+        if let Ok(mut s) = TcpStream::connect("127.0.0.1:17999") {
+            s.write_all(
+                b"POST /v1/prompt HTTP/1.1\r\nHost: 127.0.0.1:17999\r\nAuthorization: Bearer e2e-token\r\nContent-Length: 1099511627776\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+            let mut buf = vec![0u8; 2048];
+            let n = std::io::Read::read(&mut s, &mut buf).unwrap_or(0);
+            oversized = String::from_utf8_lossy(&buf[..n]).to_string();
+            if oversized.contains("413") {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(
+        oversized.contains("413"),
+        "oversized Content-Length must 413, got: {oversized}"
+    );
+    let still_alive = child.try_wait().unwrap_or(None);
+    assert!(
+        still_alive.is_none(),
+        "serve died under adversarial input: {still_alive:?}"
+    );
+
     let _ = child.kill();
     let _ = child.wait();
 }

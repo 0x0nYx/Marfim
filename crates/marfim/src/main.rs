@@ -79,7 +79,7 @@ async fn async_main(cli: Cli) -> i32 {
             }
         },
         Some(Command::Doctor) => doctor_cmd(&cli, &config, &cwd, cwd_trust, &loaded_layers),
-        Some(Command::Agents) => agents_cmd(),
+        Some(Command::Agents { cmd }) => agents_cmd(cmd.clone()),
         Some(Command::Sessions) => sessions_cmd(&cli),
         Some(Command::Models) => models_cmd(&cli),
         Some(Command::SandboxExec { roots, cmd }) => sandbox_exec_cmd(roots, cmd),
@@ -497,6 +497,7 @@ async fn build_session(
         monitors: Arc::new(Default::default()),
         last_repomap: Arc::new(Default::default()),
         subagent: subagents.clone(),
+        bash_default_timeout_ms: settings.bash_default_timeout_ms,
     };
     let mut host = HostTools::new(
         perm.clone(),
@@ -589,7 +590,7 @@ async fn build_session(
         cwd: settings.cwd.to_string_lossy().to_string(),
         cancel: marfim_core::loop_::CancelToken::default(),
     };
-    let harness = Arc::new(Harness::new(
+    let mut harness = Harness::new(
         bus.clone(),
         Arc::new(tokio::sync::RwLock::new(router)),
         Arc::new(host),
@@ -600,7 +601,14 @@ async fn build_session(
         3,
         settings.compact_threshold_tokens,
         settings.stop_on_tool_error,
-    ));
+    );
+    // Config truth: sampling overrides reach every provider request.
+    harness.sampling = marfim_core::loop_::Sampling {
+        max_completion_tokens: settings.max_tokens,
+        temperature: settings.temperature,
+        thinking_budget: settings.thinking_budget,
+    };
+    let harness = Arc::new(harness);
     // P2 resume semantics: a resumed session rebuilds its conversation
     // history from the journal (user/assistant turns + compaction
     // summaries) — otherwise --resume would forget everything.
@@ -651,6 +659,7 @@ async fn headless_text(
     let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let stream = settings.stream;
+    let verbose = settings.verbose;
     let printer = tokio::spawn(async move {
         loop {
             match sub.recv().await {
@@ -668,6 +677,9 @@ async fn headless_text(
                     } => {
                         if is_error {
                             eprintln!("[{tool}] error: {output}");
+                        } else if verbose {
+                            // verbose config: full tool results on stderr
+                            eprintln!("[{tool}] {output}");
                         }
                     }
                     Event::Error { message, .. } => eprintln!("error: {message}"),
@@ -786,7 +798,7 @@ async fn headless_stream_json(
 
 /// D14: ONE place where REPL events become terminal output. Errors and
 /// tool failures go to stderr; assistant text and stream deltas to stdout.
-fn print_repl_event(ev: &Event, stream: bool) {
+fn print_repl_event(ev: &Event, stream: bool, verbose: bool) {
     match ev {
         Event::StreamDelta { text, .. } if stream => {
             print!("{text}");
@@ -805,6 +817,14 @@ fn print_repl_event(ev: &Event, stream: bool) {
             is_error: true,
             ..
         } => {
+            eprintln!("[{tool}] {output}");
+        }
+        Event::ToolCallResult {
+            tool,
+            output,
+            is_error: false,
+            ..
+        } if verbose => {
             eprintln!("[{tool}] {output}");
         }
         _ => {}
@@ -875,7 +895,7 @@ async fn repl(_cli: Cli, config: Config, settings: EffectiveSettings) -> i32 {
                                 if matches!(ev, Event::TurnEnded { .. }) {
                                     break;
                                 }
-                                print_repl_event(&ev, settings.stream);
+                                print_repl_event(&ev, settings.stream, settings.verbose);
                             }
                             // D14: non-EndTurn stops are printed as errors —
                             // unless the very same error was already printed
@@ -900,7 +920,7 @@ async fn repl(_cli: Cli, config: Config, settings: EffectiveSettings) -> i32 {
                                     if let Event::Error { message, .. } = &ev {
                                         turn_err = Some(message.clone());
                                     }
-                                    print_repl_event(&ev, settings.stream);
+                                    print_repl_event(&ev, settings.stream, settings.verbose);
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                                 Err(_) => break,
@@ -988,12 +1008,32 @@ fn doctor_cmd(
     0
 }
 
-fn agents_cmd() -> i32 {
-    println!("external agent profiles (no-invention rule: unverified until owner runs them):");
-    for (name, cmd, args, enabled, verified) in marfim_gateway::acp::external_agent_catalog() {
-        println!("  {name}: {cmd} {args:?} enabled={enabled} verified={verified}");
+fn agents_cmd(cmd: Option<settings::AgentsCmd>) -> i32 {
+    match cmd {
+        None | Some(settings::AgentsCmd::List) => {
+            println!(
+                "external agent profiles (no-invention rule: unverified until owner runs them):"
+            );
+            for (name, cmd, args, enabled, verified) in
+                marfim_gateway::acp::external_agent_catalog()
+            {
+                println!("  {name}: {cmd} {args:?} enabled={enabled} verified={verified}");
+            }
+            0
+        }
+        Some(settings::AgentsCmd::Run { agent, prompt }) => {
+            match marfim_gateway::acp::run_external_agent(&agent, &prompt) {
+                Ok(text) => {
+                    println!("{text}");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    1
+                }
+            }
+        }
     }
-    0
 }
 
 fn sandbox_exec_cmd(roots: &[String], cmd: &[String]) -> i32 {

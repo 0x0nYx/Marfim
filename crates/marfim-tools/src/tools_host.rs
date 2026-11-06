@@ -516,7 +516,9 @@ impl ToolHost for HostTools {
         let out: ToolOutput = match (tool, self.registry.get(tool)) {
             ("Bash", _) => {
                 let cmd = args["command"].as_str().unwrap_or("").to_string();
-                let timeout = args["timeout_ms"].as_u64().unwrap_or(120_000);
+                let timeout = args["timeout_ms"]
+                    .as_u64()
+                    .unwrap_or(self.state.bash_default_timeout_ms);
                 let ctx = self.state.clone();
                 let cwd = if session.cwd.is_empty() {
                     self.state.cwd.to_string_lossy().to_string()
@@ -668,6 +670,7 @@ mod tests {
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
+            bash_default_timeout_ms: 120_000,
         };
         (
             Arc::new(HostTools::new(
@@ -749,6 +752,7 @@ mod tests {
             monitors: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
+            bash_default_timeout_ms: 120_000,
         };
         let h = HostTools::new(
             Arc::new(perm),
