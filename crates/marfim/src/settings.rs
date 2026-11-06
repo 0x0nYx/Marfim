@@ -76,7 +76,7 @@ pub const CONSUMED_CONFIG_KEYS: &[&str] = &[
     "thinkingBudget",
 ];
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[command(
     name = "marfim",
     version = marfim_core::VERSION,
@@ -156,7 +156,7 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub enum Command {
     /// HTTP+SSE gateway backed by the real session actor
     Serve,

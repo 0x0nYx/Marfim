@@ -72,6 +72,10 @@ pub struct SessionSnapshot {
     pub pending_approvals: usize,
     pub turn_running: bool,
     pub cancelled: bool,
+    /// Tool calls denied by the permission engine this session (D12).
+    pub denied_tools: u64,
+    /// Tool calls executed this session (D12 exit-code bookkeeping).
+    pub executed_tools: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,20 +95,21 @@ pub struct ForkOutcome {
 /// Handle to a running session actor.
 pub struct SessionHandle {
     pub commands: mpsc::Sender<SessionCommand>,
-    /// Approval jobs forwarded from the permission engine, in arrival
-    /// order. Answer via `Approve` commands.
-    pub approvals: mpsc::Receiver<ApprovalJob>,
     pub journal_path: PathBuf,
     pub session_id: String,
 }
 
 /// Spawn the actor. `session_id` is used for snapshots / fork naming.
+/// Returns the actor handle plus the approval-job receiver (the owner of
+/// the session — TUI or SessionHost — decides who drains it; taking it
+/// out of the handle keeps ownership explicit instead of hidden behind
+/// `&mut` access through an `Arc`).
 pub fn spawn_session(
     harness: Arc<Harness>,
     approval_rx: mpsc::Receiver<ApprovalJob>,
     session_id: String,
     journal_path: PathBuf,
-) -> SessionHandle {
+) -> (SessionHandle, mpsc::Receiver<ApprovalJob>) {
     let (tx, rx) = mpsc::channel::<SessionCommand>(64);
     let (atx, arx) = mpsc::channel::<ApprovalJob>(64);
     tokio::spawn(session_actor(
@@ -115,12 +120,14 @@ pub fn spawn_session(
         session_id.clone(),
         journal_path.clone(),
     ));
-    SessionHandle {
-        commands: tx,
-        approvals: arx,
-        journal_path,
-        session_id,
-    }
+    (
+        SessionHandle {
+            commands: tx,
+            journal_path,
+            session_id,
+        },
+        arx,
+    )
 }
 
 struct ActorState {
@@ -162,6 +169,14 @@ impl ActorState {
             pending_approvals: self.pending_approvals.len(),
             turn_running: self.active_turn.is_some(),
             cancelled: self.harness.cancel.is_cancelled(),
+            denied_tools: self
+                .harness
+                .denied_tools
+                .load(std::sync::atomic::Ordering::SeqCst),
+            executed_tools: self
+                .harness
+                .executed_tools
+                .load(std::sync::atomic::Ordering::SeqCst),
         }
     }
 }
@@ -627,7 +642,8 @@ mod tests {
         let dir = tmpdir("basic");
         let h = harness_with(vec![step_text("hello there")], &dir, "s1");
         let (_dead_tx, approval_rx) = mpsc::channel::<ApprovalJob>(1);
-        let handle = spawn_session(h.clone(), approval_rx, "s1".into(), dir.join("s1.jsonl"));
+        let (handle, _approval_sink) =
+            spawn_session(h.clone(), approval_rx, "s1".into(), dir.join("s1.jsonl"));
         let (tx, rxx) = oneshot::channel();
         handle
             .commands
@@ -656,7 +672,8 @@ mod tests {
         let dir = tmpdir("busy");
         let h = harness_with(vec![step_text("a")], &dir, "s2");
         let (_dead_tx, approval_rx) = mpsc::channel::<ApprovalJob>(1);
-        let handle = spawn_session(h.clone(), approval_rx, "s2".into(), dir.join("s2.jsonl"));
+        let (handle, _approval_sink) =
+            spawn_session(h.clone(), approval_rx, "s2".into(), dir.join("s2.jsonl"));
         // saturate the actor with two prompts without awaiting the first
         let (tx1, r1) = oneshot::channel();
         handle
@@ -688,7 +705,8 @@ mod tests {
         let h = harness_with(vec![step_text("reply-1"), step_text("reply-2")], &dir, "s3");
         let (_dead_tx, approval_rx) = mpsc::channel::<ApprovalJob>(1);
         let jp = dir.join("s3.jsonl");
-        let handle = spawn_session(h.clone(), approval_rx, "s3".into(), jp.clone());
+        let (handle, _approval_sink) =
+            spawn_session(h.clone(), approval_rx, "s3".into(), jp.clone());
         for t in ["turn one", "turn two"] {
             let (tx, r) = oneshot::channel();
             handle
@@ -753,7 +771,8 @@ mod tests {
             "s4",
         );
         let (_dead_tx, approval_rx) = mpsc::channel::<ApprovalJob>(1);
-        let handle = spawn_session(h.clone(), approval_rx, "s4".into(), dir.join("s4.jsonl"));
+        let (handle, _approval_sink) =
+            spawn_session(h.clone(), approval_rx, "s4".into(), dir.join("s4.jsonl"));
         for t in ["t1", "t2", "t3"] {
             let (tx, r) = oneshot::channel();
             handle
@@ -797,7 +816,8 @@ mod tests {
         let h = harness_with(vec![step_text("r1")], &dir, "s5");
         let (_dead_tx, approval_rx) = mpsc::channel::<ApprovalJob>(1);
         let jp = dir.join("s5.jsonl");
-        let handle = spawn_session(h.clone(), approval_rx, "s5".into(), jp.clone());
+        let (handle, _approval_sink) =
+            spawn_session(h.clone(), approval_rx, "s5".into(), jp.clone());
         let (tx, r) = oneshot::channel();
         handle
             .commands
@@ -841,7 +861,8 @@ mod tests {
         let h = harness_with(vec![step_text("r1"), step_text("r2")], &dir, "s6");
         let (_dead_tx, approval_rx) = mpsc::channel::<ApprovalJob>(1);
         let jp = dir.join("s6.jsonl");
-        let handle = spawn_session(h.clone(), approval_rx, "s6".into(), jp.clone());
+        let (handle, _approval_sink) =
+            spawn_session(h.clone(), approval_rx, "s6".into(), jp.clone());
         for t in ["t1", "t2"] {
             let (tx, r) = oneshot::channel();
             handle
@@ -873,7 +894,8 @@ mod tests {
         // no sleep needed: cancel BEFORE the prompt makes run_turn abort
         // instantly; the waiter must fire from the turn-done path anyway.
         let (_dead_tx, approval_rx) = mpsc::channel::<ApprovalJob>(1);
-        let handle = spawn_session(h.clone(), approval_rx, "s7".into(), dir.join("s7.jsonl"));
+        let (handle, _approval_sink) =
+            spawn_session(h.clone(), approval_rx, "s7".into(), dir.join("s7.jsonl"));
         // cancel while idle → immediate
         let (cx, cr) = oneshot::channel();
         handle
@@ -901,7 +923,8 @@ mod tests {
         let dir = tmpdir("steer");
         let h = harness_with(vec![step_text("r1"), step_text("r2")], &dir, "s8");
         let (_dead_tx, approval_rx) = mpsc::channel::<ApprovalJob>(1);
-        let handle = spawn_session(h.clone(), approval_rx, "s8".into(), dir.join("s8.jsonl"));
+        let (handle, _approval_sink) =
+            spawn_session(h.clone(), approval_rx, "s8".into(), dir.join("s8.jsonl"));
         handle
             .commands
             .send(SessionCommand::Steer {

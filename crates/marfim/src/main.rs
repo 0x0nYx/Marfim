@@ -19,6 +19,8 @@ use marfim_core::permissions::PermissionEngine;
 use marfim_core::providers::CostBook;
 use marfim_core::router::Router;
 use marfim_core::sandbox::Sandbox;
+use marfim_core::session::SessionCommand;
+use marfim_core::session_host::SessionRequest;
 use marfim_core::trust::{Trust, TrustStore};
 use marfim_tools::registry::ToolCtx;
 use marfim_tools::tools_host::HostTools;
@@ -63,7 +65,7 @@ async fn async_main(cli: Cli) -> i32 {
 
     let code = match &cli.command {
         Some(Command::Serve) => serve_cmd(&cli, &config).await,
-        Some(Command::Acp) => acp_cmd(&config).await,
+        Some(Command::Acp) => acp_cmd(&cli, &config).await,
         Some(Command::Lsp) => {
             marfim_gateway::lsp::serve_stdio();
             0
@@ -193,15 +195,9 @@ fn apply_vars(prompt: &str, vars: &[(String, String)]) -> String {
     out
 }
 
-/// D12: exit code mapping — 0 ok, 1 error, 2 permission-denied.
-fn exit_code(stop: &StopReason, harness: &Harness) -> i32 {
-    let denied = harness
-        .denied_tools
-        .load(std::sync::atomic::Ordering::SeqCst);
-    let executed = harness
-        .executed_tools
-        .load(std::sync::atomic::Ordering::SeqCst);
-    if denied > 0 && denied == executed {
+/// D12 exit-code semantics from an actor snapshot (headless on the host).
+fn exit_code_snapshot(stop: &StopReason, snap: &marfim_core::session::SessionSnapshot) -> i32 {
+    if snap.denied_tools > 0 && snap.denied_tools == snap.executed_tools {
         // every tool attempt was blocked by the permission engine
         return 2;
     }
@@ -211,38 +207,54 @@ fn exit_code(stop: &StopReason, harness: &Harness) -> i32 {
     }
 }
 
-async fn drive_turn_with_ctrlc(harness: &Arc<Harness>, prompt: &str) -> StopReason {
-    let c = harness.cancel.clone();
-    // The turn runs as a task so a Ctrl-C win can AWAIT its unwind instead
-    // of dropping it mid-flight: dropping the future would skip finish_turn,
-    // so TurnEnded would never be published and any event collector (the
-    // stream-json printer, D12's exactly-once contract) would block forever.
-    let mut turn = {
-        let h = harness.clone();
-        let prompt = prompt.to_string();
-        tokio::spawn(async move { h.run_turn(&prompt).await })
-    };
-    tokio::select! {
-        joined = &mut turn => match joined {
-            Ok(stop) => stop,
-            Err(_) => StopReason::Aborted("turn task panicked".into()),
-        },
-        _ = tokio::signal::ctrl_c() => {
-            c.cancel();
-            // bounded wait: the loop observes the token and exits through
-            // finish_turn, which emits TurnEnded exactly once (D12)
-            match tokio::time::timeout(std::time::Duration::from_secs(5), turn).await {
-                Ok(Ok(stop)) => stop,
-                _ => {
-                    // turn did not unwind in time (or join failed): emit the
-                    // TurnEnded ourselves so downstream collectors never hang
-                    harness.bus.publish(Event::TurnEnded {
-                        turn: harness.turn_counter.load(std::sync::atomic::Ordering::SeqCst),
-                        stop_reason: "aborted".into(),
-                    });
-                    StopReason::Aborted("cancelled by user (ctrl-c)".into())
-                }
-            }
+/// Drive ONE turn through the hosted session actor, with Ctrl-C wired to
+/// cooperative cancel through the actor (the actor unwinds the turn via
+/// finish_turn, so TurnEnded is published exactly once).
+async fn actor_turn_with_ctrlc(
+    hosted: &Arc<marfim_core::session_host::HostedSession>,
+    prompt: &str,
+) -> Result<StopReason, String> {
+    let (tx, reply) = tokio::sync::oneshot::channel();
+    if hosted
+        .actor
+        .commands
+        .send(SessionCommand::Prompt {
+            text: prompt.to_string(),
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return Err("session actor is gone".into());
+    }
+    let cancel_cmds = hosted.actor.commands.clone();
+    let killer = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let (notify_tx, notify_rx) = tokio::sync::oneshot::channel();
+            let _ = cancel_cmds
+                .send(SessionCommand::Cancel { reply: notify_tx })
+                .await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), notify_rx).await;
+        }
+    });
+    let res = reply
+        .await
+        .unwrap_or_else(|_| Err("actor dropped the reply".into()));
+    killer.abort();
+    res
+}
+
+/// Create one session through the host, or print the error and return
+/// None (headless failure path).
+async fn hosted_session(
+    host: &Arc<marfim_core::session_host::SessionHost>,
+    req: SessionRequest,
+) -> Option<Arc<marfim_core::session_host::HostedSession>> {
+    match host.create(req).await {
+        Ok(h) => Some(h),
+        Err(e) => {
+            eprintln!("error: {e}");
+            None
         }
     }
 }
@@ -255,10 +267,11 @@ async fn run_cmd(cli: Cli, config: Config, cwd: PathBuf) -> i32 {
             return 1;
         }
     };
+    let host = make_host(&config, Some(settings.clone()), cli.clone(), cwd.clone());
     match (settings.prompt.clone(), settings.output_format.as_str()) {
-        (Some(p), "text") => headless_text(&config, &settings, &p).await,
-        (Some(p), "json") => headless_json(&config, &settings, &p).await,
-        (Some(p), "stream-json") => headless_stream_json(&config, &settings, &p).await,
+        (Some(p), "text") => headless_text(&host, &settings, &p).await,
+        (Some(p), "json") => headless_json(&host, &settings, &p).await,
+        (Some(p), "stream-json") => headless_stream_json(&host, &settings, &p).await,
         (None, _) => repl(cli, config, settings).await,
         _ => {
             eprintln!("error: -p requires --output-format text|json|stream-json");
@@ -593,17 +606,25 @@ fn latest_session(dir: &std::path::Path) -> PathBuf {
         .unwrap_or_else(|| dir.join("missing.jsonl"))
 }
 
-async fn headless_text(config: &Config, settings: &EffectiveSettings, prompt: &str) -> i32 {
-    let (harness, bus, _tc, _perm, mut approval_rx) = build_session(config, settings).await;
+async fn headless_text(
+    host: &Arc<marfim_core::session_host::SessionHost>,
+    settings: &EffectiveSettings,
+    prompt: &str,
+) -> i32 {
+    let Some(hosted) = hosted_session(host, SessionRequest::default()).await else {
+        return 1;
+    };
     // D14: headless has NO stdin owner — approvals fail closed (deny).
-    tokio::spawn(async move {
-        while let Some(job) = approval_rx.recv().await {
-            let _ = job
-                .respond
-                .send(marfim_core::permissions::ApprovalAnswer::Deny);
-        }
-    });
-    let mut sub = bus.subscribe();
+    if let Some(mut approval_rx) = hosted.take_approval_receiver() {
+        tokio::spawn(async move {
+            while let Some(job) = approval_rx.recv().await {
+                let _ = job
+                    .respond
+                    .send(marfim_core::permissions::ApprovalAnswer::Deny);
+            }
+        });
+    }
+    let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let stream = settings.stream;
     let printer = tokio::spawn(async move {
@@ -634,22 +655,38 @@ async fn headless_text(config: &Config, settings: &EffectiveSettings, prompt: &s
             }
         }
     });
-    let stop = drive_turn_with_ctrlc(&harness, &prompt).await;
+    let stop = match actor_turn_with_ctrlc(&hosted, &prompt).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
     let _ = printer.await;
     println!();
-    exit_code(&stop, &harness)
+    let snap = hosted.snapshot().await;
+    host.close_all().await;
+    exit_code_snapshot(&stop, &snap)
 }
 
-async fn headless_json(config: &Config, settings: &EffectiveSettings, prompt: &str) -> i32 {
-    let (harness, bus, _tc, _perm, mut approval_rx) = build_session(config, settings).await;
-    tokio::spawn(async move {
-        while let Some(job) = approval_rx.recv().await {
-            let _ = job
-                .respond
-                .send(marfim_core::permissions::ApprovalAnswer::Deny);
-        }
-    });
-    let mut sub = bus.subscribe();
+async fn headless_json(
+    host: &Arc<marfim_core::session_host::SessionHost>,
+    settings: &EffectiveSettings,
+    prompt: &str,
+) -> i32 {
+    let Some(hosted) = hosted_session(host, SessionRequest::default()).await else {
+        return 1;
+    };
+    if let Some(mut approval_rx) = hosted.take_approval_receiver() {
+        tokio::spawn(async move {
+            while let Some(job) = approval_rx.recv().await {
+                let _ = job
+                    .respond
+                    .send(marfim_core::permissions::ApprovalAnswer::Deny);
+            }
+        });
+    }
+    let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let collector = tokio::spawn(async move {
         let mut out_text = String::new();
@@ -668,8 +705,16 @@ async fn headless_json(config: &Config, settings: &EffectiveSettings, prompt: &s
         }
         (out_text, stop)
     });
-    let stop = drive_turn_with_ctrlc(&harness, &prompt).await;
+    let stop = match actor_turn_with_ctrlc(&hosted, &prompt).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
     let (_text, _bus_stop) = collector.await.unwrap_or_default();
+    let snap = hosted.snapshot().await;
+    host.close_all().await;
     let rec = serde_json::json!({
         "type": "result",
         "subtype": match stop {
@@ -680,19 +725,27 @@ async fn headless_json(config: &Config, settings: &EffectiveSettings, prompt: &s
         "is_error": !matches!(stop, StopReason::EndTurn)
     });
     println!("{rec}");
-    exit_code(&stop, &harness)
+    exit_code_snapshot(&stop, &snap)
 }
 
-async fn headless_stream_json(config: &Config, settings: &EffectiveSettings, prompt: &str) -> i32 {
-    let (harness, bus, _tc, _perm, mut approval_rx) = build_session(config, settings).await;
-    tokio::spawn(async move {
-        while let Some(job) = approval_rx.recv().await {
-            let _ = job
-                .respond
-                .send(marfim_core::permissions::ApprovalAnswer::Deny);
-        }
-    });
-    let mut sub = bus.subscribe();
+async fn headless_stream_json(
+    host: &Arc<marfim_core::session_host::SessionHost>,
+    settings: &EffectiveSettings,
+    prompt: &str,
+) -> i32 {
+    let Some(hosted) = hosted_session(host, SessionRequest::default()).await else {
+        return 1;
+    };
+    if let Some(mut approval_rx) = hosted.take_approval_receiver() {
+        tokio::spawn(async move {
+            while let Some(job) = approval_rx.recv().await {
+                let _ = job
+                    .respond
+                    .send(marfim_core::permissions::ApprovalAnswer::Deny);
+            }
+        });
+    }
+    let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let printer = tokio::spawn(async move {
         loop {
@@ -710,9 +763,17 @@ async fn headless_stream_json(config: &Config, settings: &EffectiveSettings, pro
             }
         }
     });
-    let stop = drive_turn_with_ctrlc(&harness, &prompt).await;
+    let stop = match actor_turn_with_ctrlc(&hosted, &prompt).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
     let _ = printer.await;
-    exit_code(&stop, &harness)
+    let snap = hosted.snapshot().await;
+    host.close_all().await;
+    exit_code_snapshot(&stop, &snap)
 }
 
 /// D14: ONE place where REPL events become terminal output. Errors and
@@ -1017,17 +1078,49 @@ fn sessions_cmd(cli: &Cli) -> i32 {
 }
 
 async fn serve_cmd(cli: &Cli, config: &Config) -> i32 {
-    let _ = config; // serve surfaces adopt the actor bus in Phase 2
-    let bus = EventBus::new(1024);
-    let state = Arc::new(marfim_gateway::serve::ServeState {
-        bus: Arc::new(bus),
-        token: cli.token.clone(),
-        started_at: std::time::Instant::now(),
-    });
+    let cwd = cli
+        .cwd
+        .clone()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    // serve STARTS provider-less: healthz/tools/sessions work without any
+    // provider; the first /v1/prompt surfaces a clear error instead of the
+    // server refusing to boot (zero-config first run, step 8 refines this
+    // with auto-detection).
+    let settings = settings::effective(cli, config, cwd.clone()).ok();
+
+    // token is MANDATORY: generated when not supplied, printed once.
+    let (token, generated) = match cli.token.clone() {
+        Some(t) => (t, false),
+        None => (generate_token(), true),
+    };
+    if generated {
+        eprintln!("marfim serve: generated API token (shown ONCE, not stored): {token}");
+    }
+
+    let host = make_host(config, settings, cli.clone(), cwd);
+    let tools = serve_tool_catalog();
+    let allowed_hosts = vec![
+        cli.host.clone(),
+        "127.0.0.1".into(),
+        "localhost".into(),
+        "[::1]".into(),
+    ];
+    let state = marfim_gateway::serve::ServeState::new(
+        host,
+        token,
+        Arc::new(tools),
+        allowed_hosts,
+        marfim_gateway::serve::ServeOptions::default(),
+    );
     let server = marfim_gateway::serve::Server::new(state);
     match marfim_gateway::serve::Server::bind(&cli.host, cli.port).await {
         Ok(listener) => {
-            eprintln!("marfim serve on {}:{}", cli.host, cli.port);
+            let bound = listener
+                .local_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| format!("{}:{}", cli.host, cli.port));
+            eprintln!("marfim serve on {bound}");
             let _ = server.serve(listener).await;
             0
         }
@@ -1038,25 +1131,250 @@ async fn serve_cmd(cli: &Cli, config: &Config) -> i32 {
     }
 }
 
-async fn acp_cmd(_config: &Config) -> i32 {
-    let cwd = std::env::current_dir().unwrap_or_default();
+/// The real builtin tool catalog for /v1/tools — built from the registry,
+/// never fabricated.
+fn serve_tool_catalog() -> Vec<marfim_gateway::serve::ToolInfo> {
+    let mut registry = marfim_tools::registry::ToolRegistry::new();
+    marfim_tools::tools_host::register_builtins(&mut registry);
+    registry
+        .list_visible()
+        .into_iter()
+        .chain(registry.list_deferred())
+        .map(|t| marfim_gateway::serve::ToolInfo {
+            name: t.name.to_string(),
+            description: t.description.to_string(),
+            parameters: t.parameters.clone(),
+        })
+        .collect()
+}
+
+/// 128-bit random token as lowercase hex (from the OS CSPRNG; a
+/// deterministic mixed fallback only if /dev/urandom is unavailable).
+fn generate_token() -> String {
+    use std::io::Read;
+    let mut buf = [0u8; 16];
+    let ok = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .is_ok();
+    if !ok {
+        // fallback: mix pid + time through BLAKE2b (marfim-brain, RFC 7693)
+        let seed = format!(
+            "{}|{}|{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+            std::thread::current().id()
+        );
+        let h = marfim_brain::brain::blake2b::blake2b_hex(seed.as_bytes(), 16)
+            .unwrap_or_else(|_| "0".repeat(32));
+        return h;
+    }
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// One SessionHost per surface: the factory closes over config+settings
+/// and assembles the full harness (providers, tools, journal) per session.
+fn make_host(
+    config: &Config,
+    settings: Option<settings::EffectiveSettings>,
+    cli: Cli,
+    cwd: PathBuf,
+) -> Arc<marfim_core::session_host::SessionHost> {
+    let config = config.clone();
+    let cli = cli.clone();
+    Arc::new(marfim_core::session_host::SessionHost::new(Arc::new(
+        move |req| {
+            let config = config.clone();
+            let cli = cli.clone();
+            let cwd = cwd.clone();
+            let captured = settings.clone();
+            Box::pin(async move {
+                // CLI-provided resume/title are the baseline; the request
+                // may only refine them (an empty SessionRequest must NOT
+                // wipe a `--resume` — regression caught by the resume e2e).
+                let refine = |s: &mut settings::EffectiveSettings| {
+                    if req.resume.is_some() {
+                        s.resume = req.resume.clone();
+                    }
+                    if req.title.is_some() {
+                        s.title = req.title.clone();
+                    }
+                };
+                let mut s = match captured {
+                    Some(s) => s,
+                    // zero-config: resolve at first session creation so a
+                    // provider added mid-flight is honored
+                    None => settings::effective(&cli, &config, cwd)
+                        .map_err(|e| format!("session unavailable: {e}"))?,
+                };
+                refine(&mut s);
+                let (harness, bus, _tc, _perm, approval_rx) = build_session(&config, &s).await;
+                Ok(marfim_core::session_host::SessionDeps {
+                    harness,
+                    bus: Arc::new(bus),
+                    approval_rx,
+                })
+            })
+        },
+    )))
+}
+
+async fn acp_cmd(cli: &Cli, config: &Config) -> i32 {
+    let cwd = cli
+        .cwd
+        .clone()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let settings = match settings::effective(cli, config, cwd.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let host = make_host(config, Some(settings.clone()), cli.clone(), cwd.clone());
+    // ACP session-id -> hosted session (one real actor per ACP session).
+    let session_map: Arc<
+        tokio::sync::Mutex<
+            std::collections::BTreeMap<String, Arc<marfim_core::session_host::HostedSession>>,
+        >,
+    > = Arc::new(tokio::sync::Mutex::new(std::collections::BTreeMap::new()));
+
+    // ACP agent over stdio: the protocol loop is synchronous (blocking
+    // stdin), the session work is async — bridge per call through the
+    // ambient runtime handle. The echo handler is GONE: every prompt now
+    // runs a real journaled turn on a SessionHost-owned SessionActor.
+    let rt = tokio::runtime::Handle::current();
+    let host_for_handlers = host.clone();
+    let map_for_handlers = session_map.clone();
     let handlers = marfim_gateway::acp::AgentHandlers {
-        prompt: Arc::new(|sid, text, emit| {
-            // real session surface: journaled + echoed through the same
-            // event bus shape; full loop wiring lands with the Session
-            // actor (Phase 2) on these exact channels.
-            emit(serde_json::json!({
-                "sessionId": sid,
-                "update": {"sessionUpdate": "agent_message_chunk",
-                           "content": {"type": "text", "text": format!("marfim received: {text}")}}
-            }));
-            "end_turn".into()
-        }),
+        prompt: Arc::new(
+            move |sid: &str, text: &str, emit: &mut dyn FnMut(serde_json::Value)| {
+                rt.block_on(acp_drive_turn(
+                    &host_for_handlers,
+                    &map_for_handlers,
+                    sid,
+                    text,
+                    emit,
+                ))
+            },
+        ),
         modes: vec!["default".into(), "acceptEdits".into(), "plan".into()],
         cwd,
     };
-    marfim_gateway::acp::serve_agent_stdio(handlers);
+    let joined = tokio::task::spawn_blocking(move || {
+        marfim_gateway::acp::serve_agent_stdio(handlers);
+    });
+    let _ = joined.await;
+    host.close_all().await;
     0
+}
+
+/// Drive one REAL ACP turn: prompt the hosted session actor, stream bus
+/// events as ACP session/update notifications while the turn runs, then
+/// return the normalized stop reason. One actor per ACP session id.
+async fn acp_drive_turn(
+    host: &Arc<marfim_core::session_host::SessionHost>,
+    map: &Arc<
+        tokio::sync::Mutex<
+            std::collections::BTreeMap<String, Arc<marfim_core::session_host::HostedSession>>,
+        >,
+    >,
+    sid: &str,
+    text: &str,
+    emit: &mut dyn FnMut(serde_json::Value),
+) -> String {
+    let hosted = {
+        let existing = map.lock().await.get(sid).cloned();
+        match existing {
+            Some(h) => h,
+            None => match host
+                .create(SessionRequest {
+                    resume: None,
+                    title: Some(format!("acp-{sid}")),
+                })
+                .await
+            {
+                Ok(h) => {
+                    map.lock().await.insert(sid.to_string(), h.clone());
+                    h
+                }
+                Err(e) => {
+                    emit(serde_json::json!({
+                        "sessionId": sid,
+                        "update": {"sessionUpdate": "agent_message_chunk",
+                                   "content": {"type": "text", "text": format!("session error: {e}")}}
+                    }));
+                    return "cancelled".into(); // ACP has no "error" stop reason
+                }
+            },
+        }
+    };
+    let mut rx = hosted.bus.subscribe();
+    let (tx, reply) = tokio::sync::oneshot::channel();
+    if hosted
+        .actor
+        .commands
+        .send(SessionCommand::Prompt {
+            text: text.to_string(),
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return "cancelled".into();
+    }
+    loop {
+        match rx.recv().await {
+            Ok(Event::AssistantMessage { text }) => emit(serde_json::json!({
+                "sessionId": sid,
+                "update": {"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": text}}
+            })),
+            Ok(Event::ToolCallStarted { id, tool, .. }) => emit(serde_json::json!({
+                "sessionId": sid,
+                "update": {"sessionUpdate": "tool_call", "toolCallId": id,
+                           "title": tool, "kind": "other"}
+            })),
+            Ok(Event::ToolCallResult {
+                tool,
+                output,
+                is_error,
+                ..
+            }) => emit(serde_json::json!({
+                "sessionId": sid,
+                "update": {"sessionUpdate": "tool_call_update", "toolCallId": "",
+                           "title": tool,
+                           "status": if is_error { "failed" } else { "completed" },
+                           "content": [{"type": "content",
+                                        "content": {"type": "text", "text": output}}]}
+            })),
+            Ok(Event::Error { message, .. }) => emit(serde_json::json!({
+                "sessionId": sid,
+                "update": {"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": format!("error: {message}")}}
+            })),
+            Ok(Event::TurnEnded { .. }) => break,
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    let stop = match tokio::time::timeout(std::time::Duration::from_secs(5), reply).await {
+        Ok(Ok(Ok(s))) => s.normalized().to_string(),
+        _ => "cancelled".into(),
+    };
+    // ACP stopReason vocabulary: end_turn | cancelled | refusal | ...
+    match stop.as_str() {
+        "end_turn" => "end_turn".to_string(),
+        "aborted" => "cancelled".to_string(),
+        other => {
+            let _ = other;
+            "cancelled".to_string()
+        }
+    }
 }
 
 async fn mcp_cmd(config: &Config) -> i32 {

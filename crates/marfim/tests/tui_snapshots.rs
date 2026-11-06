@@ -25,11 +25,13 @@ use tui::{Palette, TuiModel};
 
 /// Mirrors the binary's `EffectiveSettings` for the fields the TUI reads.
 pub mod settings {
+    #[derive(Clone)]
     pub struct EffectiveSettings {
         pub theme: String,
         pub model: String,
         pub cwd: std::path::PathBuf,
     }
+    #[derive(Clone)]
     pub struct Cli;
 }
 
@@ -45,6 +47,18 @@ pub async fn build_session(
     tokio::sync::mpsc::Receiver<marfim_core::permissions::ApprovalJob>,
 ) {
     unreachable!("snapshot tests never drive the live session runtime")
+}
+
+/// Mirrors the binary's `make_host` — the TUI's session constructor.
+pub fn make_host(
+    _config: &marfim_core::config::Config,
+    _settings: Option<settings::EffectiveSettings>,
+    _cli: settings::Cli,
+    _cwd: std::path::PathBuf,
+) -> std::sync::Arc<marfim_core::session_host::SessionHost> {
+    std::sync::Arc::new(marfim_core::session_host::SessionHost::new(
+        std::sync::Arc::new(|_req| Box::pin(async { Err("stand-in host never runs".to_string()) })),
+    ))
 }
 
 // -- helpers ------------------------------------------------------------------

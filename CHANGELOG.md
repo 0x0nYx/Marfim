@@ -2,6 +2,44 @@
 
 ## Unreleased — engineering round 2 (2026-11-06)
 
+### Step 1: gateway hardening + SessionHost (security-blocking)
+- `marfim serve` rewritten from a hand-rolled HTTP parser onto hyper 1.x
+  (hyper-util auto connection builder, HTTP/1.1 + SSE). Every gate is
+  fail-closed and covered by tests on a real socket: bearer token
+  MANDATORY (`--token` or auto-generated 128-bit token printed once),
+  constant-time comparison; Origin/Host validation (DNS-rebinding
+  guard, 403 before any body read); 1 MiB header buffer + 1 MiB body
+  cap (declared oversize → 413 unread); header-phase timeout
+  (`header_read_timeout` + `timer`), time-boxed body collection, SSE
+  pings + hard stream lifetime. Content-Length 10^12, slowloris
+  dribbles, and malformed binary garbage are proven to kill only their
+  own connection — the listener keeps serving.
+- `SessionHost` added in `marfim-core`: owns every SessionActor
+  (create/get/list/close, snapshots), construction injected by the
+  binary crate. serve, acp, headless text/json/stream-json and tui all
+  build their sessions through it. The REPL keeps direct actor
+  ownership (documented decision: slash dispatch needs the concrete
+  `ToolCtx`, which core's host cannot type without inverting the tools
+  dependency).
+- serve endpoints are REAL: `/v1/prompt` streams a real turn (SSE, ends
+  with the actor's true StopReason), `/v1/approvals` + `POST
+  /v1/approvals/:id` resolve REAL pending approvals (routed through the
+  actor's authoritative Approve command; ApprovalRequested/Resolved are
+  now published on the session bus), `/v1/sessions`, `/v1/sessions/:id`
+  and `/v1/tools` (real registry catalog) are live.
+- ACP: the `marfim received:` echo is DELETED. `marfim acp` runs real
+  journaled turns on per-ACP-session SessionActors, streaming
+  session/update notifications (agent_message_chunk, tool_call,
+  tool_call_update) and answering with real stop reasons.
+- e2e per surface: real-binary healthz + 401 assertions; gateway e2e
+  drives a scripted mock-provider tool call through the permission
+  engine → pending approval on /v1/approvals → HTTP resolution → tool
+  executes → turn ends over SSE; a real-binary ACP stdio session runs a
+  mock-provider turn end-to-end.
+- `spawn_session` now returns `(SessionHandle, approval receiver)` so
+  hosts own approval intake explicitly; SessionSnapshot gained
+  denied_tools/executed_tools (D12 exit codes work through the actor).
+
 ### Step 0: baseline
 - `rust-toolchain.toml` pins the workspace to 1.99.1 (clippy + rustfmt
   components included); CI installs exactly this toolchain for the main

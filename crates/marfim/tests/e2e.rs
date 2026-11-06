@@ -311,30 +311,42 @@ fn lsp_initialize_and_completion_over_framed_stdio() {
 
 #[test]
 fn serve_healthz_on_loopback() {
+    // The gateway is fail-closed: token mandatory, Host validated. This
+    // e2e passes an explicit token, asserts the same request WITHOUT the
+    // token is refused (401), then proves the authorized healthz works.
     let mut child = Command::new(bin_path())
-        .args(["serve", "--port", "0"])
+        .args(["--port", "17999", "--token", "e2e-token", "serve"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    // --port must precede the subcommand (top-level clap arg)
-    let _ = child.kill();
-    let _ = child.wait();
-    let mut child = Command::new(bin_path())
-        .args(["--port", "17999", "serve"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    // retry loop: wait until the listener is up (max ~5s)
     use std::net::TcpStream;
+    let mut unauth = String::new();
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Ok(mut s) = TcpStream::connect("127.0.0.1:17999") {
+            s.write_all(
+                b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:17999\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+            let mut buf = vec![0u8; 2048];
+            let n = std::io::Read::read(&mut s, &mut buf).unwrap_or(0);
+            unauth = String::from_utf8_lossy(&buf[..n]).to_string();
+            if !unauth.is_empty() {
+                break;
+            }
+        }
+    }
+    assert!(
+        unauth.starts_with("HTTP/1.1 401"),
+        "unauthenticated must 401: {unauth}"
+    );
     let mut text = String::new();
     for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(100));
         if let Ok(mut s) = TcpStream::connect("127.0.0.1:17999") {
-            s.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+            s.write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:17999\r\nAuthorization: Bearer e2e-token\r\nConnection: close\r\n\r\n")
                 .unwrap();
             let mut buf = vec![0u8; 2048];
             let n = std::io::Read::read(&mut s, &mut buf).unwrap_or(0);
@@ -618,4 +630,46 @@ fn marfim_home_sessions(home: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     out.sort();
     out
+}
+
+#[test]
+fn acp_real_turn_over_stdio() {
+    // The ACP surface drives SessionHost: session/prompt runs a REAL
+    // journaled turn (mock provider), streaming session/update
+    // notifications and answering with a real stopReason. No echo.
+    let home = mock_config_home("acp");
+    let mut child = Command::new(bin_path())
+        .args(["--provider", "mock", "acp"])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .env(
+            "MARFIM_MOCK_SCRIPT",
+            r#"[{"text":"acp says hello from the real loop"}]"#,
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let requests = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/new\",\"params\":{\"cwd\":\"/tmp\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"s1\",\"content\":[{\"type\":\"text\",\"text\":\"say hi\"}]}}\n",
+    );
+    stdin.write_all(requests.as_bytes()).unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("\"protocolVersion\":1"), "{stdout}");
+    assert!(stdout.contains("\"sessionId\":\"s1\""), "{stdout}");
+    assert!(
+        stdout.contains("agent_message_chunk")
+            && stdout.contains("acp says hello from the real loop"),
+        "ACP turn must stream the real assistant text: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"stopReason\":\"end_turn\""),
+        "real turn must end with end_turn: {stdout}"
+    );
 }

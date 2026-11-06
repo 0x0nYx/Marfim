@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 marfim-core = { path = "../marfim-core" }
+marfim-brain = { path = "../marfim-brain" }
 marfim-tools = { path = "../marfim-tools" }
 marfim-mcp = { path = "../marfim-mcp" }
 marfim-gateway = { path = "../marfim-gateway" }
@@ -24,6 +25,7 @@ async-trait.workspace = true
 toml.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
+futures-util.workspace = true
 
 # SIGINT wiring tests need a real signal send; nix's safe API matches
 # marfim-core's no-unsafe stance.

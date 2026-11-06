@@ -1249,24 +1249,38 @@ fn send_approve(
     });
 }
 
-/// `marfim tui` entry: build the session exactly like the other surfaces,
-/// spawn the actor, then drive it from the event loop below.
+/// `marfim tui` entry: build the session through the SessionHost (the
+/// same owner every other surface uses), then drive the actor from the
+/// event loop below.
 pub async fn run(
     _cli: &crate::settings::Cli,
     config: marfim_core::config::Config,
     settings: crate::settings::EffectiveSettings,
 ) -> i32 {
-    // Same construction as every other surface, then the TUI becomes the
-    // first real UI driving the P2 session actor.
-    let (harness, bus, _tool_ctx, _perm, approval_rx) =
-        crate::build_session(&config, &settings).await;
-    let session_id = harness.ctx.session_id.clone();
-    let journal_path = {
-        let journal = harness.journal.lock().unwrap_or_else(|p| p.into_inner());
-        journal.path().to_path_buf()
+    // One host, one hosted session; the host owns the actor lifecycle.
+    let host = crate::make_host(
+        &config,
+        Some(settings.clone()),
+        _cli.clone(),
+        settings.cwd.clone(),
+    );
+    let hosted = match host
+        .create(marfim_core::session_host::SessionRequest::default())
+        .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("marfim tui: session failed: {e}");
+            return 1;
+        }
     };
-    let handle =
-        marfim_core::session::spawn_session(harness, approval_rx, session_id.clone(), journal_path);
+    let session_id = hosted.actor.session_id.clone();
+    // The TUI owns approval intake: unanswered jobs surface in the modal.
+    let mut approval_rx = hosted.take_approval_receiver().unwrap_or_else(|| {
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        rx
+    });
+    let bus = hosted.bus.clone();
 
     let palette = Palette::detect(&settings.theme);
     let mut model = TuiModel::new(session_id, settings.model.clone(), palette);
@@ -1305,7 +1319,6 @@ pub async fn run(
 
     let (upd_tx, mut upd_rx) = mpsc::channel::<UiUpdate>(64);
     let mut sub = bus.subscribe();
-    let mut approval_rx = handle.approvals;
     let mut ticker = tokio::time::interval(Duration::from_millis(500));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut esc_at: Option<Instant> = None;
@@ -1342,17 +1355,17 @@ pub async fn run(
                     KeyOutcome::None => {}
                     KeyOutcome::Prompt(text) => {
                         model.push_user_prompt(&text);
-                        send_prompt(handle.commands.clone(), upd_tx.clone(), text);
+                        send_prompt(hosted.actor.commands.clone(), upd_tx.clone(), text);
                     }
                     KeyOutcome::Cancel => {
                         model.cancelled = true;
-                        send_cancel(handle.commands.clone());
+                        send_cancel(hosted.actor.commands.clone());
                     }
                     KeyOutcome::Approve(tool, summary, answer) => {
-                        send_approve(handle.commands.clone(), upd_tx.clone(), tool, summary, answer);
+                        send_approve(hosted.actor.commands.clone(), upd_tx.clone(), tool, summary, answer);
                     }
                     KeyOutcome::Refresh => {
-                        request_snapshot(&handle.commands, upd_tx.clone());
+                        request_snapshot(&hosted.actor.commands, upd_tx.clone());
                     }
                     KeyOutcome::Esc => {
                         let now = Instant::now();
@@ -1393,7 +1406,7 @@ pub async fn run(
                 // demand (r key / after a turn ends).
                 if model.running || model.snapshot_wanted {
                     model.snapshot_wanted = false;
-                    request_snapshot(&handle.commands, upd_tx.clone());
+                    request_snapshot(&hosted.actor.commands, upd_tx.clone());
                 }
             }
         }
@@ -1402,7 +1415,7 @@ pub async fn run(
         }
     }
 
-    let _ = handle.commands.send(SessionCommand::Shutdown).await;
+    let _ = hosted.actor.commands.send(SessionCommand::Shutdown).await;
     let _ = terminal.show_cursor();
     rc
 }
