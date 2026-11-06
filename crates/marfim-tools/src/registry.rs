@@ -204,8 +204,10 @@ impl ToolRegistry {
         scored.into_iter().take(limit).map(|(_, t)| t).collect()
     }
 
+    /// Register a namespaced MCP tool: `mcp__<server>__<tool>`.
+    /// Server names must not contain `__` (documented resolution rule).
     pub fn register_mcp(&mut self, server: &str, tool: &str, schema: Value) {
-        let name = format!("{server}__{tool}");
+        let name = format!("mcp__{server}__{tool}");
         self.mcp_tools.insert(
             name,
             McpToolRef {
@@ -279,7 +281,13 @@ mod tests {
     fn mcp_namespacing() {
         let mut r = ToolRegistry::new();
         r.register_mcp("fs", "read", serde_json::json!({}));
-        assert!(r.mcp_tool("fs__read").is_some());
-        assert_eq!(r.mcp_names(), vec!["fs__read".to_string()]);
+        assert!(r.mcp_tool("mcp__fs__read").is_some());
+        assert_eq!(r.mcp_names(), vec!["mcp__fs__read".to_string()]);
+        // server names with __ would be ambiguous — the resolution rule
+        // strips "mcp__" then splits at the FIRST "__"
+        let full = "mcp__fs__read";
+        let rest = full.strip_prefix("mcp__").unwrap();
+        let (server, tool) = rest.split_once("__").unwrap();
+        assert_eq!((server, tool), ("fs", "read"));
     }
 }

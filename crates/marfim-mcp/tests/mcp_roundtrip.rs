@@ -55,9 +55,16 @@ done
 #[tokio::test]
 async fn client_full_roundtrip_with_strict_id_matching() {
     let script = write_id_echo_server("full");
-    let c = McpClient::spawn("echo", "/bin/sh", &[script.to_string_lossy().to_string()])
-        .await
-        .expect("handshake (initialize + tools/list) must succeed");
+    let c = McpClient::connect(
+        "echo",
+        &marfim_mcp::client::McpServerConfig::Stdio {
+            command: "/bin/sh".into(),
+            args: vec![script.to_string_lossy().to_string()],
+            env: std::collections::BTreeMap::new(),
+        },
+    )
+    .await
+    .expect("handshake (initialize + tools/list) must succeed");
 
     // tools/list answered with the right id and the listing was namespaced
     let names = c.tool_names().await;
@@ -94,10 +101,13 @@ done"#;
     }
 
     let t0 = std::time::Instant::now();
-    let res = McpClient::spawn_with_timeout(
+    let res = McpClient::connect_with_timeout(
         "stale",
-        "/bin/sh",
-        &[tmp.to_string_lossy().to_string()],
+        &marfim_mcp::client::McpServerConfig::Stdio {
+            command: "/bin/sh".into(),
+            args: vec![tmp.to_string_lossy().to_string()],
+            env: std::collections::BTreeMap::new(),
+        },
         Duration::from_millis(300),
     )
     .await;

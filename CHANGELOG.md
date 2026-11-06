@@ -2,6 +2,34 @@
 
 ## Unreleased — engineering round 2 (2026-11-06)
 
+### Step 2: MCP wired end-to-end
+- `McpClient` connects per config `mcpServers` — stdio AND streamable
+  HTTP (JSON-RPC POSTs; plain-JSON and SSE-framed responses) — behind
+  the trust gate at session start (config layers are trust-gated, so an
+  untrusted cwd can never contribute servers). Servers that fail to
+  connect are skipped with a warning, never silently.
+- stdio MCP servers spawn with a SCRUBBED environment: an explicit
+  keep-list (PATH/HOME/...) plus config-declared `env` entries —
+  provider keys and ambient secrets never leak into tool servers.
+- Tools register as `mcp__<server>__<tool>` (registry entries with the
+  server's schema) and dispatch through the SAME PermissionEngine path
+  as builtin tools (Execute-class: Ask verdicts surface as approvals).
+- `marfim mcp` serves the builtin catalog and routes EVERY tools/call
+  through the permission engine — the old "requires marfim run"
+  read-only refusal is GONE. Ask verdicts fail closed (stdin is the
+  protocol, so no interactive approver). Server surfaces never make
+  outbound mcpServers connections (self-referencing configs would
+  recurse); sessions compose namespaces.
+- Fail-closed approvers (headless, ACP) now deny through the actor's
+  authoritative Approve command — answering the forwarded job's
+  tombstone responder was a silent no-op that hung every Ask-class tool
+  call (caught by the new e2e).
+- Tests: stub streamable-HTTP server on a loopback socket (connect →
+  tools/list → tools/call), config-shape + env-scrub units, real-binary
+  e2e: Bash denied (permission path), Read executed, and a session
+  connecting a self-hosted `marfim mcp` child (denied without rule,
+  full roundtrip with allow rule).
+
 ### Step 1: gateway hardening + SessionHost (security-blocking)
 - `marfim serve` rewritten from a hand-rolled HTTP parser onto hyper 1.x
   (hyper-util auto connection builder, HTTP/1.1 + SSE). Every gate is

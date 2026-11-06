@@ -15,6 +15,12 @@ pub struct HostTools {
     pub hooks: marfim_core::hooks::Hooks,
     pub sandbox: marfim_core::sandbox::Sandbox,
     pub state: ToolCtx,
+    /// Connected MCP servers by fully-qualified tool name
+    /// (`mcp__<server>__<tool>`). Dispatch happens through the SAME
+    /// permission path as builtin tools.
+    pub mcp: std::sync::Arc<
+        std::sync::Mutex<std::collections::BTreeMap<String, Arc<marfim_mcp::client::McpClient>>>,
+    >,
 }
 
 impl HostTools {
@@ -32,8 +38,53 @@ impl HostTools {
             hooks,
             sandbox,
             state,
+            mcp: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
         }
     }
+
+    /// Register one connected MCP client's tools: registry entries
+    /// (`mcp__<server>__<tool>`, schema-bearing) + dispatch table.
+    /// `tools` is the client's listing, locked by the async caller.
+    /// Returns the number of tools registered from this server.
+    pub fn register_mcp_client(
+        &mut self,
+        client: &Arc<marfim_mcp::client::McpClient>,
+        tools: &[(String, String, serde_json::Value)],
+    ) -> usize {
+        let mut n = 0;
+        for (tool, _desc, schema) in tools {
+            let full = format!("mcp__{}__{}", client.server_name, tool);
+            self.registry
+                .register_mcp(&client.server_name, tool, schema.clone());
+            self.mcp
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(full, Arc::clone(client));
+            n += 1;
+        }
+        n
+    }
+}
+
+/// Convert an MCP tools/call result to (text, is_error): join the text
+/// content blocks; honor isError.
+fn mcp_result_to_output(result: &serde_json::Value) -> (String, bool) {
+    let is_err = result["isError"].as_bool().unwrap_or(false);
+    let mut text = String::new();
+    if let Some(blocks) = result["content"].as_array() {
+        for b in blocks {
+            if b["type"].as_str() == Some("text") {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(b["text"].as_str().unwrap_or(""));
+            }
+        }
+    }
+    if text.is_empty() {
+        text = result.to_string();
+    }
+    (text, is_err)
 }
 
 /// Register the full built-in surface (Node v1.2.0 names).
@@ -430,8 +481,38 @@ impl ToolHost for HostTools {
             return (format!("permission denied: {}", verdict.reason), true);
         }
 
-        // 3. dispatch (async tools run in-line; sync tools via spawn_blocking
+        // 3. dispatch — MCP tools first (Ask-class: every external server
+        //    tool goes through the permission verdict above), then builtins
+        //    (async tools run in-line; sync tools via spawn_blocking
         //    so they never stall the executor — D8)
+        if tool.starts_with("mcp__") {
+            let client = self
+                .mcp
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(tool)
+                .cloned();
+            let Some(client) = client else {
+                return (
+                    format!(
+                        "mcp tool {tool} has no connected server (server down at session start?)"
+                    ),
+                    true,
+                );
+            };
+            let full_tool = tool.strip_prefix("mcp__").unwrap_or(tool);
+            let tool_name = full_tool
+                .split_once("__")
+                .map(|(_, t)| t)
+                .unwrap_or(full_tool);
+            return match client.call_tool(tool_name, args.clone()).await {
+                Ok(result) => {
+                    let (text, is_err) = mcp_result_to_output(&result);
+                    (text, is_err)
+                }
+                Err(e) => (format!("mcp {tool} failed: {e}"), true),
+            };
+        }
         let out: ToolOutput = match (tool, self.registry.get(tool)) {
             ("Bash", _) => {
                 let cmd = args["command"].as_str().unwrap_or("").to_string();

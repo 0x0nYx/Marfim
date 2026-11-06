@@ -486,6 +486,44 @@ pub struct EffectiveSettings {
     pub debounce: Option<f64>,
 }
 
+/// Permission rules from the config `permissions` section only (no CLI):
+/// used by non-interactive surfaces like `marfim mcp`.
+pub fn rules_from_config(config: &Config) -> Vec<Rule> {
+    let mut rules: Vec<Rule> = Vec::new();
+    let Some(perms) = config.get("permissions") else {
+        return rules;
+    };
+    for (key, decision) in [
+        ("deny", Decision::Deny),
+        ("ask", Decision::Ask),
+        ("allow", Decision::Allow),
+    ] {
+        if let Some(list) = perms.get(key).and_then(|v| v.as_array()) {
+            for item in list {
+                if let Some(spec) = item.as_str() {
+                    let (tool, argv) = match spec.split_once(':') {
+                        Some((t, rest)) => (
+                            t.trim().to_string(),
+                            Some(
+                                rest.split_whitespace()
+                                    .map(String::from)
+                                    .collect::<Vec<String>>(),
+                            ),
+                        ),
+                        None => (spec.trim().to_string(), None),
+                    };
+                    rules.push(Rule {
+                        tool,
+                        decision,
+                        argv_prefix: argv,
+                    });
+                }
+            }
+        }
+    }
+    rules
+}
+
 fn parse_kv(spec: &str) -> (String, String) {
     match spec.split_once('=') {
         Some((k, v)) => (k.trim().to_string(), v.trim().to_string()),

@@ -673,3 +673,117 @@ fn acp_real_turn_over_stdio() {
         "real turn must end with end_turn: {stdout}"
     );
 }
+
+#[test]
+fn mcp_server_runs_all_tools_through_permission_path() {
+    // `marfim mcp` serves the builtin catalog over stdio and routes EVERY
+    // tools/call through the PermissionEngine (the old read-only refusal
+    // is gone). stdin is the protocol, so Ask verdicts fail closed.
+    let home = mock_config_home("mcp-server");
+    let mut child = Command::new(bin_path())
+        .arg("mcp")
+        .env("MARFIM_HOME", &home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let reqs = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"Bash\",\"arguments\":{\"command\":\"echo perm-path\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"Read\",\"arguments\":{\"path\":\"/etc/hostname\"}}}\n",
+    );
+    stdin.write_all(reqs.as_bytes()).unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(stdout.contains("\"tools\""), "catalog listed: {stdout}");
+
+    // Bash is Execute-class → Ask → no approver on stdio → DENIED (the
+    // call must reach the permission verdict, not a hardcoded refusal)
+    let denied = stdout.contains("\"id\":3")
+        && (stdout.contains("permission denied") || stdout.contains("denied"));
+    assert!(denied, "Bash must be permission-denied over MCP: {stdout}");
+
+    // Read is ReadOnly → Allow in default mode → REAL execution
+    assert!(
+        stdout.contains("\"id\":4") && stdout.contains("isError\":false"),
+        "Read must execute through the permission path: {stdout}"
+    );
+}
+
+#[test]
+fn session_connects_configured_mcp_servers() {
+    // build_session constructs McpClient per config `mcpServers` behind
+    // the trust gate; tools register as mcp__<server>__<tool> and route
+    // through the same permission engine. Scenario (a): unapproved mcp
+    // tool → Ask → headless denies → exit 2. Scenario (b): allow-rule →
+    // real roundtrip to the child server → exit 0.
+    let home = mock_config_home("mcp-client");
+    let bin = bin_path();
+    std::fs::write(
+        home.join(".marfim").join("config.toml"),
+        format!(
+            "provider = \"mock\"\nmodel = \"mock-1\"\n\n[mcpServers.self]\ncommand = \"{}\"\nargs = [\"mcp\"]\n",
+            bin.display()
+        ),
+    )
+    .unwrap();
+
+    // (a) no allow rule: mcp__self__Read is Execute-class → Ask → denied
+    let out = Command::new(&bin)
+        .args(["-p", "use the mcp tool", "--output-format", "text"])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .env(
+            "MARFIM_MOCK_SCRIPT",
+            r#"[{"tool_call": {"id": "m1", "name": "mcp__self__Read", "arguments": {"path": "/etc/hostname"}}}, {"text": "mcp attempt finished"}]"#,
+        )
+        .current_dir("/tmp")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("mcp server self: connected"),
+        "session must connect the configured mcp server: {err}"
+    );
+    assert!(
+        err.contains("[mcp__self__Read] error: permission denied"),
+        "mcp tool call must route through the permission engine: {err}"
+    );
+    assert_eq!(out.status.code(), Some(2), "{err}");
+
+    // (b) allow rule: the call round-trips to the child server for real
+    std::fs::write(
+        home.join(".marfim").join("config.toml"),
+        format!(
+            "provider = \"mock\"\nmodel = \"mock-1\"\n\n[permissions]\nallow = [\"mcp__self__Read\"]\n\n[mcpServers.self]\ncommand = \"{}\"\nargs = [\"mcp\"]\n",
+            bin.display()
+        ),
+    )
+    .unwrap();
+    let out = Command::new(&bin)
+        .args(["-p", "use the mcp tool", "--output-format", "text"])
+        .env("MARFIM_HOME", &home)
+        .env_remove("MARFIM_PROVIDER")
+        .env(
+            "MARFIM_MOCK_SCRIPT",
+            r#"[{"tool_call": {"id": "m1", "name": "mcp__self__Read", "arguments": {"path": "/etc/hostname"}}}, {"text": "mcp attempt finished"}]"#,
+        )
+        .current_dir("/tmp")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("permission denied") && !err.contains("permission denied"),
+        "allowed mcp tool must execute: {stdout} | {err}"
+    );
+    assert!(
+        stdout.contains("mcp attempt finished"),
+        "turn must complete after the mcp roundtrip: {stdout} | {err}"
+    );
+    assert_eq!(out.status.code(), Some(0), "{stdout} | {err}");
+}

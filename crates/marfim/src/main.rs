@@ -259,6 +259,31 @@ async fn hosted_session(
     }
 }
 
+/// D14 fail-closed approver for surfaces with NO interactive stdin owner
+/// (headless, ACP): every pending approval is DENIED through the actor's
+/// authoritative Approve command (the forwarded job's responder is a
+/// tombstone by design — answering it directly would be a silent no-op).
+fn spawn_fail_closed_denier(hosted: &Arc<marfim_core::session_host::HostedSession>) {
+    let Some(mut approval_rx) = hosted.take_approval_receiver() else {
+        return;
+    };
+    let cmds = hosted.actor.commands.clone();
+    tokio::spawn(async move {
+        while let Some(job) = approval_rx.recv().await {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let _ = cmds
+                .send(SessionCommand::Approve {
+                    tool: job.tool.clone(),
+                    summary: "*".into(),
+                    answer: marfim_core::permissions::ApprovalAnswer::Deny,
+                    reply: tx,
+                })
+                .await;
+            let _ = rx.await;
+        }
+    });
+}
+
 async fn run_cmd(cli: Cli, config: Config, cwd: PathBuf) -> i32 {
     let settings = match settings::effective(&cli, &config, cwd.clone()) {
         Ok(s) => s,
@@ -473,12 +498,19 @@ async fn build_session(
         last_repomap: Arc::new(Default::default()),
         subagent: subagents.clone(),
     };
-    let host = HostTools::new(
+    let mut host = HostTools::new(
         perm.clone(),
         tool_ctx.clone(),
         sandbox,
         marfim_core::hooks::Hooks::default(),
     );
+    // MCP (step 2): construct McpClient per config `mcpServers` BEHIND the
+    // trust gate — config layers are already trust-gated (D13), so an
+    // untrusted cwd can never contribute mcpServers. Servers that fail to
+    // connect are skipped with a warning (never silently); their tools
+    // register as `mcp__<server>__<tool>` and dispatch through the SAME
+    // PermissionEngine path as builtin tools, with scrubbed env.
+    let _mcp_connected = connect_mcp_servers(config, &mut host).await;
 
     // --resume: reopen the named (or latest) journal
     let (journal, paths) = match &settings.resume {
@@ -615,15 +647,7 @@ async fn headless_text(
         return 1;
     };
     // D14: headless has NO stdin owner — approvals fail closed (deny).
-    if let Some(mut approval_rx) = hosted.take_approval_receiver() {
-        tokio::spawn(async move {
-            while let Some(job) = approval_rx.recv().await {
-                let _ = job
-                    .respond
-                    .send(marfim_core::permissions::ApprovalAnswer::Deny);
-            }
-        });
-    }
+    spawn_fail_closed_denier(&hosted);
     let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let stream = settings.stream;
@@ -677,15 +701,7 @@ async fn headless_json(
     let Some(hosted) = hosted_session(host, SessionRequest::default()).await else {
         return 1;
     };
-    if let Some(mut approval_rx) = hosted.take_approval_receiver() {
-        tokio::spawn(async move {
-            while let Some(job) = approval_rx.recv().await {
-                let _ = job
-                    .respond
-                    .send(marfim_core::permissions::ApprovalAnswer::Deny);
-            }
-        });
-    }
+    spawn_fail_closed_denier(&hosted);
     let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let collector = tokio::spawn(async move {
@@ -736,15 +752,7 @@ async fn headless_stream_json(
     let Some(hosted) = hosted_session(host, SessionRequest::default()).await else {
         return 1;
     };
-    if let Some(mut approval_rx) = hosted.take_approval_receiver() {
-        tokio::spawn(async move {
-            while let Some(job) = approval_rx.recv().await {
-                let _ = job
-                    .respond
-                    .send(marfim_core::permissions::ApprovalAnswer::Deny);
-            }
-        });
-    }
+    spawn_fail_closed_denier(&hosted);
     let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let printer = tokio::spawn(async move {
@@ -1298,6 +1306,8 @@ async fn acp_drive_turn(
                 .await
             {
                 Ok(h) => {
+                    // ACP stdio has no approver: Ask verdicts fail closed
+                    spawn_fail_closed_denier(&h);
                     map.lock().await.insert(sid.to_string(), h.clone());
                     h
                 }
@@ -1378,51 +1388,118 @@ async fn acp_drive_turn(
 }
 
 async fn mcp_cmd(config: &Config) -> i32 {
-    // expose the builtin tool catalog over stdio
+    // `marfim mcp` serves the builtin catalog + connected mcpServers over
+    // stdio, and EVERY tool call — builtin or mcp__ — flows through the
+    // SAME PermissionEngine path as interactive runs (the old read-only
+    // refusal is gone). stdin is the MCP protocol, so there is no
+    // interactive approver: Ask verdicts fail closed (deny) via a parked
+    // approver task.
+    let (perm_engine, mut approval_rx) = PermissionEngine::new(
+        marfim_core::permissions::Mode::Default,
+        settings::rules_from_config(config),
+    );
+    let perm = Arc::new(perm_engine);
+    tokio::spawn(async move {
+        while let Some(job) = approval_rx.recv().await {
+            let _ = job
+                .respond
+                .send(marfim_core::permissions::ApprovalAnswer::Deny);
+        }
+    });
+
     let mut registry = marfim_tools::registry::ToolRegistry::new();
     marfim_tools::tools_host::register_builtins(&mut registry);
-    let tools: Vec<(String, String, serde_json::Value)> = registry
-        .list_visible()
-        .into_iter()
-        .chain(registry.list_deferred())
-        .map(|t| {
+    let tool_ctx = ToolCtx {
+        cwd: std::env::current_dir().unwrap_or_default(),
+        session_id: "mcp".into(),
+        ..Default::default()
+    };
+    let host_tools = marfim_tools::tools_host::HostTools::new(
+        perm.clone(),
+        tool_ctx.clone(),
+        marfim_core::sandbox::Sandbox::probe(),
+        marfim_core::hooks::Hooks::default(),
+    );
+    // A SERVER surface serves the builtin catalog only: no outbound
+    // mcpServers connections (otherwise `marfim mcp` with a self-referencing
+    // config would recurse into itself). Sessions connect servers; the
+    // server composes whatever its caller already registered.
+    let _ = config;
+
+    let tools: Vec<(String, String, serde_json::Value)> = host_tools
+        .registry
+        .schemas(true)
+        .iter()
+        .map(|v| {
             (
-                t.name.to_string(),
-                t.description.to_string(),
-                t.parameters.clone(),
+                v["function"]["name"].as_str().unwrap_or("").to_string(),
+                v["function"]["description"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string(),
+                v["function"]["parameters"].clone(),
             )
         })
+        .filter(|(n, _, _)| !n.is_empty())
         .collect();
-    let registry = Arc::new(registry);
+
+    let host_tools = Arc::new(host_tools);
+    let rt = tokio::runtime::Handle::current();
     let opts = marfim_mcp::server::ServerOptions {
         host: Arc::new(move |name, args| {
-            // tools served without permissions context run read-only-safe
-            // operations only; execution-class tools require the CLI host
-            let read_only = matches!(
-                name,
-                "Read" | "Glob" | "Grep" | "LS" | "RepoMap" | "Compute" | "ToolSearch" | "Think"
-            );
-            if !read_only {
-                return (
-                    "mcp tool execution requires the interactive host (marfim run)".into(),
-                    true,
-                );
-            }
-            let ctx = marfim_tools::registry::ToolCtx {
-                cwd: std::env::current_dir().unwrap_or_default(),
-                session_id: "mcp".into(),
-                ..Default::default()
-            };
-            match registry.get(name) {
-                Some(def) => {
-                    let o = (def.run)(&ctx, args);
-                    (o.output, o.is_error)
-                }
-                None => (format!("unknown tool {name}"), true),
-            }
+            // one block_on per call: permission verdict + dispatch
+            rt.block_on(async {
+                let ctx = marfim_core::loop_::LoopCtx {
+                    session_id: "mcp".into(),
+                    cwd: std::env::current_dir()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                    cancel: marfim_core::loop_::CancelToken::default(),
+                };
+                // ToolHost::execute = hooks -> PermissionEngine -> dispatch
+                let (out, is_err) =
+                    marfim_core::loop_::ToolHost::execute(host_tools.as_ref(), name, args, &ctx)
+                        .await;
+                (out, is_err)
+            })
         }),
     };
-    let _ = config; // mcpServers wiring rides the client below in Phase 2
-    marfim_mcp::server::serve_stdio(tools, opts);
+    // serve_stdio blocks on stdin — run it OFF the async executor
+    let joined = tokio::task::spawn_blocking(move || marfim_mcp::server::serve_stdio(tools, opts));
+    let _ = joined.await;
     0
+}
+
+/// Connect every configured `mcpServers` entry and register its tools on
+/// the host (registry + dispatch table). Returns connected server names.
+async fn connect_mcp_servers(
+    config: &Config,
+    host: &mut marfim_tools::tools_host::HostTools,
+) -> Vec<String> {
+    let Some(serde_json::Value::Object(map)) = config.get("mcpServers").cloned() else {
+        return vec![];
+    };
+    let mut connected = Vec::new();
+    for (name, entry) in map.into_iter() {
+        let cfg = match marfim_mcp::client::McpServerConfig::from_json(&entry) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("warning: mcpServers.{name}: {e} (skipped)");
+                continue;
+            }
+        };
+        match marfim_mcp::client::McpClient::connect(&name, &cfg).await {
+            Ok(client) => {
+                let tools = client.tools.lock().await.clone();
+                let n = host.register_mcp_client(&client, &tools);
+                eprintln!("mcp server {name}: connected, {n} tool(s)");
+                connected.push(name);
+            }
+            Err(e) => {
+                eprintln!("warning: mcp server {name}: unavailable: {e} (skipped)");
+            }
+        }
+    }
+    connected
 }

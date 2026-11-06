@@ -8,8 +8,11 @@ description = "MCP client and server (JSON-RPC over stdio)"
 
 [dependencies]
 marfim-core = { path = "../marfim-core" }
-marfim-tools = { path = "../marfim-tools" }
 tokio.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
