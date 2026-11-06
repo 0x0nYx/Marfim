@@ -381,8 +381,9 @@ pub(crate) fn sha256_hex(data: &[u8]) -> String {
     ];
     let mut w = [0u32; 64];
     for off in (0..padded_len).step_by(64) {
-        for (i, chunk) in msg[off..off + 64].as_chunks::<4>().0.iter().enumerate() {
-            w[i] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for (i, co) in (0..64).step_by(4).enumerate() {
+            let o = off + co;
+            w[i] = u32::from_be_bytes([msg[o], msg[o + 1], msg[o + 2], msg[o + 3]]);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

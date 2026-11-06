@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased — engineering round 2 (2026-11-06)
+
+### Step 0: baseline
+- `rust-toolchain.toml` pins the workspace to 1.99.1 (clippy + rustfmt
+  components included); CI installs exactly this toolchain for the main
+  gate job.
+- CI repaired and extended: the `push` trigger was `branches: ain]` (a
+  malformed literal), so CI had never run on main pushes — now
+  `branches: [main]`; new jobs: pinned-toolchain gate (ubuntu+macos:
+  fmt, clippy -D warnings, tests, release size budget), MSRV(1.78)
+  job (`cargo +1.78 test --all` + binary build), `cargo deny check`
+  (deny.toml: licenses/bans/RustSec v2, yanked=deny), `cargo audit`.
+- `crates/marfim-tools/src/patch.rs`: `find_offset` rewritten with
+  `find_map`/`find` (clippy `manual_find`), behavior identical.
+- Deleted `marfim-core::compact::summarize_via` and its private runtime
+  bridge — no production callers, and the nested
+  `block_on`-inside-runtime construction can panic under an outer
+  runtime. (Compaction runs through the loop's own async path.)
+- MSRV(1.78) made real: the lockfile was un-buildable on 1.78 (several
+  transitive crates moved to edition 2024 / rustc 1.82-1.89). Pinned
+  to the newest 1.78-compatible versions: clap 4.5.23, reqwest 0.12.9,
+  quinn 0.11.3 (drops the cpufeatures 0.3 chain), rand 0.8.8, zeroize
+  1.8.1, indexmap 2.7.1, toml 0.8.20, toml_edit 0.22.24, winnow
+  0.7.11, serde 1.0.219, serde_json 1.0.140, proc-macro2 1.0.94,
+  quote 1.0.40, hyper-util 0.1.10, hyper-rustls 0.27.5, instability
+  0.3.7, tokio 1.43.1, tokio-util 0.7.13, unicode-segmentation 1.12.0,
+  utf8_iter 1.0.4, uuid 1.11.0.
+- `marfim-brain` code brought back onto 1.78: `LazyLock` ->
+  `OnceLock` (confusables), `is_none_or` -> `match` (sketch, spellfix),
+  `as_chunks::<4>` -> index math (dp SHA-256 message schedule). All
+  semantics unchanged; differential fixtures still replay byte-exact.
+- `clippy.toml` sets `msrv = "1.78"` for the toolchains that honor it.
+- Decision (inputs): ORACLE_NODE = the Node marfim v1.2.0 tree,
+  preserved locally (`preserved/oracle`, also fetchable as tag
+  `archive/node-v1.2.0` from the preservation bundle in
+  `0x0nYx/marfim-archive`). PY_INTEL = https://github.com/0x0nYx/caelestia-assistant
+  (public; 478 Python files; `assistant/core/*.py` matches the
+  `Python origin:` headers embedded in the oracle's `src/intel`).
+
 ## 1.0.0 — one binary, one brain (2026-11-05)
 
 The terminal 1.0.0: a single Rust workspace, a single static `marfim`

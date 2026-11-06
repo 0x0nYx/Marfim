@@ -192,7 +192,11 @@ impl SpellIndex {
             let mut best: Option<(String, i64)> = None;
             for c in &candidates {
                 let cn = self.count_of(c).unwrap_or(0);
-                if cn >= self.common_min && best.as_ref().is_none_or(|(_, bn)| cn > *bn) {
+                let beats_best = match best.as_ref() {
+                    None => true,
+                    Some((_, bn)) => cn > *bn,
+                };
+                if cn >= self.common_min && beats_best {
                     best = Some((c.clone(), cn));
                 }
             }

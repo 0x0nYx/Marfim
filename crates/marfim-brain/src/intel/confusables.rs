@@ -33,7 +33,7 @@
 //!   codepoint order for the ASCII tool names used here).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 use crate::intel::dp::decompose_f64;
 
@@ -486,7 +486,11 @@ pub const COMMITTED_PAIRS_JSON: &str = r###"{
 /// The committed CONFUSABLE_PAIRS (runtime view of the artifact, loaded
 /// once; a missing/corrupt artifact degrades to [] — the clarifier falls
 /// back to the generic question, never mines live, never crashes).
-pub static CONFUSABLE_PAIRS: LazyLock<Vec<ConfusablePair>> = LazyLock::new(|| {
+/// MSRV(1.78): `OnceLock` instead of `LazyLock` (stabilized 1.80);
+/// identical semantics — parse once, deterministic, no fallback churn.
+static CONFUSABLE_PAIRS: OnceLock<Vec<ConfusablePair>> = OnceLock::new();
+
+fn confusable_pairs_init() -> Vec<ConfusablePair> {
     #[derive(serde::Deserialize)]
     struct Artifact {
         #[serde(default)]
@@ -495,11 +499,11 @@ pub static CONFUSABLE_PAIRS: LazyLock<Vec<ConfusablePair>> = LazyLock::new(|| {
     serde_json::from_str::<Artifact>(COMMITTED_PAIRS_JSON)
         .map(|a| a.pairs)
         .unwrap_or_default()
-});
+}
 
 /// The committed pairs list ([] when the artifact is absent/corrupt).
 pub fn load_pairs() -> &'static [ConfusablePair] {
-    &CONFUSABLE_PAIRS
+    CONFUSABLE_PAIRS.get_or_init(confusable_pairs_init)
 }
 
 /// Hand-pinned pair from the arena's failure classes (m-items): the sibling
@@ -1056,7 +1060,7 @@ mod tests {
     #[test]
     fn committed_artifact_loads_with_27_pairs() {
         assert_eq!(load_pairs().len(), 27);
-        assert_eq!(CONFUSABLE_PAIRS.len(), 27);
+        assert_eq!(load_pairs().len(), 27);
         assert_eq!(load_pairs()[0].a, "setAudioIncrement");
         assert_eq!(
             load_pairs()[0].question,

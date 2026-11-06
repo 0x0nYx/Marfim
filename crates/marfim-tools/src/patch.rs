@@ -189,37 +189,31 @@ fn apply_hunk(lines: &[String], hunk: &Hunk) -> Result<Vec<String>, String> {
         })
         .collect();
 
-    let find_offset = |from: usize| -> Option<usize> {
-        let n = lines.len();
-        for cand in [0i64, 1, -1, 2, -2, 4, -4, 8, -8] {
-            let base = from as i64 + cand;
-            if base < 0 {
-                continue;
-            }
-            let base = base as usize;
-            if base + expect.len() <= n
-                && lines[base..base + expect.len()]
-                    .iter()
-                    .zip(expect.iter())
-                    .all(|(a, b)| a == *b)
-            {
-                return Some(base);
-            }
-        }
-        // last resort: trim-equality scan (bounds-guarded)
-        if expect.len() > n {
-            return None;
-        }
-        for base in 0..=n.saturating_sub(expect.len()) {
-            if lines[base..base + expect.len()]
+    let matches_at = |base: usize, trim: bool| -> bool {
+        base + expect.len() <= lines.len()
+            && lines[base..base + expect.len()]
                 .iter()
                 .zip(expect.iter())
-                .all(|(a, b)| a.trim() == b.trim())
-            {
-                return Some(base);
-            }
-        }
-        None
+                .all(|(a, b)| if trim { a.trim() == b.trim() } else { a == *b })
+    };
+
+    let find_offset = |from: usize| -> Option<usize> {
+        let n = lines.len();
+        // anchored drift search: exact equality at candidate offsets
+        [0i64, 1, -1, 2, -2, 4, -4, 8, -8]
+            .into_iter()
+            .find_map(|cand| {
+                let base = from as i64 + cand;
+                if base < 0 {
+                    return None;
+                }
+                let base = base as usize;
+                matches_at(base, false).then_some(base)
+            })
+            .or_else(|| {
+                // last resort: trim-equality scan (bounds-guarded)
+                (0..=n.saturating_sub(expect.len())).find(|&base| matches_at(base, true))
+            })
     };
 
     let base = find_offset(hunk.old_start.saturating_sub(1))

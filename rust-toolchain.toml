@@ -1,0 +1,7 @@
+# Pinned toolchain: CI and every local run resolve to this exact build,
+# so gates and release artifacts are reproducible across machines.
+# Bump only with a CHANGELOG entry and a green MSRV(1.78) job.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

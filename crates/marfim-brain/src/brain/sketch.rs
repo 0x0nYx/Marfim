@@ -466,10 +466,18 @@ impl TDigest {
         }
         self.n += 1;
         self.total += weight;
-        if self.min_value.is_none_or(|cur| value < cur) {
+        let is_new_min = match self.min_value {
+            None => true,
+            Some(cur) => value < cur,
+        };
+        if is_new_min {
             self.min_value = Some(value);
         }
-        if self.max_value.is_none_or(|cur| value > cur) {
+        let is_new_max = match self.max_value {
+            None => true,
+            Some(cur) => value > cur,
+        };
+        if is_new_max {
             self.max_value = Some(value);
         }
         self.buffer.push((value, weight));
