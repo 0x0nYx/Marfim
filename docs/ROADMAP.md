@@ -1,77 +1,109 @@
 # Marfim Roadmap
 
-v0.1.0 ships the convergent core. This roadmap sequences the remaining high-value
-capabilities surfaced by the forensic analysis, each with its source doctrine.
+Rewritten from docs/DISTILLATION.md (the spec ledger): every QUEUED/PARTIAL
+row below carries its spec source. Shipped items are NOT listed here — they
+live in docs/FEATURE-MATRIX.md and docs/PROGRESS.md. Work-package IDs refer
+to the progress ledger.
 
-## v0.2 — intelligence & context
+## v0.2 — embeddability + protocol (W1/W2, critical path)
 
-> **Status (v0.2.0):** model-role auto-routing SHIPPED (router with failover + budgets +
-> capabilities); MCP HTTP/SSE transport SHIPPED; external agents as worktree-isolated
-> backends SHIPPED; parallel subagents SHIPPED; verify-driven reflection SHIPPED;
-> personalized-PageRank repo map SHIPPED (file-level reference graph, token-budget
-> binary search, deterministic); micro-compaction SHIPPED (tool-result elision with
-> protected tail). Remaining below: tree-sitter symbol frontends (the extractor is
-> line-precise today: modifier-aware Rust, Go receivers, TS interface/type, comment
-> skipping; tree-sitter grammars would raise per-language precision further) and
-> CodeMode.
-- **Tree-sitter symbol frontends for the repo map**: the PageRank ranking and
-  token-budget binary search are live; tree-sitter grammars remain the planned
-  precision upgrade over the (already comment- and modifier-aware) line extractor
-  (aider `repomap.py`).
-- **CodeMode**: expose namespaced tool catalogs to the model as callable code executed
-  in a restricted interpreter (opencode v2 `packages/codemode`) — collapses N tool
-  schemas into one code surface.
-- **Model-role auto-routing**: weak model for titles/summaries (aider), fast model for
-  plan, vision role for images (omp).
-- **Micro-compaction**: tool-result elision with protected tail before summarization
-  (hermes `micro_compaction.py`).
+- **marfim-app lib extraction, platform trait, CredentialSource,
+  android sandbox arms, GitBackend (gix)** — the embeddability substrate
+  (W1.1–W1.5).
+- **Protocol v1**: complete the gateway surface (sessions, steer/cancel/
+  undo/rewind/fork, config with redaction, fs/git/MCP routes), SSE envelope
+  with seq + Last-Event-ID ring + heartbeat, docs/PROTOCOL.md, byte-checked
+  fixtures, unix-socket + optional TLS (W2.1–W2.3).
+- **Terminal**: PTY + Rust emulator (vt100 first, alacritty_terminal
+  fallback) behind marfim-term; `Terminal` tool; monitor migration (W3).
 
-## v0.3 — hard isolation & policy
-- **Durable inbox sessions**: SQLite projection over the JSONL log with crash-recovery
-  settlement of stale tool calls (opencode v2 `specs/v2/session.md`).
-- **Starlark execpolicy**: allow/prompt/forbidden prefix rules with self-tests
-  (codex `execpolicy`), replacing the deny-list.
-- **Network enforcement proxy**: local HTTP/SOCKS allowlist proxy bound to bash runs
-  (codex network proxy).
-- **LLM read-only permission judge** with cached decisions + deterministic inspector
-  chain (goose smart-approve).
+## v0.3 — mobile (W4/W14)
 
-## v0.4 — learning & memory
-- **Learning loop**: background warm-cache review forks that distill sessions into
-  skills (hermes `background_review.py`).
-- **Instincts**: atomic confidence-scored behaviors injected at session start,
-  evolved into skills (ECC continuous-learning-v2).
-- **Session FTS search**: sqlite FTS5 over past sessions (hermes `session_search`).
-- **Memory vault**: portable memory format across harnesses (ECC `ecc.memory.v1`).
+- **marfim-ffi** C ABI owning the tokio runtime; **apps/flutter** (Android
+  only, cargo-ndk, foreground service, secure secret channel); Flutter UI
+  modules per docs/DESIGN.md; mobile CI with emulator suite (W4.1–W4.4);
+  alpha gate (W4.5) — BLOCKED on owner inputs 1/2/4.
+- **Embedded shell** (W14): ShellBackend trait, in-process interpreter on a
+  workspace VFS with safepoint budget, obash-style differential suite vs
+  /bin/sh; default Embedded on Android, Process on desktop.
 
-## v0.5 — autonomy (the dsh layer)
-- **Mandates**: versioned, revocable authorization objects for autonomous work;
-  deterministic gate + LLM assessment split (dsh-superagent `policy.ts`).
-- **Durable effect queue + outbox**: store-first, act-later execution with receipts
-  (dsh `effects.ts`/`outbox.ts`).
-- **Source plugins**: GitHub/Feishu triggers → router → per-ticket worker sessions
-  with a monitoring panel (dsh architecture).
-- **Scheduled jobs**: cron-like recurring agent runs (opencode schedule, hermes cron).
+## v0.4 — edit/tools/loop upgrades (W5, from DISTILLATION §S/§X/§A)
 
-## v0.6 — surfaces
-- **LSP integration**: diagnostics re-injected with staleness counters, 14 actions
-  (omp `src/lsp`).
-- **DAP debugging**: breakpoint/stepping/evaluate tool (omp `src/dap`).
-- **ACP server**: editor integration protocol (goose/hermes acp adapters).
-- **TUI upgrade**: alternate screen, themes with auto dark/light (omp renderer).
-- **Recipe/workflow system**: parametric YAML task templates with subrecipes
-  (goose recipes).
+- Hashline edit anchors `[PATH#TAG]` with blake2b digests (OMP pi-edit,
+  −61% tokens measured) (W5.1).
+- Read summarization driven by the selector grammar (W5.2).
+- tree-sitter frontends for repomap/AstQuery (feature `treesitter`) (W5.3).
+- Generic tool-output bounding with backing file + retention (W5.4).
+- Mangled tool-name recovery + identical-call cap + turn budgets
+  (goose tool_monitor) (W5.5).
+- Per-turn pure tool-spec plan + tool-declared approval tiers (codex/omp)
+  (W5.6).
+- Chunk-fed grep, stamp-based dir cache, walker discipline, bounded exec
+  pool (OMP pi-walker) (W5.7).
+- CoW isolation ladder with probe (OMP pi-iso) (W5.8).
+- CodeMode restricted interpreter (opencode codemode; starlark vs rhai by
+  measured spike) (W5.9).
 
-## v0.7 — evidence pipeline (the REA layer)
-- **Evidence records**: every tool result becomes a canonical evidence object with
-  confidence/coverage and a retained-view pager (rea contracts).
-- **Obligation ledger**: reconstruction/verification checklists as a definition-of-done
-  gate for refactors (rea `verify_reconstruction`).
-- **Unknowns ledger**: explicit `record_unknown`/`verify_unknown_resolution` workflow
-  for investigations (rea).
+## v0.5 — durable state (W6, from DISTILLATION §W)
+
+- marfim-state (feature `sqlite`): WAL policy module, BEGIN IMMEDIATE write
+  core, schema+migrations, deterministic journal projections, maintenance,
+  background usage writer, FTS5+trigram behind the sessionsearch interface
+  (W6.1). Durable inbox + crash settlement + receipts + leases (W6.2).
+  Session tree with fork + branch summaries + UUIDv7 (W6.3). Trajectory
+  compressor (W6.4).
+
+## v0.6 — providers (W7, from DISTILLATION §R/§F/§P)
+
+- Model capability registry + compat rules as TOML data; adaptive thinking;
+  thinking replay fingerprint ledger; Gemini thought signatures (W7.1).
+- Cache-TTL plumbing: prompt_cache_retention, Anthropic TTL-reject ladder,
+  Gemini cachedContent lifecycle, cache-aware idle compaction (W7.2).
+- Aux failover ladder (parameter-strip rungs, credential refresh, quarantine
+  walk) + health TTLs 600s/60s + capability-scoped recovery (W7.3).
+- OAuth2 PKCE + refresh pools via CredentialSource (W7.4).
+- Wires: Bedrock (SigV4), Vertex, Mistral native, custom grammar tools —
+  cassette-tested (W7.5).
+
+## v0.7 — context (W8, from DISTILLATION §C/§R2/§CC)
+
+- Cut-point never at a toolResult + split-turn prefix summary; defrag
+  counter ≥2000 + 3-failure skip; skill-prune markers; shake artifact refs
+  (protected 40k, ≥20k savings); snapcompact (opt-in); context promotion;
+  async/background compaction with persisted checkpoints; ordered strategy
+  list; system-prompt snapshot-once.
+
+## v0.8 — permissions/safety (W9, from DISTILLATION §A/§G)
+
+- Starlark execpolicy (feature `starlark`) replacing the deny-list;
+  amendment-capable approvals (W9.1). Network enforcement proxy (W9.2).
+  Deterministic inspector chain + LLM read-only judge + guardian smart
+  approval on the W7.3 aux budget (W9.3). Hardline Windows tier,
+  deny-and-steer, coalesced approvals with request_id/settle, task-scoped
+  secret scoping, staged writes, observe mode, seccomp backend,
+  managed-settings tier + identity() (W9.4). Browser URL/SSRF floors + CDP
+  tools (W9.5).
+
+## v0.9 — learning/autonomy (W10, from DISTILLATION §S/§G)
+
+- Memory caps + background review fork + learning loop; skills telemetry/
+  curator/audit; instincts; portable memory vault (ecc.memory.v1, treated
+  as untrusted data) (W10.1). Mandates, effect queue + ordered outbox,
+  source plugins, cron (5 NL forms, catch-up, per-job pinning), async
+  delegation ledger, PR-burst-guard as repo automation (W10.2).
+
+## v1.x — surfaces + evidence (W11/W12, from DISTILLATION §H/§CC/§G)
+
+- LSP client diagnostics with staleness counters; DAP tool; ACP completion;
+  TUI themes + interrupt-and-redirect + transcript divider; parametric YAML
+  recipes; testkit HTTP cassettes; MCP legacy-handshake pinning + task
+  backgrounding (opt-in); remaining wire breadth (W11).
+- Evidence records (confidence/coverage), obligation ledger as
+  definition-of-done gate, unknowns ledger, REA bridge (W12).
 
 ## Continuous
-- Expand wire adapters toward opencode's 45-protocol breadth (Bedrock, Vertex, Mistral
-  native, Responses API).
-- Prompt-cache warming pings (opencode) and cache-aware compaction boundaries.
-- Skills marketplace with compat gates (ECC `skill-host-compat`).
+
+- Adopt every FORMER-REJECTS row as a default-off flag (see
+  docs/DISTILLATION.md §FORMER-REJECTS).
+- Keep every "already held" DISTILLATION claim verified by tests, not
+  convention.

@@ -2,12 +2,13 @@
 
 > **1.0.0:** one Rust workspace, one static `marfim` binary, the
 > intelligence modules ported differentially from the Node oracle
-> ([docs/PORT-LEDGER.md](docs/PORT-LEDGER.md)), 475 green tests,
-> `#![forbid(unsafe_code)]` everywhere, MIT.
+> ([docs/PORT-LEDGER.md](docs/PORT-LEDGER.md)), all tests green
+> (live count: [docs/PROGRESS.md](docs/PROGRESS.md) — the single source;
+> 603 at last record), `#![forbid(unsafe_code)]` everywhere, MIT.
 
 ```bash
 cargo build --release            # static marfim binary
-cargo test                       # 491 tests incl. 18 oracle-differential suites
+cargo test                       # all green; live count in docs/PROGRESS.md (incl. 18 oracle-differential suites)
 ./target/release/marfim doctor
 ./target/release/marfim -p "fix the failing test" --output-format stream-json
 ./target/release/marfim tui                    # ratatui over the session actor

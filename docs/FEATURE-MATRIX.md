@@ -26,14 +26,10 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | Strict config (unknown key + did-you-mean) | 🦢✅ |
 | Skills / memory (tighten-only) / guardian / evidence / board / trust | 🦢✅ |
 | MCP client + server | 🦢✅ |
-| serve (HTTP+SSE) / ACP agent+client / LSP | 🦢✅ |
+| serve (HTTP+SSE) / ACP agent+client / LSP server | 🦢✅ |
 | External agents (opencode, hermes) | 🦢✅ profiles shipped `unverified=true enabled=false` pending owner binaries |
 | Google / Zen provider dialects | 🦢 partial (OpenAI-compat covers compatible endpoints; documented in the provider presets) |
-| CDP devtools browser tools | 🦢 deferred to app wave (PARITY §10.4) |
-
-Every row is a Marfim capability. "Source" names the harness(es) whose *verified
-behavior* it synthesizes (clean-room; see CLEAN-ROOM.md). "Status" reflects what
-ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.md`.
+| CDP devtools browser tools | 🦢 deferred to the browser wave (ROADMAP v0.8 / W9.5) |
 
 ## 1. Model & provider layer
 
@@ -62,7 +58,7 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | Deterministic tool-result pruning before summarization | hermes layered compression | ✅ |
 | Mid-turn steering delivered at safe step boundaries | opencode v2 inbox, omp live steering | ✅ (between tool batches) |
 | Subagents with roles + depth limit | claude code, hermes delegate, omp | ✅ |
-| Subagent git-worktree isolation | omp CoW isolation (full CoW backends v0.2+) | ◐ |
+| Subagent git-worktree isolation | omp CoW isolation | ✅ (detached-worktree isolation ships — D16; the full CoW backend ladder is W5.8) |
 | Per-turn usage + cost ledger | goose usage ledger, opencode stats | ✅ |
 | Interrupt (Ctrl-C) races the loop | goose effect machine cancellation | ✅ |
 
@@ -128,8 +124,9 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 
 ## 7. Deliberately deferred (documented in ROADMAP.md)
 
-LSP/DAP integration (oh-my-pi), CodeMode tool-as-code interpreter (opencode v2),
-durable inbox sessions w/ SQLite projections (opencode v2), Starlark execpolicy +
-network enforcement proxy (codex), LLM permission judge (goose), learning loop +
-instincts (hermes/ECC), proactive GitHub mandates (dsh-superagent), REA evidence
-bridge, recipe/workflow system (goose), voice (aider/hermes), ACP surfaces (goose/hermes).
+LSP client diagnostics + DAP (the LSP server itself ships — §0), CodeMode
+tool-as-code interpreter (opencode v2), durable inbox sessions w/ SQLite
+projections (opencode v2), Starlark execpolicy + network enforcement proxy
+(codex), LLM permission judge (goose), learning loop + instincts
+(hermes/ECC), proactive GitHub mandates (dsh-superagent), REA evidence
+bridge, recipe/workflow system (goose), voice (aider/hermes).

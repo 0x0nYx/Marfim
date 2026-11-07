@@ -68,3 +68,12 @@ diagnostics/genius/issues domains, web app) is NOT in this release. The
 harness exposes the Faculty surface those systems plug into; the oracle
 tree stays preserved for the next porting waves. Nothing in this list is
 faked: there are no stubs pretending otherwise.
+
+**Regenerability note (2026-11-07, ledger row W13):** the preserved oracle
+tree is NOT reachable from this repository — `git ls-remote --tags origin`
+returns only `v1.0.0` (a Rust-workspace commit) and there is no `archive/*`
+tag or Node tree on the remote. The committed fixtures in
+`fixtures/intel/*.jsonl` are therefore a FROZEN record: they replay
+byte-exact in CI, but they cannot be regenerated or extended until the
+owner pushes an `archive/*` tag (docs/OWNER-INPUT.md row 3). W13 stays
+BLOCKED on that input.

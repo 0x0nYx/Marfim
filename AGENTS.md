@@ -7,7 +7,8 @@ MIT). Do not copy code from the projects analyzed in docs/forensic/ —
 implement from the behavioral specs only.
 
 ## Commands
-- Run tests: `cargo test --workspace` (475 green; keep it that way)
+- Run tests: `cargo test --workspace` (all green; live count is recorded in
+  docs/PROGRESS.md — the single source; keep both true)
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Format: `cargo fmt --all`
 - One binary: `cargo build --release` (size budget 25 MB, CI-enforced)

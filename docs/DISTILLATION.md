@@ -24,7 +24,7 @@ applied as the acceptance filter.
 | Responses `reasoning.effort` accepts `xhigh` | OMP wire | ADOPTED — max collapses to `xhigh` |
 | Gemini `thinkingLevel MINIMAL\|LOW\|MEDIUM\|HIGH` | OMP `mapEffortToGoogleThinkingLevel` | ADOPTED — xhigh/max → `HIGH`, `includeThoughts: true` |
 | GPT-5.6+ "Juice" forced-off trick (`# Juice: N`) | OMP `openai-responses.ts` | REJECTED — vendor-specific prompt hack; revisit only with a real model need |
-| Anthropic adaptive thinking (`{type:"adaptive"}`) + per-model capability tables (fable/opus-5.5 mandatory-thinking etc.) | Hermes adapter | QUEUED — needs a per-model capability registry; see §M |
+| Anthropic adaptive thinking (`{type:"adaptive"}`) + per-model capability tables (fable/opus-5.5 mandatory-thinking etc.) | Hermes adapter | QUEUED — needs a per-model capability registry; see §P |
 | Thinking replay policy (keep signed thinking per model generation, sha256-fingerprint suppression of signature-400 blocks persisted per session) | Hermes `anthropic_thinking_policy.py` / `_replay.py` | QUEUED — Marfim currently replays verbatim; the fingerprint ledger is the correct upgrade when a signature-400 is first observed live |
 
 ## §R2 OpenAI Responses wire — ADOPTED (new file `providers/responses.rs`)
@@ -274,3 +274,33 @@ Every ADOPTED item above is wired, bounded (fixed tool list, single decode
 pass, excision-before-test), observable (refusal reason surfaces in the
 tool result), reversible (empty `accountEmail` disables the guard), and
 covered by tests in this commit.
+
+---
+
+## §FORMER-REJECTS — adoption forms (all default OFF unless stated)
+
+Every REJECTED row above still ships: each conflicts with an invariant or a
+scope line only in its original form, so it ships in the adoption form below
+(default-off behind a flag). Nothing stays rejected; nothing ships in a form
+that violates an invariant.
+
+| Original rejection | Adoption form (default state) |
+|---|---|
+| Juice trick (`# Juice: N` prompt hack) | per-model compat quirk `openai.juice_off` (off) |
+| Responses `previous_response_id` chaining | `responses.chain = off\|hint`; hint sends the id only as an optimization, journal replay stays truth, any stale-chain error falls back to stateless replay (off) |
+| Custom grammar tools (`apply_patch` grammar, `custom_tool_call_input.delta`) | `custom` tool kind on the Responses wire only with a function-tool fallback (off) |
+| Vertex family | `google-vertex` preset via CredentialSource (off) |
+| In-place key rotation | credential pool with per-request immutable snapshots — never mutate a published context (off) |
+| Service tiers | validated per-family config, default unset |
+| KDL cascade / 8.7k-model catalog | TOML compat rules, no KDL dependency |
+| Guardian-LLM approval | opt-in flag (off) |
+| Human-wait accounting | opt-in flag (off) |
+| Snapcompact bitmap frames | opt-in flag (off) |
+| CodeMode (`Code` tool interpreter) | opt-in flag (off) |
+| tree-sitter frontends | cargo feature `treesitter` (off) |
+| shell-vm (safepoint interpreter on desktop) | opt-in flag (off); W14 keeps it default-ON for Android only |
+| Safepoint VM / uutils / obash | W14 embedded shell (default ON for Android, OFF on desktop) |
+| `--brief` SendUserMessage | an Event variant, journaled and routed through the steering/approval channel; on only in headless `--brief` |
+| Privacy-mod disable channels | only the managed-settings tier can disable the guard; config-off (`accountEmail` empty) stays the documented switch |
+| Panic containment (catch_unwind wrapper) | catch_unwind at the FFI boundary only (marfim-ffi), core stays forbid(unsafe) |
+| ZDR store:false | already moot — Marfim is always `store:false` |
