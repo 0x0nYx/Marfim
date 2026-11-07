@@ -97,6 +97,10 @@ pub struct PermissionEngine {
     /// the turn continues. Ask verdicts from rules AND mode defaults both
     /// convert.
     pub deny_instead_of_prompting: bool,
+    /// W1.4 `SandboxLevel::AppUid`: no kernel containment available, so
+    /// every mutation-tier verdict (Edit/Execute/Network) that would
+    /// ALLOW is forced to Ask. Deny floors/rules stay absolute.
+    pub force_ask_mutations: bool,
     /// Single approval queue: every pending ask flows through one channel
     /// so approvals serialize and cannot deadlock or double-prompt.
     queue_tx: mpsc::Sender<ApprovalJob>,
@@ -124,6 +128,7 @@ impl PermissionEngine {
                 rules,
                 privacy: None,
                 deny_instead_of_prompting: false,
+                force_ask_mutations: false,
                 queue_tx: tx,
             },
             rx,
@@ -138,6 +143,12 @@ impl PermissionEngine {
     }
 
     /// Convert ask verdicts into denies (builder style).
+    /// W1.4: app-uid attestation — mutations ask, always.
+    pub fn with_force_ask_mutations(mut self, on: bool) -> Self {
+        self.force_ask_mutations = on;
+        self
+    }
+
     pub fn with_deny_instead_of_prompting(mut self, on: bool) -> Self {
         self.deny_instead_of_prompting = on;
         self
@@ -293,7 +304,17 @@ impl PermissionEngine {
         summary: &str,
         input: Option<&str>,
     ) -> Verdict {
-        match self.decide_stage(tool, class, argv, risk) {
+        let mut stage = self.decide_stage(tool, class, argv, risk);
+        // W1.4 `SandboxLevel::AppUid`: no kernel containment available —
+        // every mutation-tier ALLOW escalates to Ask (floors/denies are
+        // untouched; deny > ask > allow holds). ReadOnly stays allow.
+        if self.force_ask_mutations
+            && matches!(stage, Stage::Allow { .. })
+            && !matches!(class, ToolClass::ReadOnly | ToolClass::None_)
+        {
+            stage = Stage::Ask;
+        }
+        match stage {
             Stage::Deny(reason) => Verdict {
                 decision: Decision::Deny,
                 reason,

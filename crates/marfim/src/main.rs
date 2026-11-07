@@ -571,30 +571,9 @@ fn agents_cmd(cmd: Option<settings::AgentsCmd>) -> i32 {
 }
 
 fn sandbox_exec_cmd(roots: &[String], cmd: &[String]) -> i32 {
-    if cmd.is_empty() {
-        eprintln!("error: sandbox-exec needs a command after `--`");
-        return 2;
-    }
-    let root_paths: Vec<std::path::PathBuf> = roots.iter().map(std::path::PathBuf::from).collect();
-    // fail-closed: apply BEFORE exec; any error here means the child never runs
-    if let Err(e) = marfim_core::sandbox::enforce_write_roots(
-        &root_paths.iter().map(|p| p.as_path()).collect::<Vec<_>>(),
-    ) {
-        eprintln!("error: sandbox refused: {e}");
-        return 84; // conventional sandbox-refusal exit code
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let err = std::process::Command::new(&cmd[0]).args(&cmd[1..]).exec();
-        eprintln!("error: exec {} failed: {err}", cmd[0]);
-        127
-    }
-    #[cfg(not(unix))]
-    {
-        eprintln!("error: sandbox-exec requires unix process semantics");
-        84
-    }
+    // W1.4: the logic moved to core::sandbox::exec_enforced — shared
+    // with the standalone marfim-exec helper binary.
+    marfim_core::sandbox::exec_enforced(roots, cmd)
 }
 
 fn models_cmd(cli: &Cli) -> i32 {

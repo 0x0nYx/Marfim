@@ -8,6 +8,7 @@ members = [
     "crates/marfim-gateway",
     "crates/marfim-brain",
     "crates/marfim-app",
+    "crates/marfim-exec",
     "crates/marfim",
 ]
 

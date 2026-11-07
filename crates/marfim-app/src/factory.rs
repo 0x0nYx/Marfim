@@ -143,9 +143,20 @@ pub async fn build_session(
     tokio::sync::mpsc::Receiver<marfim_core::permissions::ApprovalJob>,
 ) {
     let bus = EventBus::new(4096);
-    let sandbox = Sandbox::probe();
+    // W1.4: the attested sandbox level. AppUid/None print their honest
+    // attestation once at session start; AppUid additionally forces
+    // ask-all-mutations on the engine (deny floors stay absolute).
+    let sandbox = Sandbox::probe().with_level(settings.sandbox_level);
+    match settings.sandbox_level {
+        marfim_core::sandbox::SandboxLevel::Enforced => {}
+        level => eprintln!("{}", level.attestation()),
+    }
     let (perm, approval_rx) =
         PermissionEngine::new(settings.permission_mode, settings.rules.clone());
+    let perm = match settings.sandbox_level {
+        marfim_core::sandbox::SandboxLevel::AppUid => perm.with_force_ask_mutations(true),
+        _ => perm,
+    };
     // §privacy (claude-code `privacy` mod) + §P denyInsteadOfPrompting
     // (2.1.319): wired from config truth, not CLI.
     let perm = Arc::new(

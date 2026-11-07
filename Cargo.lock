@@ -1368,6 +1368,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "marfim-exec"
+version = "1.0.0"
+dependencies = [
+ "marfim-core",
+]
+
+[[package]]
 name = "marfim-gateway"
 version = "1.0.0"
 dependencies = [

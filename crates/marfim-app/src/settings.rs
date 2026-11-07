@@ -469,6 +469,8 @@ pub struct EffectiveSettings {
     pub stop_on_tool_error: bool,
     // Consumed by build_session: the Bash tool's default timeout.
     pub bash_default_timeout_ms: u64,
+    /// W1.4: the attested sandbox level (consumed by build_session).
+    pub sandbox_level: marfim_core::sandbox::SandboxLevel,
     pub cwd: PathBuf,
     pub title: Option<String>,
     pub resume: Option<String>,
@@ -728,7 +730,24 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
     let _ = config.get("hooks");
     let _ = config.get("env");
     let _ = config.get("unattended");
-    let _ = config.get("sandbox");
+    // W1.4: sandbox.level is REAL config now (enforced | appUid | none;
+    // unknown values fail closed — an invalid attestation is never a
+    // silent Enforced).
+    let sandbox_level = match config
+        .get("sandbox")
+        .and_then(|s| s.get("level"))
+        .and_then(|v| v.as_str())
+    {
+        None => marfim_core::sandbox::SandboxLevel::Enforced,
+        Some(raw) => match marfim_core::sandbox::SandboxLevel::parse(raw) {
+            Some(l) => l,
+            None => {
+                return Err(format!(
+                    "config: sandbox.level `{raw}` is not one of enforced|appUid|none"
+                ))
+            }
+        },
+    };
     let _ = config.get("mcpServers");
 
     let bash_default_timeout_ms = config
@@ -784,6 +803,7 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         verify_commands,
         stop_on_tool_error,
         bash_default_timeout_ms,
+        sandbox_level,
         cwd,
         title: cli.title.clone(),
         resume: cli.resume.clone().filter(|s| !s.is_empty()),

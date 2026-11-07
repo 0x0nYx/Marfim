@@ -6,6 +6,54 @@
 use std::process::Stdio;
 use tokio::process::Command;
 
+/// W1.4: the sandbox level, chosen explicitly (config `sandbox.level` or
+/// the embedding contract). An unenforceable level REFUSES rather than
+/// silently degrading (D4 fail-closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SandboxLevel {
+    /// Containment enforced where the platform can (Landlock/Seatbelt +
+    /// unshare net isolation); a requested-but-unenforceable sandbox
+    /// refuses to spawn.
+    #[default]
+    Enforced,
+    /// Android app-uid reality: no kernel sandbox is enforceable from an
+    /// unprivileged app process. Spawns proceed WITHOUT kernel
+    /// containment; the permission engine forces ask on every mutation
+    /// (deny floors still deny) and the attestation names the boundary.
+    AppUid,
+    /// Explicitly attested no-sandbox. Plain spawn; hardline floors in
+    /// the permission engine still run. NEVER auto-selected — an absent
+    /// config keeps Enforced.
+    None,
+}
+
+impl SandboxLevel {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "enforced" => Some(SandboxLevel::Enforced),
+            "appUid" | "app-uid" | "appuid" => Some(SandboxLevel::AppUid),
+            "none" => Some(SandboxLevel::None),
+            _ => None,
+        }
+    }
+
+    /// The honest printed boundary (courtesy, not a security boundary —
+    /// the same doctrine as the privacy guard).
+    pub fn attestation(&self) -> &'static str {
+        match self {
+            SandboxLevel::Enforced => {
+                "sandbox: ENFORCED (landlock/seatbelt when the platform supports it; unenforceable requests refuse to spawn)"
+            }
+            SandboxLevel::AppUid => {
+                "sandbox: APP-UID — no kernel containment available in this process; every mutation asks, deny floors stay absolute; this is a courtesy, NOT a security boundary"
+            }
+            SandboxLevel::None => {
+                "sandbox: NONE — explicitly attested; hardline floors still apply in the permission engine"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Sandbox {
     pub network: bool,
@@ -18,6 +66,8 @@ pub struct Sandbox {
     /// None = unprobed/fail-closed (a rooted command REFUSES instead of
     /// guessing a helper).
     exec_helper: Option<std::path::PathBuf>,
+    /// W1.4: the explicit level. Default Enforced.
+    pub level: SandboxLevel,
 }
 
 impl Default for Sandbox {
@@ -29,6 +79,7 @@ impl Default for Sandbox {
             unshare_available: false,
             shell: p.shell_path().to_string(),
             exec_helper: p.exec_helper().ok(),
+            level: SandboxLevel::Enforced,
         }
     }
 }
@@ -55,6 +106,21 @@ impl Sandbox {
         self
     }
 
+    /// Drop the exec-helper (tests for the fail-closed refusal path;
+    /// mirrors the unprobed packaging state).
+    pub fn without_exec_helper(mut self) -> Self {
+        self.exec_helper = None;
+        self
+    }
+
+    /// Set the sandbox level (W1.4). `AppUid`/`None` skip the
+    /// containment machinery entirely (honest degradation is the level's
+    /// documented meaning); `Enforced` keeps the fail-closed refusals.
+    pub fn with_level(mut self, level: SandboxLevel) -> Self {
+        self.level = level;
+        self
+    }
+
     pub fn unshare_available(&self) -> bool {
         self.unshare_available
     }
@@ -66,6 +132,14 @@ impl Sandbox {
     /// platform cannot enforce them, `command()` returns an error string
     /// and the caller must refuse to spawn.
     pub fn command(&self, argv0: &str) -> Result<Command, String> {
+        // W1.4: explicit AppUid/None levels spawn plainly — the level
+        // itself IS the attestation that containment is absent; the
+        // permission engine (force-ask / floors) carries the safety.
+        if matches!(self.level, SandboxLevel::AppUid | SandboxLevel::None) {
+            let mut c = Command::new(argv0);
+            self.sanitize_and_group(&mut c);
+            return Ok(c);
+        }
         let fs_rooted = !self.writable_roots.is_empty();
         let mut cmd = if fs_rooted {
             // filesystem containment requested: exec through our own
@@ -97,6 +171,12 @@ impl Sandbox {
         } else {
             Command::new(argv0)
         };
+        self.sanitize_and_group(&mut cmd);
+        Ok(cmd)
+    }
+
+    /// Shared tail: sanitized env, stdio pipes, process group 0.
+    fn sanitize_and_group(&self, cmd: &mut Command) {
         cmd.env_clear();
         for (k, v) in crate::permissions::sanitize_env(std::env::vars().collect::<Vec<_>>()) {
             cmd.env(k, v);
@@ -109,7 +189,6 @@ impl Sandbox {
             // tokio re-exposes process_group on unix; children die as a group.
             cmd.process_group(0);
         }
-        Ok(cmd)
     }
 
     /// Can this platform enforce filesystem containment? (Linux: Landlock
@@ -320,6 +399,36 @@ fn normalize_lexical(path: &std::path::Path) -> std::path::PathBuf {
 /// Seatbelt profile text (macOS): writes confined to the given roots,
 /// reads and process execution broadly allowed. The GENERATOR is
 /// cross-platform and unit-tested everywhere; applying it (via
+/// W1.4: the shared sandbox-exec path — apply write-roots fail-closed,
+/// then exec the target (unix). Used by BOTH the `marfim sandbox-exec`
+/// subcommand and the standalone `marfim-exec` helper binary. Exit codes:
+/// 2 usage, 84 refusal, 127 exec failure, else the child's own.
+pub fn exec_enforced(roots: &[String], cmd: &[String]) -> i32 {
+    if cmd.is_empty() {
+        eprintln!("error: sandbox-exec needs a command after `--`");
+        return 2;
+    }
+    let root_paths: Vec<std::path::PathBuf> = roots.iter().map(std::path::PathBuf::from).collect();
+    // fail-closed: apply BEFORE exec; any error here means the child never runs
+    if let Err(e) = enforce_write_roots(&root_paths.iter().map(|p| p.as_path()).collect::<Vec<_>>())
+    {
+        eprintln!("error: sandbox refused: {e}");
+        return 84; // conventional sandbox-refusal exit code
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&cmd[0]).args(&cmd[1..]).exec();
+        eprintln!("error: exec {} failed: {err}", cmd[0]);
+        127
+    }
+    #[cfg(not(unix))]
+    {
+        eprintln!("error: sandbox-exec requires unix process semantics");
+        84
+    }
+}
+
 /// `sandbox-exec -p`) is macOS-only.
 pub fn seatbelt_profile(writable_roots: &[std::path::PathBuf]) -> String {
     let mut rules = String::new();
