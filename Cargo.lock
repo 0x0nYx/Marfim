@@ -1305,7 +1305,7 @@ dependencies = [
  "async-trait",
  "clap",
  "crossterm",
- "futures-util",
+ "marfim-app",
  "marfim-brain",
  "marfim-core",
  "marfim-gateway",
@@ -1314,8 +1314,22 @@ dependencies = [
  "marfim-tools",
  "nix 0.29.0",
  "ratatui",
- "reqwest",
  "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "marfim-app"
+version = "1.0.0"
+dependencies = [
+ "clap",
+ "marfim-brain",
+ "marfim-core",
+ "marfim-gateway",
+ "marfim-mcp",
+ "marfim-tools",
  "serde_json",
  "tokio",
  "toml",

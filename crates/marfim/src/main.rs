@@ -6,25 +6,22 @@
 
 #![forbid(unsafe_code)]
 
-mod settings;
 mod slash;
 mod tui;
 
+use marfim_app::{factory, settings};
+use marfim_app::settings::{Cli, Command, EffectiveSettings};
+
 use clap::Parser;
 use marfim_core::config::Config;
-use marfim_core::events::{Event, EventBus};
-use marfim_core::journal::{Journal, JournalRecord};
-use marfim_core::loop_::{Harness, LoopCtx, StopReason};
+use marfim_core::events::Event;
+use marfim_core::loop_::StopReason;
 use marfim_core::permissions::PermissionEngine;
-use marfim_core::providers::CostBook;
-use marfim_core::router::Router;
 use marfim_core::sandbox::Sandbox;
 use marfim_core::session::SessionCommand;
 use marfim_core::session_host::SessionRequest;
-use marfim_core::trust::{Trust, TrustStore};
+use marfim_core::trust::Trust;
 use marfim_tools::registry::ToolCtx;
-use marfim_tools::tools_host::HostTools;
-use settings::{Cli, Command, EffectiveSettings};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,8 +49,8 @@ async fn async_main(cli: Cli) -> i32 {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     // D13: layered config (home layer + trust-gated cwd layer)
-    let home = marfim_home();
-    let trust = load_trust_store(&home);
+    let home = factory::marfim_home();
+    let trust = factory::load_trust_store(&home);
     let cwd_trust = trust.get(&cwd.to_string_lossy());
     let (config, loaded_layers) = match Config::load_layered(&home, &cwd, cwd_trust) {
         Ok(x) => x,
@@ -86,103 +83,6 @@ async fn async_main(cli: Cli) -> i32 {
         None => run_cmd(cli, config, cwd).await,
     };
     std::process::exit(code);
-}
-
-fn marfim_home() -> PathBuf {
-    std::env::var("MARFIM_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".marfim"))
-                .unwrap_or_else(|_| PathBuf::from("."))
-        })
-}
-
-/// D13: persisted trust store (~/.marfim/trust.toml). Unknown dirs default
-/// to Workspace (the user cd'd there); explicitly marked dirs honour their
-/// level. A dir marked untrusted can never contribute a config layer.
-fn load_trust_store(home: &std::path::Path) -> TrustStore {
-    let mut ts = TrustStore::default();
-    let p = home.join("trust.toml");
-    if let Ok(text) = std::fs::read_to_string(&p) {
-        if let Ok(table) = text.parse::<toml::Table>() {
-            if let Some(dirs) = table.get("dirs").and_then(|d| d.as_array()) {
-                for d in dirs {
-                    let path = d.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                    let level = d.get("level").and_then(|v| v.as_str()).unwrap_or("");
-                    if !path.is_empty() {
-                        if let Some(t) = Trust::parse(level) {
-                            ts.set(path, t);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    ts
-}
-
-pub fn sessions_dir() -> PathBuf {
-    marfim_home().join("sessions")
-}
-
-/// ISO-8601 UTC timestamp without external crates (civil-from-days).
-pub fn iso_now() -> String {
-    let dur = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs() as i64;
-    let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400);
-    // Howard Hinnant's civil_from_days
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
-}
-
-struct SessionPaths {
-    journal: PathBuf,
-    session_id: String,
-}
-
-fn new_session(cwd: &str, title: Option<&str>) -> (Journal, SessionPaths) {
-    let dir = sessions_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let session_id = format!("s{ts}");
-    let path = dir.join(format!("{session_id}.jsonl"));
-    let mut j = match Journal::open(&path) {
-        Ok(j) => j,
-        Err(e) => {
-            eprintln!("error: cannot open session journal {}: {e}", path.display());
-            std::process::exit(1);
-        }
-    };
-    let _ = j.append(&JournalRecord::SessionMeta {
-        session_id: session_id.clone(),
-        cwd: cwd.to_string(),
-        title: title.map(String::from),
-        started_at: iso_now(),
-    });
-    (
-        j,
-        SessionPaths {
-            journal: path,
-            session_id,
-        },
-    )
 }
 
 /// --var k=v substitution on the prompt (consumes the vars flag).
@@ -258,31 +158,6 @@ async fn hosted_session(
     }
 }
 
-/// D14 fail-closed approver for surfaces with NO interactive stdin owner
-/// (headless, ACP): every pending approval is DENIED through the actor's
-/// authoritative Approve command (the forwarded job's responder is a
-/// tombstone by design — answering it directly would be a silent no-op).
-fn spawn_fail_closed_denier(hosted: &Arc<marfim_core::session_host::HostedSession>) {
-    let Some(mut approval_rx) = hosted.take_approval_receiver() else {
-        return;
-    };
-    let cmds = hosted.actor.commands.clone();
-    tokio::spawn(async move {
-        while let Some(job) = approval_rx.recv().await {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let _ = cmds
-                .send(SessionCommand::Approve {
-                    tool: job.tool.clone(),
-                    summary: "*".into(),
-                    answer: marfim_core::permissions::ApprovalAnswer::Deny,
-                    reply: tx,
-                })
-                .await;
-            let _ = rx.await;
-        }
-    });
-}
-
 async fn run_cmd(cli: Cli, config: Config, cwd: PathBuf) -> i32 {
     let settings = match settings::effective(&cli, &config, cwd.clone()) {
         Ok(s) => s,
@@ -291,7 +166,7 @@ async fn run_cmd(cli: Cli, config: Config, cwd: PathBuf) -> i32 {
             return 1;
         }
     };
-    let host = make_host(&config, Some(settings.clone()), cli.clone(), cwd.clone());
+    let host = factory::make_host(&config, Some(settings.clone()), cli.clone(), cwd.clone());
     match (settings.prompt.clone(), settings.output_format.as_str()) {
         (Some(p), "text") => headless_text(&host, &settings, &p).await,
         (Some(p), "json") => headless_json(&host, &settings, &p).await,
@@ -304,380 +179,6 @@ async fn run_cmd(cli: Cli, config: Config, cwd: PathBuf) -> i32 {
     }
 }
 
-/// D16: production subagent host — Task/TaskOutput spawn REAL nested
-/// agent loops with role-restricted permissions and worktree isolation.
-struct ProductionSubagents {
-    tasks: Arc<marfim_tools::subagent::TaskTable>,
-    config: Config,
-    provider_name: String,
-    model: String,
-}
-
-impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
-    fn spawn(&self, agent: &str, prompt: &str) -> Result<u64, String> {
-        use marfim_core::loop_::{Harness, LoopCtx};
-        use marfim_core::permissions::PermissionEngine;
-        use marfim_core::providers::CostBook;
-        use marfim_core::router::{Role, Router};
-        let (mode, kind) = marfim_tools::subagent::agent_permissions(agent);
-        let tasks = self.tasks.clone();
-        let (id, slot) = tasks.alloc(agent);
-        let config = self.config.clone();
-        let provider = self.provider_name.clone();
-        let model = self.model.clone();
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let agent = agent.to_string();
-        let prompt = prompt.to_string();
-
-        // worktree isolation for git projects
-        let guard = marfim_tools::subagent::WorktreeGuard::create(&cwd)?;
-        let wt_path = guard.path.clone();
-        {
-            let mut s = slot.lock().unwrap_or_else(|p| p.into_inner());
-            s.worktree = Some(wt_path.clone());
-        }
-
-        let handle = tokio::spawn(async move {
-            // role-restricted permissions (D16) + §G blocked-tool deny
-            // rules (children never recurse, never write the parent's
-            // memory/journal): ONE engine owns both the approval queue
-            // and the host path — deny>ask>allow stays authoritative.
-            let rules = marfim_tools::subagent::blocked_rules(&agent);
-            let (engine, mut approval_rx) = PermissionEngine::new(mode, rules);
-            let perm = Arc::new(engine);
-            tokio::spawn(async move {
-                // subagents never prompt the user: asks fail closed
-                while let Some(job) = approval_rx.recv().await {
-                    let _ = job
-                        .respond
-                        .send(marfim_core::permissions::ApprovalAnswer::Deny);
-                }
-            });
-            let tool_ctx = ToolCtx {
-                cwd: wt_path.clone(),
-                session_id: format!("task-{id}"),
-                ..Default::default()
-            };
-            let host = HostTools::new(
-                perm.clone(),
-                tool_ctx.clone(),
-                Sandbox::probe(),
-                marfim_core::hooks::Hooks::default(),
-            );
-            let mut router = Router::new(CostBook::default(), false);
-            if let Ok(preset) = settings::resolve_preset(&provider, &config) {
-                if let Ok(entries) = build_chain_from_preset(&preset, &model) {
-                    router.set_chain(Role::Primary, entries);
-                    let small_model = preset.default_model.clone();
-                    if let Ok(small) = build_chain_from_preset(&preset, &small_model) {
-                        router.set_chain(Role::Small, small);
-                    }
-                }
-            }
-            let ctx = LoopCtx {
-                session_id: format!("task-{id}"),
-                cwd: wt_path.display().to_string(),
-                cancel: marfim_core::loop_::CancelToken::default(),
-            };
-            let harness = Harness::new(
-                EventBus::new(64),
-                Arc::new(tokio::sync::RwLock::new(router)),
-                Arc::new(host),
-                Arc::new(std::sync::Mutex::new(
-                    match marfim_core::journal::Journal::open(
-                        &std::env::temp_dir().join(format!("marfim-task-{id}.jsonl")),
-                    ) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            // D6: fail the subagent honestly instead of panicking
-                            // the spawned task
-                            let mut s = slot.lock().unwrap_or_else(|p| p.into_inner());
-                            s.status = Some(marfim_tools::subagent::TaskStatus::Failed {
-                                error: format!("task journal: {e}"),
-                            });
-                            drop(guard); // worktree removed
-                            return;
-                        }
-                    },
-                )),
-                ctx,
-                perm,
-                24,
-                1,
-                120_000,
-                false,
-            );
-            let stop = harness
-                .run_turn(&format!("[subagent {agent} — {kind}] {prompt}"))
-                .await;
-            let hist = harness.history.read().await;
-            let output = hist
-                .iter()
-                .rev()
-                .find(|m| m.role == "assistant")
-                .map(|m| m.content.clone())
-                .unwrap_or_default();
-            drop(hist);
-            let status = match stop {
-                StopReason::EndTurn if !output.is_empty() => {
-                    marfim_tools::subagent::TaskStatus::Done { output }
-                }
-                other => marfim_tools::subagent::TaskStatus::Failed {
-                    error: format!("subagent stopped: {}", other.normalized()),
-                },
-            };
-            {
-                let mut s = slot.lock().unwrap_or_else(|p| p.into_inner());
-                s.status = Some(status);
-            }
-            drop(guard); // worktree removed here
-        });
-        // detach: the subagent runs to completion independently; TaskOutput
-        // polls the task table slot
-        drop(handle);
-        Ok(id)
-    }
-
-    fn poll(&self, task_id: u64) -> Result<marfim_tools::subagent::TaskStatus, String> {
-        let slot = self
-            .tasks
-            .inner
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(&task_id)
-            .cloned()
-            .ok_or_else(|| format!("no task {task_id}"))?;
-        let s = slot.lock().unwrap_or_else(|p| p.into_inner());
-        match &s.status {
-            Some(st) => Ok(st.clone()),
-            None => Ok(marfim_tools::subagent::TaskStatus::Running),
-        }
-    }
-}
-
-fn build_chain_from_preset(
-    preset: &settings::Preset,
-    model: &str,
-) -> Result<Vec<marfim_core::router::ModelEntry>, String> {
-    Ok(vec![marfim_core::router::ModelEntry {
-        model: model.to_string(),
-        provider: settings::build_provider(preset, model)?,
-        priced: true,
-    }])
-}
-
-async fn build_session(
-    config: &Config,
-    settings: &EffectiveSettings,
-) -> (
-    Arc<Harness>,
-    EventBus,
-    ToolCtx,
-    Arc<PermissionEngine>,
-    tokio::sync::mpsc::Receiver<marfim_core::permissions::ApprovalJob>,
-) {
-    let bus = EventBus::new(4096);
-    let sandbox = Sandbox::probe();
-    let (perm, approval_rx) =
-        PermissionEngine::new(settings.permission_mode, settings.rules.clone());
-    // §privacy (claude-code `privacy` mod) + §P denyInsteadOfPrompting
-    // (2.1.319): wired from config truth, not CLI.
-    let perm = Arc::new(
-        perm.with_privacy(Some(marfim_core::privacy::PrivacyGuard {
-            email: settings.account_email.clone(),
-        }))
-        .with_deny_instead_of_prompting(settings.deny_instead_of_prompting),
-    );
-
-    // D16: real subagent host — Task/TaskOutput spawn nested agent loops
-    let subagents = Arc::new(ProductionSubagents {
-        tasks: Arc::new(marfim_tools::subagent::TaskTable::default()),
-        config: config.clone(),
-        provider_name: settings.provider_name.clone(),
-        model: settings.model.clone(),
-    });
-    let tool_ctx = ToolCtx {
-        cwd: settings.cwd.clone(),
-        session_id: String::new(),
-        board: Arc::new(Default::default()),
-        evidence: Arc::new(Default::default()),
-        memory: Arc::new(Default::default()),
-        todos: Arc::new(Default::default()),
-        plan_mode: Arc::new(Default::default()),
-        background: Arc::new(Default::default()),
-        monitors: Arc::new(Default::default()),
-        last_repomap: Arc::new(Default::default()),
-        subagent: subagents.clone(),
-        bash_default_timeout_ms: settings.bash_default_timeout_ms,
-        journal_path: Arc::new(std::sync::Mutex::new(None)),
-    };
-    let mut host = HostTools::new(
-        perm.clone(),
-        tool_ctx.clone(),
-        sandbox,
-        marfim_core::hooks::Hooks::default(),
-    );
-    // MCP (step 2): construct McpClient per config `mcpServers` BEHIND the
-    // trust gate — config layers are already trust-gated (D13), so an
-    // untrusted cwd can never contribute mcpServers. Servers that fail to
-    // connect are skipped with a warning (never silently); their tools
-    // register as `mcp__<server>__<tool>` and dispatch through the SAME
-    // PermissionEngine path as builtin tools, with scrubbed env.
-    let _mcp_connected = connect_mcp_servers(config, &mut host).await;
-
-    // --resume: reopen the named (or latest) journal
-    let (journal, paths) = match &settings.resume {
-        Some(name) => {
-            let dir = sessions_dir();
-            let path = if name.is_empty() {
-                latest_session(&dir)
-            } else {
-                let p = dir.join(format!("{name}.jsonl"));
-                if !p.is_file() {
-                    dir.join(name)
-                } else {
-                    p
-                }
-            };
-            match path.is_file() {
-                true => {
-                    let sid = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "resumed".into());
-                    let journal = match Journal::open(&path) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            eprintln!("error: cannot open journal {}: {e}", path.display());
-                            std::process::exit(1);
-                        }
-                    };
-                    (
-                        journal,
-                        SessionPaths {
-                            journal: path,
-                            session_id: sid,
-                        },
-                    )
-                }
-                false => {
-                    eprintln!("error: no session journal at {}", path.display());
-                    std::process::exit(1);
-                }
-            }
-        }
-        None => new_session(&settings.cwd.to_string_lossy(), settings.title.as_deref()),
-    };
-
-    // pricing: built-ins + the offline models.dev catalog for the active
-    // provider chain (unknown models still fail closed under --budget)
-    let mut costs = CostBook::default();
-    costs.extend_from_catalog(&[
-        "anthropic",
-        "openai",
-        "xai",
-        "google",
-        "groq",
-        "openrouter",
-        "deepseek",
-        "mistral",
-    ]);
-    let mut router = Router::new(costs, settings.budgeted);
-    if settings.routing == "bandit" {
-        router.set_bandit(true);
-    }
-    let primary = settings::build_primary_chain(settings, config).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    });
-    router.set_chain(marfim_core::router::Role::Primary, primary);
-    let small = settings::build_small_chain(settings, config).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    });
-    router.set_chain(marfim_core::router::Role::Small, small);
-
-    let ctx = LoopCtx {
-        session_id: paths.session_id.clone(),
-        cwd: settings.cwd.to_string_lossy().to_string(),
-        cancel: marfim_core::loop_::CancelToken::default(),
-    };
-    let mut harness = Harness::new(
-        bus.clone(),
-        Arc::new(tokio::sync::RwLock::new(router)),
-        Arc::new(host),
-        Arc::new(std::sync::Mutex::new(journal)),
-        ctx,
-        perm.clone(),
-        64,
-        3,
-        settings.compact_threshold_tokens,
-        settings.stop_on_tool_error,
-    );
-    // Config truth: sampling overrides reach every provider request.
-    harness.sampling = marfim_core::loop_::Sampling {
-        max_completion_tokens: settings.max_tokens,
-        temperature: settings.temperature,
-        thinking_budget: settings.thinking_budget,
-        effort: settings.effort,
-    };
-    // Distillation §C1: the compaction trigger math needs the primary
-    // model's context window from the offline catalog (best-effort —
-    // unknown models keep the plain configured threshold).
-    harness.context_window = marfim_core::catalog::catalog_provider_for(&settings.provider_name)
-        .and_then(|pid| marfim_core::catalog::lookup_fuzzy(pid, &settings.model))
-        .and_then(|m| m.context_tokens);
-    // §S session_search corpus: the tool context reaches the journal.
-    *tool_ctx
-        .journal_path
-        .lock()
-        .unwrap_or_else(|p| p.into_inner()) = Some(paths.journal.clone());
-    // P5/Step 5: the brain's LearningFaculty is attached to the production
-    // harness — observational hooks + turn-scoped validated actuations
-    // (model_select / permission_tighten), journaled end to end. The Arc
-    // is returned so the /why and /forget slash commands can inspect and
-    // reset the SAME instance the loop feeds.
-    let learning: Arc<dyn marfim_core::faculty::Faculty> =
-        Arc::new(marfim_brain::faculty::LearningFaculty::new());
-    harness.add_faculty(learning);
-    let harness = Arc::new(harness);
-    // P2 resume semantics: a resumed session rebuilds its conversation
-    // history from the journal (user/assistant turns + compaction
-    // summaries) — otherwise --resume would forget everything.
-    if settings.resume.is_some() {
-        match marfim_core::session::rebuild_history_from_journal(&harness, &paths.journal).await {
-            Ok(n) => eprintln!(
-                "resumed session {}: rebuilt {n} message(s) from journal",
-                paths.session_id
-            ),
-            Err(e) => eprintln!(
-                "warning: resume history rebuild failed for {}: {e}",
-                paths.journal.display()
-            ),
-        }
-    }
-    (harness, bus, tool_ctx, perm, approval_rx)
-}
-
-fn latest_session(dir: &std::path::Path) -> PathBuf {
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                if let Ok(meta) = e.metadata() {
-                    let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                    if best.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
-                        best = Some((mtime, p));
-                    }
-                }
-            }
-        }
-    }
-    best.map(|(_, p)| p)
-        .unwrap_or_else(|| dir.join("missing.jsonl"))
-}
-
 async fn headless_text(
     host: &Arc<marfim_core::session_host::SessionHost>,
     settings: &EffectiveSettings,
@@ -687,7 +188,7 @@ async fn headless_text(
         return 1;
     };
     // D14: headless has NO stdin owner — approvals fail closed (deny).
-    spawn_fail_closed_denier(&hosted);
+    factory::spawn_fail_closed_denier(&hosted);
     let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let stream = settings.stream;
@@ -745,7 +246,7 @@ async fn headless_json(
     let Some(hosted) = hosted_session(host, SessionRequest::default()).await else {
         return 1;
     };
-    spawn_fail_closed_denier(&hosted);
+    factory::spawn_fail_closed_denier(&hosted);
     let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let collector = tokio::spawn(async move {
@@ -796,7 +297,7 @@ async fn headless_stream_json(
     let Some(hosted) = hosted_session(host, SessionRequest::default()).await else {
         return 1;
     };
-    spawn_fail_closed_denier(&hosted);
+    factory::spawn_fail_closed_denier(&hosted);
     let mut sub = hosted.bus.subscribe();
     let prompt = apply_vars(prompt, &settings.prompt_vars);
     let printer = tokio::spawn(async move {
@@ -868,7 +369,8 @@ async fn repl(_cli: Cli, config: Config, settings: EffectiveSettings) -> i32 {
         "marfim {} (rust) — type /help for commands",
         marfim_core::VERSION
     );
-    let (harness, bus, tool_ctx, _perm, mut approval_rx) = build_session(&config, &settings).await;
+    let (harness, bus, tool_ctx, _perm, mut approval_rx) =
+        factory::build_session(&config, &settings).await;
     use tokio::io::AsyncBufReadExt;
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let (lines_tx, mut lines_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -1131,7 +633,7 @@ fn models_cmd(cli: &Cli) -> i32 {
 
 fn sessions_cmd(cli: &Cli) -> i32 {
     // --days consumed: only list journals touched within the window
-    let dir = sessions_dir();
+    let dir = factory::sessions_dir();
     let cutoff = std::time::SystemTime::now()
         .checked_sub(std::time::Duration::from_secs(cli.days as u64 * 86_400))
         .unwrap_or(std::time::UNIX_EPOCH);
@@ -1178,8 +680,8 @@ async fn serve_cmd(cli: &Cli, config: &Config) -> i32 {
         eprintln!("marfim serve: generated API token (shown ONCE, not stored): {token}");
     }
 
-    let host = make_host(config, settings, cli.clone(), cwd);
-    let tools = serve_tool_catalog();
+    let host = factory::make_host(config, settings, cli.clone(), cwd);
+    let tools = factory::serve_tool_catalog();
     let allowed_hosts = vec![
         cli.host.clone(),
         "127.0.0.1".into(),
@@ -1211,23 +713,6 @@ async fn serve_cmd(cli: &Cli, config: &Config) -> i32 {
     }
 }
 
-/// The real builtin tool catalog for /v1/tools — built from the registry,
-/// never fabricated.
-fn serve_tool_catalog() -> Vec<marfim_gateway::serve::ToolInfo> {
-    let mut registry = marfim_tools::registry::ToolRegistry::new();
-    marfim_tools::tools_host::register_builtins(&mut registry);
-    registry
-        .list_visible()
-        .into_iter()
-        .chain(registry.list_deferred())
-        .map(|t| marfim_gateway::serve::ToolInfo {
-            name: t.name.to_string(),
-            description: t.description.to_string(),
-            parameters: t.parameters.clone(),
-        })
-        .collect()
-}
-
 /// 128-bit random token as lowercase hex (from the OS CSPRNG; a
 /// deterministic mixed fallback only if /dev/urandom is unavailable).
 fn generate_token() -> String {
@@ -1254,53 +739,6 @@ fn generate_token() -> String {
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// One SessionHost per surface: the factory closes over config+settings
-/// and assembles the full harness (providers, tools, journal) per session.
-fn make_host(
-    config: &Config,
-    settings: Option<settings::EffectiveSettings>,
-    cli: Cli,
-    cwd: PathBuf,
-) -> Arc<marfim_core::session_host::SessionHost> {
-    let config = config.clone();
-    let cli = cli.clone();
-    Arc::new(marfim_core::session_host::SessionHost::new(Arc::new(
-        move |req| {
-            let config = config.clone();
-            let cli = cli.clone();
-            let cwd = cwd.clone();
-            let captured = settings.clone();
-            Box::pin(async move {
-                // CLI-provided resume/title are the baseline; the request
-                // may only refine them (an empty SessionRequest must NOT
-                // wipe a `--resume` — regression caught by the resume e2e).
-                let refine = |s: &mut settings::EffectiveSettings| {
-                    if req.resume.is_some() {
-                        s.resume = req.resume.clone();
-                    }
-                    if req.title.is_some() {
-                        s.title = req.title.clone();
-                    }
-                };
-                let mut s = match captured {
-                    Some(s) => s,
-                    // zero-config: resolve at first session creation so a
-                    // provider added mid-flight is honored
-                    None => settings::effective(&cli, &config, cwd)
-                        .map_err(|e| format!("session unavailable: {e}"))?,
-                };
-                refine(&mut s);
-                let (harness, bus, _tc, _perm, approval_rx) = build_session(&config, &s).await;
-                Ok(marfim_core::session_host::SessionDeps {
-                    harness,
-                    bus: Arc::new(bus),
-                    approval_rx,
-                })
-            })
-        },
-    )))
-}
-
 async fn acp_cmd(cli: &Cli, config: &Config) -> i32 {
     let cwd = cli
         .cwd
@@ -1314,7 +752,7 @@ async fn acp_cmd(cli: &Cli, config: &Config) -> i32 {
             return 1;
         }
     };
-    let host = make_host(config, Some(settings.clone()), cli.clone(), cwd.clone());
+    let host = factory::make_host(config, Some(settings.clone()), cli.clone(), cwd.clone());
     // ACP session-id -> hosted session (one real actor per ACP session).
     let session_map: Arc<
         tokio::sync::Mutex<
@@ -1379,7 +817,7 @@ async fn acp_drive_turn(
             {
                 Ok(h) => {
                     // ACP stdio has no approver: Ask verdicts fail closed
-                    spawn_fail_closed_denier(&h);
+                    factory::spawn_fail_closed_denier(&h);
                     map.lock().await.insert(sid.to_string(), h.clone());
                     h
                 }
@@ -1559,37 +997,4 @@ async fn mcp_cmd(config: &Config) -> i32 {
     let joined = tokio::task::spawn_blocking(move || marfim_mcp::server::serve_stdio(tools, opts));
     let _ = joined.await;
     0
-}
-
-/// Connect every configured `mcpServers` entry and register its tools on
-/// the host (registry + dispatch table). Returns connected server names.
-async fn connect_mcp_servers(
-    config: &Config,
-    host: &mut marfim_tools::tools_host::HostTools,
-) -> Vec<String> {
-    let Some(serde_json::Value::Object(map)) = config.get("mcpServers").cloned() else {
-        return vec![];
-    };
-    let mut connected = Vec::new();
-    for (name, entry) in map.into_iter() {
-        let cfg = match marfim_mcp::client::McpServerConfig::from_json(&entry) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("warning: mcpServers.{name}: {e} (skipped)");
-                continue;
-            }
-        };
-        match marfim_mcp::client::McpClient::connect(&name, &cfg).await {
-            Ok(client) => {
-                let tools = client.tools.lock().await.clone();
-                let n = host.register_mcp_client(&client, &tools);
-                eprintln!("mcp server {name}: connected, {n} tool(s)");
-                connected.push(name);
-            }
-            Err(e) => {
-                eprintln!("warning: mcp server {name}: unavailable: {e} (skipped)");
-            }
-        }
-    }
-    connected
 }

@@ -4,7 +4,7 @@
 //! unknown commands error with did-you-mean, and every command does
 //! something testable.
 
-use crate::settings::EffectiveSettings;
+use marfim_app::settings::EffectiveSettings;
 use marfim_core::config::Config;
 use marfim_core::journal::JournalRecord;
 use marfim_core::loop_::Harness;
@@ -356,7 +356,7 @@ pub async fn dispatch(
                 session_id: sid.clone(),
                 cwd: harness.ctx.cwd.clone(),
                 title: None,
-                started_at: crate::iso_now(),
+                started_at: marfim_app::factory::iso_now(),
             });
             {
                 let mut guard = harness.journal.lock().unwrap_or_else(|p| p.into_inner());
@@ -460,7 +460,7 @@ pub async fn dispatch(
 
         // ---------------------------------------------------------- providers
         "provider" => {
-            let p = crate::settings::resolve_preset(&settings.provider_name, config);
+            let p = marfim_app::settings::resolve_preset(&settings.provider_name, config);
             match p {
                 Ok(p) => format!(
                     "provider {} ({} wire) → {}\napi key env: {} ({})",
@@ -481,7 +481,7 @@ pub async fn dispatch(
         }
         "accounts" => {
             let mut out = String::from("configured providers:\n");
-            for (name, p) in crate::settings::builtin_presets() {
+            for (name, p) in marfim_app::settings::builtin_presets() {
                 let key_state = if p.api_key_env.is_empty() {
                     "local".to_string()
                 } else if std::env::var(&p.api_key_env).is_ok() {
@@ -779,7 +779,7 @@ pub async fn dispatch(
             let mut out = format!(
                 "# marfim handoff — {} ({})\n\n",
                 harness.ctx.session_id,
-                crate::iso_now()
+                marfim_app::factory::iso_now()
             );
             for r in recs.iter().rev().take(30).rev() {
                 match r {
@@ -995,7 +995,7 @@ fn abbrev(s: &str, n: usize) -> String {
 }
 
 fn sessions_dir_path() -> std::path::PathBuf {
-    crate::sessions_dir()
+    marfim_app::factory::sessions_dir()
 }
 
 fn journal_records(harness: &Harness) -> Vec<JournalRecord> {
@@ -1062,8 +1062,8 @@ async fn switch_primary_model(
     settings: &EffectiveSettings,
     model: &str,
 ) -> Result<String, String> {
-    let preset = crate::settings::resolve_preset(&settings.provider_name, config)?;
-    let provider = crate::settings::build_provider(&preset, model)?;
+    let preset = marfim_app::settings::resolve_preset(&settings.provider_name, config)?;
+    let provider = marfim_app::settings::build_provider(&preset, model)?;
     let mut r = harness.router.write().await;
     let mut chain = r.chain(marfim_core::router::Role::Primary);
     if chain.is_empty() {
@@ -1105,8 +1105,8 @@ mod tests {
     //! D15: every command has a behaviour test — dispatch runs real state.
 
     use super::*;
-    use crate::settings::{self, Cli};
     use clap::Parser;
+    use marfim_app::settings::{self, Cli};
     use marfim_core::journal::Journal;
     use marfim_core::permissions::{Mode, PermissionEngine};
     use marfim_core::providers::{CostBook, MockProvider};

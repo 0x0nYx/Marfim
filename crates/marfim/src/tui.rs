@@ -1333,12 +1333,12 @@ fn send_approve(
 /// same owner every other surface uses), then drive the actor from the
 /// event loop below.
 pub async fn run(
-    _cli: &crate::settings::Cli,
+    _cli: &marfim_app::settings::Cli,
     config: marfim_core::config::Config,
-    settings: crate::settings::EffectiveSettings,
+    settings: marfim_app::settings::EffectiveSettings,
 ) -> i32 {
     // One host, one hosted session; the host owns the actor lifecycle.
-    let host = crate::make_host(
+    let host = marfim_app::factory::make_host(
         &config,
         Some(settings.clone()),
         _cli.clone(),
