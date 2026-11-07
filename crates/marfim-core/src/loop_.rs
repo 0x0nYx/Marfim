@@ -1,7 +1,7 @@
 //! The agent loop (INV-01..07,10):
 //!  - user message lands in session history at turn start (D1)
-//!  - history lives on the Harness across turns (D2); the Session actor
-//!    formalization arrives in Phase 2 on the same structure
+//!  - history lives on the Harness across turns (D2); the session actor
+//!    drives the same structure across every surface (tui/headless/serve)
 //!  - real steering: amend vs follow-up, drained ONLY after a full
 //!    tool-result batch (or as the seed of the next turn) (D3)
 //!  - compaction on per-step context tokens, summary re-injected as the
@@ -19,7 +19,7 @@
 use crate::events::{Event, EventBus};
 use crate::journal::{Journal, JournalRecord};
 use crate::providers::{backoff_ms, ChatMessage, ChatRequest, StreamEvent, ToolCall, Usage};
-use crate::router::{Role, Router};
+use crate::router::{ModelEntry, Role, Router};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -172,6 +172,21 @@ pub struct Harness {
     steer: Arc<std::sync::Mutex<SteerQueues>>,
     /// P4 faculties attached to this session (observational hooks).
     pub faculties: Vec<Arc<dyn crate::faculty::Faculty>>,
+    /// Turn-scoped actuation overrides (the four bounded powers). Set at
+    /// turn start from validated faculty actuations, cleared at turn end:
+    /// an actuation never outlives the turn it was granted for.
+    turn_overrides: std::sync::Mutex<TurnOverrides>,
+}
+
+/// Turn-scoped faculty overrides. Every field is optional and validated:
+/// the model must exist in the chain, the compaction threshold is clamped
+/// to [0.5x, 1.5x] of the configured value, tightened tools only ADD
+/// denies (deny>ask>allow: the PermissionEngine stays the sole authority).
+#[derive(Default)]
+struct TurnOverrides {
+    model: Option<String>,
+    tightened_tools: Vec<String>,
+    compact_threshold: Option<u64>,
 }
 
 /// Steering queues (omp-style two-queue: amend vs follow-up).
@@ -258,6 +273,7 @@ impl Harness {
             executed_tools: AtomicU64::new(0),
             steer: Arc::new(std::sync::Mutex::new(SteerQueues::default())),
             faculties: Vec::new(),
+            turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
         }
     }
 
@@ -287,6 +303,119 @@ impl Harness {
         let turn = self.turn_counter.fetch_add(1, Ordering::SeqCst) + 1;
         self.bus.publish(Event::TurnStarted { turn });
 
+        // P4 turn-start actuations: collect from the faculties, validate
+        // and clamp each, journal + apply what survived. An actuation that
+        // names a model outside the chain, a threshold outside the clamp
+        // band, or an unknown kind is DROPPED here (fail-visible on the
+        // bus, never applied).
+        {
+            let ctx = self.hook_ctx(0);
+            let acts = crate::faculty::run_actuations(&self.bus, &self.faculties, &ctx).await;
+            for (faculty, a) in acts {
+                match a.kind.as_str() {
+                    "model_select" => {
+                        let want = a.after.as_str().unwrap_or("").to_string();
+                        let before = a.before.as_str().unwrap_or("").to_string();
+                        let in_chain = self
+                            .router
+                            .read()
+                            .await
+                            .chain(Role::Primary)
+                            .iter()
+                            .any(|e| e.model == want);
+                        if in_chain && !want.is_empty() && want != before {
+                            self.record_actuation(&faculty, "model_select", &a, "applied");
+                            self.turn_overrides
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .model = Some(want);
+                        } else {
+                            self.record_actuation(
+                                &faculty,
+                                "model_select",
+                                &a,
+                                if in_chain {
+                                    "dropped: no change"
+                                } else {
+                                    "dropped: model not in chain"
+                                },
+                            );
+                        }
+                    }
+                    "compact_threshold" => {
+                        let base = self.compact_threshold_tokens;
+                        let lo = (base / 2).max(1);
+                        let hi = base.saturating_mul(3) / 2;
+                        let want = a.after.as_u64().unwrap_or(base);
+                        if want < lo || want > hi {
+                            self.record_actuation(
+                                &faculty,
+                                "compact_threshold",
+                                &a,
+                                "dropped: outside [0.5x, 1.5x] clamp",
+                            );
+                        } else if want == base {
+                            self.record_actuation(
+                                &faculty,
+                                "compact_threshold",
+                                &a,
+                                "dropped: no change",
+                            );
+                        } else {
+                            self.record_actuation(&faculty, "compact_threshold", &a, "applied");
+                            self.turn_overrides
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .compact_threshold = Some(want);
+                        }
+                    }
+                    "permission_tighten" => {
+                        let tools: Vec<String> = a
+                            .after
+                            .as_array()
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if tools.is_empty() {
+                            self.record_actuation(
+                                &faculty,
+                                "permission_tighten",
+                                &a,
+                                "dropped: empty deny list",
+                            );
+                        } else {
+                            self.record_actuation(&faculty, "permission_tighten", &a, "applied");
+                            let mut ov = self
+                                .turn_overrides
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner());
+                            for t in tools {
+                                if !ov.tightened_tools.contains(&t) {
+                                    ov.tightened_tools.push(t);
+                                }
+                            }
+                        }
+                    }
+                    "idle_propose" => {
+                        // Proposals never execute: surface only (already
+                        // published on the bus by run_actuations).
+                        self.record_actuation(&faculty, "idle_propose", &a, "surfaced only");
+                    }
+                    other => {
+                        self.record_actuation(
+                            &faculty,
+                            other,
+                            &a,
+                            "dropped: unknown actuation kind",
+                        );
+                    }
+                }
+            }
+        }
+
         // D1: the user message lands in history at turn start.
         if let Err(e) = self.journal_rec(&JournalRecord::UserMessage {
             text: user_text.into(),
@@ -314,6 +443,11 @@ impl Harness {
     /// D12: every stop path funnels through here, so TurnEnded is always
     /// emitted exactly once with the normalized stop reason.
     fn finish_turn(&self, turn: u64, stop: StopReason) -> StopReason {
+        // Actuations are turn-scoped: clear them when the turn unwinds.
+        *self
+            .turn_overrides
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = TurnOverrides::default();
         self.bus.publish(Event::TurnEnded {
             turn,
             stop_reason: stop.normalized().into(),
@@ -326,6 +460,30 @@ impl Harness {
         j.append(rec)
             .map(|_| ())
             .map_err(|e| crate::CoreError::Session(format!("journal write failed: {e}")))
+    }
+
+    /// Persist one actuation decision (applied or dropped, with the
+    /// disposition recorded) to the session journal: the full
+    /// before/after/evidence triple is on the bus Event::Actuation, the
+    /// journal record keeps the session history complete for /replay and
+    /// forensic replay A/B.
+    fn record_actuation(
+        &self,
+        faculty: &str,
+        kind: &str,
+        a: &crate::faculty::Actuation,
+        disposition: &str,
+    ) {
+        let _ = self.journal_rec(&JournalRecord::Actuation {
+            detail: serde_json::json!({
+                "faculty": faculty,
+                "kind": kind,
+                "before": a.before,
+                "after": a.after,
+                "evidence": a.evidence,
+                "disposition": disposition,
+            }),
+        });
     }
 
     fn steer_lock(&self) -> std::sync::MutexGuard<'_, SteerQueues> {
@@ -403,7 +561,25 @@ impl Harness {
             for attempt in 0..chain_len.max(1) {
                 let (e, tried) = {
                     let router = self.router.read().await;
-                    router.resolve(Role::Primary, |_| true)?
+                    // P4 model_select actuation: when the faculty picked a
+                    // model for THIS turn and it is in the chain, try it
+                    // first; on failure the normal failover predicate takes
+                    // over for the remaining attempts.
+                    let prefer = {
+                        let ov = self
+                            .turn_overrides
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
+                        ov.model.clone()
+                    };
+                    let filter: Box<dyn Fn(&ModelEntry) -> bool> = match &prefer {
+                        Some(m) if attempt == 0 => {
+                            let want = m.clone();
+                            Box::new(move |e: &ModelEntry| e.model == want)
+                        }
+                        _ => Box::new(|_: &ModelEntry| true),
+                    };
+                    router.resolve(Role::Primary, filter)?
                 };
                 self.bus.publish(Event::ModelSelected {
                     role: Role::Primary.as_str().into(),
@@ -694,6 +870,26 @@ impl Harness {
     /// enforced per-call timeout (D8).
     async fn exec_one(&self, tc: &ToolCall) -> (String, bool) {
         let args = tc.parse_args().unwrap_or(Value::Null);
+        // P4 permission_tighten actuation: a faculty-tightened tool is
+        // denied for this turn (deny>ask>allow — this only ADDS denies;
+        // the PermissionEngine remains the sole authority for everything
+        // else).
+        {
+            let ov = self
+                .turn_overrides
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if ov.tightened_tools.iter().any(|t| t == &tc.name) {
+                self.executed_tools.fetch_add(1, Ordering::SeqCst);
+                return (
+                    format!(
+                        "denied by faculty actuation (permission_tighten): tool `{}` is denied for this turn — the learning faculty observed an error-rate drift on it; run /why for the evidence",
+                        tc.name
+                    ),
+                    true,
+                );
+            }
+        }
         // P4 pre_tool hook: a faculty may deny with a verbatim reason
         let step_now = self.turn_counter.load(Ordering::SeqCst);
         if let Some(reason) = crate::faculty::run_pre_tool(
@@ -824,7 +1020,15 @@ impl Harness {
         &self,
         last_step_input_tokens: u64,
     ) -> std::result::Result<bool, crate::CoreError> {
-        if last_step_input_tokens <= self.compact_threshold_tokens {
+        // P4 compact_threshold actuation (clamped at turn start to
+        // [0.5x, 1.5x] of the configured value).
+        let threshold = self
+            .turn_overrides
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .compact_threshold
+            .unwrap_or(self.compact_threshold_tokens);
+        if last_step_input_tokens <= threshold {
             return Ok(false);
         }
         // Stage 1: micro-compaction — elide stale tool results (cheap,
@@ -832,8 +1036,7 @@ impl Harness {
         // intact; errors are never elided.
         {
             let mut history = self.history.write().await;
-            let removed =
-                crate::compact::micro_compact(&mut history, self.compact_threshold_tokens, 6);
+            let removed = crate::compact::micro_compact(&mut history, threshold, 6);
             if removed > 0 {
                 let after =
                     (history.iter().map(|m| m.content.len() as u64).sum::<u64>()).div_ceil(4);
@@ -846,7 +1049,7 @@ impl Harness {
                         "micro-compaction: elided {removed} bytes of stale tool results"
                     ),
                 })?;
-                if after <= self.compact_threshold_tokens {
+                if after <= threshold {
                     return Ok(true); // micro stage was enough
                 }
             }
@@ -1074,6 +1277,7 @@ mod tests {
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
+            turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1226,6 +1430,7 @@ mod tests {
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
+            turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1673,6 +1878,7 @@ mod tests {
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
+            turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1764,6 +1970,7 @@ mod tests {
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
+            turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1958,5 +2165,180 @@ mod tests {
         let mut sub = bus.subscribe();
         assert_eq!(h.run_turn("x").await.normalized(), "compaction_failed");
         assert_one_turnended(&mut sub, "compaction_failed").await;
+    }
+
+    // ------------------------------------------------- P4: actuations
+    struct ActuatingFaculty {
+        acts: Vec<crate::faculty::Actuation>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::faculty::Faculty for ActuatingFaculty {
+        fn name(&self) -> &'static str {
+            "actuating"
+        }
+        async fn actuations(
+            &self,
+            _ctx: &crate::faculty::HookCtx,
+        ) -> Vec<crate::faculty::Actuation> {
+            self.acts.clone()
+        }
+    }
+
+    fn act(kind: &str, after: Value, before: Value) -> crate::faculty::Actuation {
+        crate::faculty::Actuation {
+            kind: kind.into(),
+            before,
+            after,
+            evidence: serde_json::json!({"why": "regression test"}),
+        }
+    }
+
+    #[tokio::test]
+    async fn p4_actuations_validated_applied_and_turn_scoped() {
+        let tools = Arc::new(ScriptedTools::new());
+        let (mut h, bus) = harness(
+            vec![
+                MockProvider::tool_call("m1", "Bash", serde_json::json!({"command": "ls"})),
+                MockProvider::text("done"),
+            ],
+            tools,
+        );
+        // keep the clamp band deterministic: base threshold 100k →
+        // [50k, 150k] accepted, 200k clamped out
+        h.compact_threshold_tokens = 100_000;
+        // give the chain a second entry so a REAL model_select can apply
+        h.router.write().await.set_chain(
+            Role::Primary,
+            vec![
+                crate::router::ModelEntry {
+                    model: "mock-primary".into(),
+                    provider: Arc::new(MockProvider::new(vec![MockProvider::text("never asked")])),
+                    priced: true,
+                },
+                crate::router::ModelEntry {
+                    model: "mock-alt".into(),
+                    provider: Arc::new(MockProvider::new(vec![
+                        MockProvider::tool_call("m1", "Bash", serde_json::json!({"command": "ls"})),
+                        MockProvider::text("done"),
+                    ])),
+                    priced: true,
+                },
+            ],
+        );
+        h.add_faculty(Arc::new(ActuatingFaculty {
+            acts: vec![
+                // (1) valid model_select: in chain, different from before → applied
+                act(
+                    "model_select",
+                    serde_json::json!("mock-alt"),
+                    serde_json::json!("mock-primary"),
+                ),
+                // (2) invalid model_select: not in chain → dropped
+                act(
+                    "model_select",
+                    serde_json::json!("ghost-model"),
+                    serde_json::json!("mock-primary"),
+                ),
+                // (3) valid compact_threshold (no clamp violation) → applied
+                act(
+                    "compact_threshold",
+                    serde_json::json!(50_000),
+                    serde_json::json!(100_000),
+                ),
+                // (4) clamp violation (2x) → dropped
+                act(
+                    "compact_threshold",
+                    serde_json::json!(200_000),
+                    serde_json::json!(100_000),
+                ),
+                // (5) permission_tighten: Bash denied for this turn → applied
+                act(
+                    "permission_tighten",
+                    serde_json::json!(["Bash"]),
+                    serde_json::json!([]),
+                ),
+            ],
+        }));
+        let mut sub = bus.subscribe();
+        let stop = h.run_turn("run the tool").await;
+        assert_eq!(stop, StopReason::EndTurn, "turn completes despite tighten");
+
+        // (1)/(2): the turn ran on the alt model (applied), ghost dropped.
+        let mut models: Vec<String> = Vec::new();
+        while let Ok(ev) = sub.try_recv() {
+            if let Event::ModelSelected { model, .. } = ev {
+                models.push(model);
+            }
+        }
+        assert!(
+            models.iter().all(|m| m == "mock-alt"),
+            "faculty-selected model served every step: {models:?}"
+        );
+
+        // (5): the Bash call was denied by the tighten actuation. The
+        // read guard is scoped: turn 2 below re-takes the lock for write.
+        {
+            let hist = h.history.read().await;
+            let tr = hist
+                .iter()
+                .find(|m| m.tool_call_id.as_deref() == Some("m1"))
+                .expect("tool result present");
+            assert!(
+                tr.is_error && tr.content.contains("permission_tighten"),
+                "tightened tool denied with the actuation reason: {}",
+                tr.content
+            );
+        }
+
+        // Journal carries every actuation with its disposition (applied
+        // AND dropped: the audit trail is complete either way).
+        let recs = crate::journal::Journal::replay(
+            h.journal.lock().unwrap_or_else(|p| p.into_inner()).path(),
+        )
+        .unwrap_or_default();
+        let acts: Vec<&JournalRecord> = recs.iter().filter(|r| r.kind() == "actuation").collect();
+        assert_eq!(acts.len(), 5, "all five actuations journaled");
+        let dispositions: Vec<String> = acts
+            .iter()
+            .filter_map(|r| match r {
+                JournalRecord::Actuation { detail } => detail
+                    .get("disposition")
+                    .and_then(|d| d.as_str())
+                    .map(str::to_string),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dispositions,
+            vec![
+                "applied",
+                "dropped: model not in chain",
+                "applied",
+                "dropped: outside [0.5x, 1.5x] clamp",
+                "applied",
+            ],
+            "exact dispositions in order: {dispositions:?}"
+        );
+
+        // Turn-scoped: a SECOND turn has no overrides (fresh state), so
+        // the primary model serves it and Bash executes again.
+        h.router.write().await.set_chain(
+            Role::Primary,
+            vec![crate::router::ModelEntry {
+                model: "mock-primary".into(),
+                provider: Arc::new(MockProvider::new(vec![MockProvider::text("second turn")])),
+                priced: true,
+            }],
+        );
+        let stop2 = h.run_turn("again").await;
+        assert_eq!(stop2, StopReason::EndTurn);
+        let hist2 = h.history.read().await;
+        assert!(
+            hist2
+                .iter()
+                .any(|m| m.role == "assistant" && m.content.contains("second turn")),
+            "second turn ran on the default chain (overrides cleared)"
+        );
     }
 }

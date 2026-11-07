@@ -141,7 +141,7 @@ mod tests {
         let _ = s.unshare_available();
     }
 
-    /// REGRESSION (Phase 5): kill_process_group used to shell out to
+    /// REGRESSION: kill_process_group used to shell out to
     /// `/bin/kill -TERM --<pgid>`, which GNU kill parses as an unknown
     /// option — the kill silently failed and timed-out process groups
     /// LEAKED. The test must fail if the group survives the kill.

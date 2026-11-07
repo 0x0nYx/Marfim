@@ -111,7 +111,7 @@ pub enum Command {
     Lsp,
     /// MCP server over stdio (expose marfim tools)
     Mcp,
-    /// ratatui terminal UI over the real session actor (Phase 6)
+    /// ratatui terminal UI over the real session actor
     Tui,
     /// Inspect/configure marfim (doctor, config get/set)
     Doctor,

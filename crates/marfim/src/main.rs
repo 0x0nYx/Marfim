@@ -150,7 +150,6 @@ pub fn iso_now() -> String {
 }
 
 struct SessionPaths {
-    #[allow(dead_code)] // surfaced by /resume + Phase 2 actor
     journal: PathBuf,
     session_id: String,
 }

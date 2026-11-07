@@ -86,6 +86,18 @@ pub enum Event {
         hook: String,
         detail: Value,
     },
+    /// A faculty ACTUATION landed (the four bounded powers: model_select,
+    /// permission_tighten, compact_threshold, idle_propose). Every
+    /// actuation carries the full before/after pair plus the evidence the
+    /// decision was made on — the /why surface explains it, the journal
+    /// persists it, nothing applies invisibly.
+    Actuation {
+        faculty: String,
+        kind: String,
+        before: Value,
+        after: Value,
+        evidence: Value,
+    },
 }
 
 impl Event {
@@ -106,6 +118,7 @@ impl Event {
             Event::VerifyStarted { .. } => "verify_started",
             Event::VerifyFinished { .. } => "verify_finished",
             Event::FacultyHook { .. } => "faculty_hook",
+            Event::Actuation { .. } => "actuation",
             Event::TurnEnded { .. } => "turn_end",
             Event::Error { .. } => "error",
         }

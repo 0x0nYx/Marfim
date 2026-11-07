@@ -1,4 +1,4 @@
-//! Phase 6: `marfim tui` — a ratatui terminal UI over the P2 session actor.
+//! `marfim tui` — a ratatui terminal UI over the session actor.
 //!
 //! Layout: a one-line header (model, session id, turn, running state), a
 //! scrollable transcript pane (stream deltas append live; tool calls render
@@ -425,6 +425,26 @@ impl TuiModel {
                     faculty: clip(faculty, 10),
                     hook: clip(hook, 8),
                     detail: clip(&detail.to_string(), 12),
+                });
+                while self.why.len() > WHY_KEEP {
+                    self.why.pop_front();
+                }
+            }
+            Event::Actuation {
+                faculty,
+                kind,
+                after,
+                ..
+            } => {
+                // Every actuation is visible in the transcript (never
+                // invisible influence) and lands in the WHY panel.
+                self.entries.push(Entry::Note(format!(
+                    "actuation: {kind} by {faculty} → {after}"
+                )));
+                self.why.push_back(WhyEntry {
+                    faculty: clip(faculty, 10),
+                    hook: clip("actuation", 8),
+                    detail: clip(&format!("{kind} → {after}"), 12),
                 });
                 while self.why.len() > WHY_KEEP {
                     self.why.pop_front();

@@ -45,12 +45,48 @@ pub struct Proposal {
     pub detail: Value,
 }
 
+/// One BOUNDED actuation a faculty may apply at a turn boundary. The four
+/// powers are exactly: "model_select" (pick the primary model for this
+/// turn from ladder/bandit evidence), "permission_tighten" (deny-list a
+/// misbehaving tool for this turn — deny>ask>allow: the engine stays the
+/// sole authority, a faculty can only TIGHTEN), "compact_threshold"
+/// (adjust the compaction trigger within [0.5x, 1.5x] of the configured
+/// value), "idle_propose" (existing propose-approve surface). The loop
+/// clamps and validates every actuation before applying it and publishes
+/// Event::Actuation for each so nothing lands invisibly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Actuation {
+    pub kind: String,
+    /// The value the loop would have used without this actuation.
+    pub before: Value,
+    /// The requested value (validated + clamped by the loop).
+    pub after: Value,
+    /// The learning evidence the decision was made on (inspectable).
+    pub evidence: Value,
+}
+
 /// One faculty. Implementations must be deterministic given (ctx, data):
 /// no wall-clock, no unseeded RNG, bounded memory (learning state is the
 /// implementer's responsibility and must be inspectable/resettable).
 #[async_trait::async_trait]
 pub trait Faculty: Send + Sync {
     fn name(&self) -> &'static str;
+
+    /// Turn-start actuations: the four bounded powers. Default: none.
+    /// The loop calls this once per turn, validates/clamps every entry,
+    /// publishes Event::Actuation, applies what survived validation.
+    async fn actuations(&self, _ctx: &HookCtx) -> Vec<Actuation> {
+        Vec::new()
+    }
+
+    /// The inspectable learning state (consumed by /why). Default: null.
+    fn why(&self) -> Value {
+        Value::Null
+    }
+
+    /// Full reset of learned state (consumed by /forget — learning is
+    /// REVERSIBLE). Default: no-op.
+    fn forget(&self) {}
 
     /// Before each provider request. Read-only in v1 (observe the
     /// request); a faculty CANNOT rewrite prompts here — that influence
@@ -180,6 +216,32 @@ pub async fn run_idle(
         }
     }
     proposals
+}
+
+/// Collect turn-start actuations from every faculty. Each actuation is
+/// published on the bus as Event::Actuation (faculty, kind, before, after,
+/// evidence) so the journal and the /why surface carry the full record.
+/// The caller (the loop) validates/clamps/applies; this helper only
+/// collects and publishes.
+pub async fn run_actuations(
+    bus: &EventBus,
+    faculties: &[Arc<dyn Faculty>],
+    ctx: &HookCtx,
+) -> Vec<(String, Actuation)> {
+    let mut out = Vec::new();
+    for f in faculties {
+        for a in f.actuations(ctx).await {
+            bus.publish(Event::Actuation {
+                faculty: f.name().into(),
+                kind: a.kind.clone(),
+                before: a.before.clone(),
+                after: a.after.clone(),
+                evidence: a.evidence.clone(),
+            });
+            out.push((f.name().to_string(), a));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

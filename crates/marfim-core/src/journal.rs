@@ -61,6 +61,14 @@ pub enum JournalRecord {
         fork_session: String,
         forked_at: String,
     },
+    /// A faculty actuation (the four bounded powers), journaled as one
+    /// detail object carrying faculty/kind/before/after/evidence plus the
+    /// loop's disposition ("applied" or the exact drop reason) — the
+    /// actuation history is complete and auditable in the JSONL. (The
+    /// object shape keeps the serde internal tag `kind` unambiguous.)
+    Actuation {
+        detail: Value,
+    },
 }
 
 impl JournalRecord {
@@ -77,6 +85,7 @@ impl JournalRecord {
             JournalRecord::Compaction { .. } => "compaction",
             JournalRecord::RewindMarker { .. } => "rewind_marker",
             JournalRecord::Fork { .. } => "fork",
+            JournalRecord::Actuation { .. } => "actuation",
         }
     }
 }
