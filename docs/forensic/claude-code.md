@@ -361,3 +361,74 @@
    at project scope.
 10. **Operator lifecycle commands** (`doctor`, `purge`, `update`, `import` from other agents,
     `setup-token`) reduce adoption friction — Marfim should have equivalents from v1.
+
+---
+
+## Delta scan: 964d695 → 0ed9469 / npm 2.1.317 → 2.1.319 (2026-11-06, latest build)
+
+Computed from the artifacts by `scripts/analyze_specs.py`; raw evidence in
+`upstream/analysis-evidence.json` (workspace-side). All observations remain
+metadata/interface facts only; no proprietary code was extracted.
+
+**Repo deltas:** 4 new commits, 18 files changed, +806/−0 (`git diff
+--shortstat`). CHANGELOG gains **2.1.318** (84 entries: 5 Added / 8 Changed /
+41 Fixed / 29 Other / 1 Removed; Shannon entropy over the entry-type
+distribution H = 1.6762 bits) and **2.1.319** (146 entries: 15 / 16 / 76 /
+38 / 1; H = 1.7318 bits; combined H = 1.7205 bits).
+
+**Mods: 4 → 5.** The new fifth mod is **`privacy`** (10 files, 234 LOC,
+shipped with its own README spec): a `tool.check` function hook that refuses
+— with no prompt, whatever the permission mode — a Bash / Monitor /
+PowerShell call whose input BOTH holds the signed-in account's email address
+(as written, quote-stripped, case-insensitive, one-pass percent-encoded) AND
+names a User-Agent (the `user[-_]agent` word family, `--user-agent` flag
+prefixes, `UA:`/`UA=`, or the client-flag pairs curl/curlie `-A`, wget/wget2
+`-U`, `-User` for web clients, unicode dashes included). Two word matches
+over the whole input, "no parser, on purpose"; false refusals accepted; a
+deny beneath keeps its own reason; disable channels catalogued; an explicit
+bypass list (computed values, variables, web/MCP tools, other encodings —
+"a courtesy, not a boundary"). Full clean-room distillation: §CC ADOPTED in
+Marfim as `core::privacy::PrivacyGuard` + `accountEmail`.
+
+**`$.session.identity()`** (mods/types `claude-code.d.ts`, +81 lines):
+managed-settings-gated identity op — `SessionIdentity { kind, organizationId?,
+organizationType?, email?, isVerified }` or a `{ deny }` union arm; org/email
+fields only where managed `forceLoginOrgUUID` pins the org; `isVerified`
+distinguishes the server-confirmed credential from the on-disk (editable)
+login record; forward-compat rule: "read an unknown kind as no identity".
+Also `session.identity` added to the event-argument maps. QUEUED in Marfim
+(no managed-settings tier yet).
+
+**CLI surface (fresh capture from the shipped linux-x64 binary).** Binary:
+340,226,576 bytes, sha256 `dabafec8…`, `claude --version` → `2.1.319
+(Claude Code)`. Help: 66 flags, 18 subcommands (same list as §2). NEW vs the
+dossier: `--brief` ("Enable SendUserMessage tool for agent-to-user
+communication") and `--remote-control-session-name-prefix <prefix>`.
+Semantics enriched: `--system-prompt-snapshot` now documents the default
+(`on` except under `--bare` outside cloud/background) and the
+record-verbatim-until-compaction rule; `--bare` sets `CLAUDE_CODE_SIMPLE=1`,
+keeps skills resolvable, and locks auth to `ANTHROPIC_API_KEY`/apiKeyHelper;
+`--restricted` now refuses bypassPermissions and gates writes to settings,
+git and tool-configuration files behind a person; `--fallback-model` accepts
+a comma-separated list and re-tries the primary each user turn; `--plugin-dir`
+accepts `.zip` archives and repeats; `--bg --resume <id>` continues that
+session in the background under the same ID.
+
+**sdk-tools.d.ts (npm interface facts).** 4,234 lines, 90 exported
+declarations, 45 `ToolInputSchemas` union members; sha256
+`2565f41f…`. Diff vs 2.1.317: exactly two atoms — `next_cursor` documentation
+tightened to "passed back unchanged; not an offset, a count or an event
+number", and a notification field `status: "proactive"` became optional
+(`status?: "proactive"`). The tool-name surface itself is UNCHANGED.
+
+**2.1.318/319 operational waves relevant to harness design** (full ledger in
+§CC): config-file integrity (`~/.claude.json` invalid → fail with restore
+instructions, never silently replaced; backup-rotation fixes on network
+homes), MCP legacy-handshake pinning (probe-death <3s → legacy handshake for
+7 days), config-write locking (`mcp add/remove` wait for the lock or exit 1),
+login-expiry surfacing (`loginExpiresAt`, `credential_expires_at`, 10-day
+stderr warning), idle-compaction summary integrity, permission-prompt input
+race, auto-mode server semantics + exit-code honesty (`claude -p` exits 1
+when refused with no safety check), quoted-word Bash deny/ask matching fix,
+MCP task backgrounding, `permissions.denyInsteadOfPrompting`, spend-report
+windows, gateway pooled-budget rules, `/tasks` finished-subagent reopen.

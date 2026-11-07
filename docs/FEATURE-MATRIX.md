@@ -97,6 +97,9 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | Config-protection: model cannot edit harness control files | ECC config-protection hook | ✅ (native) |
 | Honest "sandbox ≠ security boundary" docs | hermes SECURITY.md | ✅ |
 | Headless: ask → deny (no silent approvals) | claude code headless | ✅ |
+| Outbound privacy guard: shell call holding the account email AND a User-Agent token is refused with no prompt (quote/percent-decode readings, address excision, deny-beneath-keeps-reason) | claude code `privacy` mod (2.1.319 build) | ✅ (`core::privacy`, config `accountEmail`) |
+| `denyInsteadOfPrompting`: asks become denies, the turn continues | claude code 2.1.319 | ✅ (`permissions.denyInsteadOfPrompting`) |
+| Config integrity: a damaged config fails the start naming the file, never silently replaced | claude code 2.1.318 | ✅ (path-in-error regression test) |
 
 ## 5. Memory, skills, extensibility
 

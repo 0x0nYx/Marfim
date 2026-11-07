@@ -307,3 +307,55 @@ Controls: `ECC_HOOK_PROFILE=minimal|standard|strict`, `ECC_DISABLED_HOOKS`, `ECC
 - **Protect the quality gates from the agent.** Config-protection (no editing lint configs to pass) plus commit-quality blocking generalizes into "the agent may not weaken its own guardrails."
 - **Publish an honest portability matrix and a curated minimal profile.** Per-harness capability tiers plus a documented-exclusions subset (like `pi/core/`) keep cross-CLI claims truthful; a manifest like `agent.yaml` is a low-cost portability shim.
 - **Codify the delegation completion contract.** One short rule ("your final message is the deliverable; if you delegate, you own collection") eliminates a real, observed multi-agent failure mode (`rules/common/agents.md:40-50`).
+
+---
+
+## Delta scan: b38be6a7 → d2ef2680 (2026-11-06, latest build)
+
+Computed from the artifacts by `scripts/analyze_specs.py`; raw evidence in
+`upstream/analysis-evidence.json` (workspace-side).
+
+**Deltas:** 6 new commits (`rev-list`), 6 files changed, +203/−0 lines
+(`git diff --shortstat`). VERSION stays **2.2.3**. Inventory RE-COUNTED at
+HEAD and at the baseline: 71 `agents/*.md`, 98 `commands/*.md`, 314 skill
+directories / 620 files — identical to the dossier above. Hook scripts
+recounted with `git ls-tree -r`: **61 at BOTH commits** (the dossier's
+"59 = 58 Node + 1 Python" was a counting slip; the delta window touches no
+hook script).
+
+**The entire delta is the PR-moderation wave** (`.github/PR_MODERATION.md`,
+`.github/workflows/pr-burst-guard.yml`, `scripts/ci/pr-burst-guard.js`,
+`tests/ci/pr-burst-guard{,-workflow}.test.js`, `CONTRIBUTING.md`):
+
+1. **Open-PR cap grandfathering.** The cap (10 open PRs, `pr-burst-policy.json`
+   `maxOpen: 10`) no longer bulk-closes: a newly opened PR closes only when ≥10
+   OLDER PRs by that author are still open; historical open PRs stay open even
+   when their author is already over the cap. Policy arithmetic from the
+   shipped JSON: `windowMinutes: 20`, `closeAbove: 5`, `blockAbove: 10`,
+   `maxOpen: 10`, one denied numeric ID, two notify recipients.
+2. **Event-anchored excess selection.** A delayed `opened` event may reconcile
+   NEWER excess PRs whose own cap checks were cancelled by the Actions queue —
+   never any PR predating the trigger. Selection rule in `capExcess`:
+   creation-order sort, PR-number tiebreak, `action === "reopened"` closes only
+   the triggering PR (reopening consumes a new slot). Excess = `index >= maxOpen`
+   AND (`created_at > trigger` OR equal-with-higher-number). Deterministic:
+   stable author IDs, paginated REST creation metadata, no search index;
+   already-closed excess PRs count but are not mutated twice.
+3. **Trusted-contributor split.** Write/maintain/admin collaborators are exempt
+   from burst and denied-account moderation but STILL subject to the open-PR
+   cap ("The cap applies to all authors"); actor identity cannot exempt an
+   outsider (new test).
+4. **Queue-based concurrency.** Workflow `concurrency.group` per author keeps
+   `cancel-in-progress: false` and adds `queue: max` — up to 100 pending cap
+   events queue instead of being replaced; the doc states the honest
+   limitation that GitHub cancels excess pending runs beyond that bound.
+5. **Test battery.** `pr-burst-guard.test.js` now 27 tests (307 lines),
+   `pr-burst-guard-workflow.test.js` 2 tests (156 lines); the 8 new test names
+   cover: collaborator bypass, cap closes only the triggering excess PR,
+   delayed-opened reconciliation, >20 open PRs closure+comment, reopen-closes-
+   only-itself, older-allowed-PR-stays-open, dry-run no-mutation, cap-applies-
+   to-every-author.
+
+**Distillation:** doctrine captured in `docs/DISTILLATION.md` §CC (QUEUED —
+maps to Marfim's job-queue wave; the deterministic excess-selection and
+grandfathering rules are the reusable part).

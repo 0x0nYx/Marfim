@@ -36,6 +36,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "temperature",
     "thinkingBudget",
     "effort",
+    "accountEmail",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -131,7 +132,14 @@ impl Config {
             ("mcpServers", &["command", "args", "env", "url"]),
             (
                 "permissions",
-                &["mode", "deny", "ask", "allow", "workingGlobs"],
+                &[
+                    "mode",
+                    "deny",
+                    "ask",
+                    "allow",
+                    "workingGlobs",
+                    "denyInsteadOfPrompting",
+                ],
             ),
             ("bash", &["defaultTimeoutMs", "envAllowlist"]),
             ("hooks", &["PreToolUse", "PostToolUse"]),
@@ -196,7 +204,8 @@ impl Config {
         let home_cfg = home_dir.join(".marfim").join("config.toml");
         if home_cfg.is_file() {
             let text = std::fs::read_to_string(&home_cfg)?;
-            let layer = Self::from_toml_str(&text)?;
+            let layer = Self::from_toml_str(&text)
+                .map_err(|e| crate::CoreError::Config(format!("{}: {e}", home_cfg.display())))?;
             out.merge(layer);
             loaded.push(home_cfg.display().to_string());
         }
@@ -207,7 +216,8 @@ impl Config {
             let cwd_cfg = cwd.join(".marfim").join("config.toml");
             if cwd_cfg.is_file() {
                 let text = std::fs::read_to_string(&cwd_cfg)?;
-                let layer = Self::from_toml_str(&text)?;
+                let layer = Self::from_toml_str(&text)
+                    .map_err(|e| crate::CoreError::Config(format!("{}: {e}", cwd_cfg.display())))?;
                 out.merge(layer);
                 loaded.push(cwd_cfg.display().to_string());
             }
@@ -305,6 +315,42 @@ mod tests {
         assert_eq!(loaded2.len(), 1);
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn invalid_config_file_fails_loud_with_its_path_and_is_never_rewritten() {
+        // distilled: claude-code 2.1.318 config-integrity wave — a damaged
+        // config must fail the start with a readable error naming the file,
+        // never be silently replaced by defaults, and never be mutated.
+        let home = std::env::temp_dir().join(format!("marfim-cfg-bad-{}", std::process::id()));
+        let cwd = std::env::temp_dir().join(format!("marfim-cwd-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+        std::fs::create_dir_all(home.join(".marfim")).unwrap();
+        std::fs::create_dir_all(cwd.join(".marfim")).unwrap();
+        let bad = home.join(".marfim").join("config.toml");
+        std::fs::write(&bad, "model = \"unterminated\nbroken =\n").unwrap();
+        let before = std::fs::read(&bad).unwrap();
+
+        let err = Config::load_layered(&home, &cwd, crate::trust::Trust::Untrusted)
+            .expect_err("invalid TOML must fail the load");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains(&home_cfg_display(&home)),
+            "path in error: {msg}"
+        );
+        assert!(msg.contains("invalid TOML"), "{msg}");
+        // the damaged file is untouched — restore instructions are honest
+        assert_eq!(std::fs::read(&bad).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    fn home_cfg_display(home: &std::path::Path) -> String {
+        home.join(".marfim")
+            .join("config.toml")
+            .display()
+            .to_string()
     }
 
     #[test]

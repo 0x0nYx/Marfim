@@ -217,3 +217,59 @@ applied as the acceptance filter.
 Every ADOPTED item is wired, bounded (explicit caps/clamps), observable
 (events/journal/tests), reversible (pure functions + additive config), and
 covered by tests in this commit.
+
+---
+
+## §CC Claude Code + ECC latest-build distillation (2026-11-07)
+
+Baseline refresh loop against the latest builds of both reference repos
+(prior forensic baselines: ECC `b38be6a7` 2026-10-29 v2.2.3; claude-code
+`964d695` 2026-11-03 npm 2.1.317). Every number below is computed from the
+artifacts themselves by `scripts/analyze_specs.py`
+(evidence: `upstream/analysis-evidence.json` in the workspace, mirrored
+into the forensic docs).
+
+### Deltas vs the prior baselines (computed)
+
+| Metric | ECC (b38be6a7→d2ef2680) | claude-code (964d695→0ed9469, npm 2.1.317→2.1.319) |
+|---|---|---|
+| new commits | 6 | 4 |
+| files changed | 6 (+203/−0) | 18 (+806/−0) |
+| version | 2.2.3 (unchanged) | 2.1.319 |
+| inventory | 71 agents / 98 commands / 314 skill dirs / 620 files — IDENTICAL; hook scripts recounted 61 at BOTH commits (prior dossier's "59" was a counting slip); 0 hook scripts touched in the delta | mods 4 → **5** (new `privacy`); sdk-tools.d.ts 4,234 lines, 90 export decls, 45 tool-union members, sha256 `2565f41f…` (2 doc/type atoms vs 2.1.317: `next_cursor` pagination semantics clarified; `status?: "proactive"` made optional) |
+| CHANGELOG | — | 2.1.318: 84 entries (5 Added / 8 Changed / 41 Fixed / 29 Other / 1 Removed), Shannon H = 1.6762 bits; 2.1.319: 146 entries (15 / 16 / 76 / 38 / 1), H = 1.7318 bits; combined H = 1.7205 bits |
+| CLI surface | — | 66 flags captured from the shipped linux-x64 binary (sha256 `dabafec8…`, 340,226,576 bytes); NEW vs dossier: `--brief` (SendUserMessage tool), `--remote-control-session-name-prefix`; subcommands unchanged |
+
+### ADOPTED (this commit)
+
+| Spec | Source | Decision |
+|---|---|---|
+| Outbound privacy guard: refuse (NO prompt) a shell call that BOTH holds the account email AND names a User-Agent; the address counts as-written, quote-stripped, case-insensitive, and one-pass percent-decoded; UA named by a UA word (`user-agent`, `user_agent`, `--user-agent` prefixes, `UA:`/`UA=`) or a client+flag pair (curl/curlie `-A`, wget/wget2 `-U`, `-User` for web clients, unicode dashes included); the address is excised before the UA test so `jo@x.ua:` is not misread; explicit deny beneath keeps its own reason; allow rules do not clear it; honest bypass catalog (computed values, variables, web tools, other encodings pass — "a courtesy, not a boundary") | claude-code `mods/privacy` (10 files, 234 LOC, README spec) | ADOPTED — clean-room `core::privacy::PrivacyGuard` (no upstream code copied); wired on every production engine via `settings.accountEmail`; 7 module tests + 3 engine tests (override-allow, deny-before-prompt, deny-beneath-keeps-reason) |
+| `permissions.denyInsteadOfPrompting`: a call that would wait on a permission prompt is denied instead and the turn continues | claude-code 2.1.319 CHANGELOG | ADOPTED — engine flag `with_deny_instead_of_prompting`, config `permissions.denyInsteadOfPrompting`; converts rule-asks AND mode-default asks before the queue; test-asserted that no prompt job is queued |
+| Config integrity fail-closed: a damaged config file fails the start with a readable error naming the file, and is never silently replaced or mutated | claude-code 2.1.318 CHANGELOG (invalid `~/.claude.json` handling) | ADOPTED — `load_layered` errors now carry the file path; regression test asserts path + "invalid TOML" in the error and byte-identical file afterwards |
+| Raw shell command text reaches the permission engine (not just parsed argv) | claude-code privacy mod `textOf` doctrine | ADOPTED — `check_with_input`; Bash passes the raw line alongside argv |
+
+### QUEUED (spec captured, scheduled)
+
+| Spec | Source | Reason not yet in |
+|---|---|---|
+| PR-burst-guard moderation doctrine: event-anchored excess selection (opened events only close PRs NEWER than the trigger, creation-order + PR-number tiebreak), grandfathering (historical open PRs stay open), reopening consumes a new slot and closes only itself, `queue: max` with the honest 100-pending-runs limitation, reversible closures, dry-run reporting | ECC `pr-burst-guard` (+8 new tests: 27 total in guard suite) | repository-CI moderation, not harness behavior; maps to Marfim's future repo-automation/job-queue wave (ROADMAP v0.5) |
+| System-prompt snapshot semantics: record the rendered prompt ONCE per conversation, reuse verbatim on every request and resume even when a later launch passes different text, reset at compaction | claude-code 2.1.319 `--system-prompt-snapshot` help | Marfim's section order is already byte-stable; snapshot-once requires session-state plumbing for a property that is currently an invariant by construction |
+| MCP legacy-handshake pinning: a stdio server that dies <3s on the version probe is pinned to the legacy handshake for 7 days | claude-code 2.1.318 CHANGELOG | needs a probe-death ledger in the MCP client |
+| `$.session.identity()` analog: managed-settings-gated identity op returning `{kind, organizationId?, email?, isVerified}` with a discriminated denial and "read unknown kind as no identity" forward-compat rule | claude-code mods/types d.ts +81 lines | Marfim has no managed-settings tier yet |
+| Idle compaction must never replace a conversation with a non-summary | claude-code 2.1.318 fix | verified-by-construction in Marfim (micro-compaction is deterministic elision + verbatim tail); revisit when model-written summaries land |
+| Permission-prompt input race (keys typed just after sending a message must not answer prompts) | claude-code 2.1.318 fix | TUI approval modal isolation; low incident probability, scheduled with the TUI wave |
+| Gateway governance bundle: pooled budget conflict/priority rules, `login_notice`, JSON gateway log format, spend reporting windows | claude-code 2.1.319 CHANGELOG | Marfim's gateway (serve) has no multi-tenant budget ledger yet |
+
+### REJECTED (with reasons)
+
+| Spec | Reason |
+|---|---|
+| `--brief` SendUserMessage tool | agent-to-user channel exists in Marfim already (steering + approval queue); a second surface would split truth |
+| Privacy-mod disable channels (`/plugin disable`, `enabledPlugins` keys, server-side switch, above-tier hooks) | the guard is a hardline-adjacent floor in Marfim, not a plugin: config-off (`accountEmail` empty) is the only switch, and it is honest in the docs |
+| MCP task backgrounding + `CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND` | Marfim's MCP calls are synchronous by design (deterministic journal ordering); async task settlement is the QUEUED durable-inbox wave |
+
+Every ADOPTED item above is wired, bounded (fixed tool list, single decode
+pass, excision-before-test), observable (refusal reason surfaces in the
+tool result), reversible (empty `accountEmail` disables the guard), and
+covered by tests in this commit.

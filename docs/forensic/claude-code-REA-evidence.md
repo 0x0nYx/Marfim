@@ -233,3 +233,27 @@ artifacts alone — the Linux distribution is a compiled native executable (Bun 
 per REA's format detection), wrapped by a thin npm installer (`install.cjs`, `cli-wrapper.cjs`),
 with a published `sdk-tools.d.ts` tool-schema file and per-platform binary packages — match
 public knowledge that current builds compile the CLI to a native binary per platform.
+
+---
+
+## Refresh note (2026-11-07): latest build 2.1.319
+
+The REA run above is pinned to npm 2.1.317. The latest-build loop re-verified
+the package identity at **2.1.319** (metadata only, same read-only
+discipline):
+
+- Package layout UNCHANGED: the same 15-entry inventory (LICENSE.md, README.md,
+  bin/ placeholder `claude.exe` (500-byte bootstrap when postinstall is
+  skipped), cli-wrapper.cjs, install.cjs, package.json, sdk-tools.d.ts, and
+  the platform package `@anthropic-ai/claude-code-linux-x64`).
+- Platform binary re-identified: ELF executable, **340,226,576 bytes**, sha256
+  `dabafec82ca1319f…eed` (computed over the full file), `claude --version` →
+  `2.1.319 (Claude Code)` (the binary runs and prints its public version).
+- `sdk-tools.d.ts`: 4,234 lines, 90 export declarations, 45 tool-union
+  members, sha256 `2565f41f…`; exactly two interface atoms changed since
+  2.1.317 (documented in `claude-code.md` delta section).
+- The capacity fail-closed boundary (§3.2) and the inert-analysis findings
+  (§3.3) describe 2.1.317 evidence and are retained as-is; no re-unwrapping of
+  the 2.1.319 bundle was attempted (same budget discipline: the declared
+  expansion of a Bun standalone at this size stays far above any sane
+  expansion budget).

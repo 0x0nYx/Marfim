@@ -18,6 +18,7 @@ pub mod levenshtein;
 pub mod loop_;
 pub mod memory;
 pub mod permissions;
+pub mod privacy;
 pub mod providers;
 pub mod router;
 pub mod sandbox;

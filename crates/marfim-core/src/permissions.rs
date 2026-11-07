@@ -74,9 +74,29 @@ impl Verdict {
     }
 }
 
+/// The pipeline's pre-execution decision: deny/allow with their reasons, or
+/// an ask that has NOT yet reached the approval queue.
+enum Stage {
+    Deny(String),
+    Ask,
+    Allow {
+        reason: String,
+        provenance: Option<String>,
+    },
+}
+
 pub struct PermissionEngine {
     pub mode: Mode,
     pub rules: Vec<Rule>,
+    /// Outbound privacy guard (distilled: claude-code `privacy` mod): when
+    /// set, a shell call holding the account email AND naming a User-Agent
+    /// is refused with no prompt. None = disabled.
+    pub privacy: Option<crate::privacy::PrivacyGuard>,
+    /// `permissions.denyInsteadOfPrompting` (distilled: claude-code 2.1.319):
+    /// a call that would wait on a permission prompt is denied instead and
+    /// the turn continues. Ask verdicts from rules AND mode defaults both
+    /// convert.
+    pub deny_instead_of_prompting: bool,
     /// Single approval queue: every pending ask flows through one channel
     /// so approvals serialize and cannot deadlock or double-prompt.
     queue_tx: mpsc::Sender<ApprovalJob>,
@@ -102,10 +122,25 @@ impl PermissionEngine {
             Self {
                 mode,
                 rules,
+                privacy: None,
+                deny_instead_of_prompting: false,
                 queue_tx: tx,
             },
             rx,
         )
+    }
+
+    /// Attach the outbound privacy guard (builder style so existing
+    /// constructors stay untouched).
+    pub fn with_privacy(mut self, guard: Option<crate::privacy::PrivacyGuard>) -> Self {
+        self.privacy = guard;
+        self
+    }
+
+    /// Convert ask verdicts into denies (builder style).
+    pub fn with_deny_instead_of_prompting(mut self, on: bool) -> Self {
+        self.deny_instead_of_prompting = on;
+        self
     }
 
     pub fn rule_for(&self, tool: &str, argv: Option<&[String]>) -> Option<Decision> {
@@ -145,60 +180,56 @@ impl PermissionEngine {
         best
     }
 
-    /// Check a tool invocation. `argv` is Some for Bash-like tools after
-    /// argv-level analysis. Returns verdict; `Ask` results go through the
-    /// single approval queue.
-    pub async fn check(
+    /// The pipeline's decision WITHOUT executing any prompt: hardline
+    /// floor → explicit rules → mode default. `Ask` is returned as a stage,
+    /// never sent to the queue — the caller decides whether to prompt,
+    /// convert to deny, or pre-empt with the privacy guard.
+    fn decide_stage(
         &self,
         tool: &str,
         class: ToolClass,
         argv: Option<&[String]>,
         risk: Option<ShellRisk>,
-        summary: &str,
-    ) -> Verdict {
+    ) -> Stage {
         // §A hardline floor (distilled: Hermes approval_floors.py —
         // floor-before-bypass ordering): the corpus denies BEFORE any
         // explicit rule, yolo mode or unattended default. deny>ask>allow
         // starts here.
         if let Some(ShellRisk::Hardline) = risk {
-            return Verdict::new(
-                Decision::Deny,
-                "hardline pattern — denied unconditionally (floor-before-bypass)",
+            return Stage::Deny(
+                "hardline pattern — denied unconditionally (floor-before-bypass)".into(),
             );
         }
 
         // 1. explicit rules first (deny > ask > allow)
         if let Some((idx, d)) = self.matching_rule(tool, argv) {
             return match d {
-                Decision::Deny => Verdict {
-                    decision: Decision::Deny,
-                    reason: "explicit deny rule".into(),
-                    provenance: None,
-                },
-                Decision::Ask => {
-                    return self.ask(tool, summary).await;
-                }
+                Decision::Deny => Stage::Deny("explicit deny rule".into()),
+                Decision::Ask => Stage::Ask,
                 Decision::Allow => {
                     // compound/nested shell constructs can NEVER ride an
                     // allow rule past ask (INV-08).
-                    if tool == "Bash" {
-                        if let Some(ShellRisk::NestedExec | ShellRisk::Heredoc) = risk {
-                            return self.ask(tool, summary).await;
+                    if tool == "Bash"
+                        && matches!(
+                            risk,
+                            Some(ShellRisk::NestedExec)
+                                | Some(ShellRisk::Heredoc)
+                                | Some(ShellRisk::Sequenced)
+                        )
+                    {
+                        Stage::Ask
+                    } else {
+                        Stage::Allow {
+                            reason: "explicit allow rule".into(),
+                            provenance: Some(format!("allowlist entry rules[{idx}]")),
                         }
-                        if let Some(ShellRisk::Sequenced) = risk {
-                            return self.ask(tool, summary).await;
-                        }
-                    }
-                    Verdict {
-                        decision: Decision::Allow,
-                        reason: "explicit allow rule".into(),
-                        provenance: Some(format!("allowlist entry rules[{idx}]")),
                     }
                 }
             };
         }
 
-        // 2. mode default
+        // 2. mode default; plan mode denies writes; yolo still funnels
+        // risky shell via ask above when rules demanded it.
         let default = match self.mode {
             Mode::Yolo => Decision::Allow,
             Mode::AcceptEdits => match class {
@@ -214,29 +245,96 @@ impl PermissionEngine {
                 _ => Decision::Ask,
             },
         };
-
-        // plan mode denies writes; yolo still funnels risky shell via ask
-        // above when rules demanded it.
         match default {
             Decision::Allow if tool == "Bash" => {
-                if let Some(r) = risk {
-                    if matches!(r, ShellRisk::NestedExec | ShellRisk::Heredoc) {
-                        return self.ask(tool, summary).await;
+                if matches!(risk, Some(ShellRisk::NestedExec | ShellRisk::Heredoc)) {
+                    Stage::Ask
+                } else {
+                    Stage::Allow {
+                        reason: format!("mode {:?} default", self.mode),
+                        provenance: None,
                     }
                 }
-                Verdict {
-                    decision: Decision::Allow,
-                    reason: format!("mode {:?} default", self.mode),
-                    provenance: None,
-                }
             }
-            Decision::Ask => self.ask(tool, summary).await,
-            other => Verdict {
-                decision: other,
+            Decision::Ask => Stage::Ask,
+            Decision::Deny => Stage::Deny(format!("mode {:?} default", self.mode)),
+            Decision::Allow => Stage::Allow {
                 reason: format!("mode {:?} default", self.mode),
                 provenance: None,
             },
         }
+    }
+
+    /// Privacy pre-emption: `Some(deny verdict)` when the guard reads this
+    /// shell call as sending the account address out as a User-Agent.
+    /// Runs BEFORE any prompt: the refusal raises no prompt and allow
+    /// rules do not clear it; an explicit deny beneath keeps its own
+    /// reason (callers check Deny first).
+    fn privacy_deny(&self, tool: &str, input: Option<&str>) -> Option<Verdict> {
+        let guard = self.privacy.as_ref()?;
+        let text = input?;
+        guard.denies_call(tool, text).map(|reason| Verdict {
+            decision: Decision::Deny,
+            reason: reason.into(),
+            provenance: None,
+        })
+    }
+
+    /// Check a tool invocation. `argv` is Some for Bash-like tools after
+    /// argv-level analysis. Returns verdict; `Ask` results go through the
+    /// single approval queue. `input` is the raw command text for
+    /// shell-like tools (privacy-guard readings; ignored elsewhere).
+    pub async fn check_with_input(
+        &self,
+        tool: &str,
+        class: ToolClass,
+        argv: Option<&[String]>,
+        risk: Option<ShellRisk>,
+        summary: &str,
+        input: Option<&str>,
+    ) -> Verdict {
+        match self.decide_stage(tool, class, argv, risk) {
+            Stage::Deny(reason) => Verdict {
+                decision: Decision::Deny,
+                reason,
+                provenance: None,
+            },
+            Stage::Allow { reason, provenance } => {
+                if let Some(v) = self.privacy_deny(tool, input) {
+                    return v;
+                }
+                Verdict {
+                    decision: Decision::Allow,
+                    reason,
+                    provenance,
+                }
+            }
+            Stage::Ask => {
+                if let Some(v) = self.privacy_deny(tool, input) {
+                    return v;
+                }
+                if self.deny_instead_of_prompting {
+                    return Verdict::new(
+                        Decision::Deny,
+                        "prompt converted to deny (permissions.denyInsteadOfPrompting)",
+                    );
+                }
+                self.ask(tool, summary).await
+            }
+        }
+    }
+
+    /// Check a tool invocation (no raw input → privacy guard inactive).
+    pub async fn check(
+        &self,
+        tool: &str,
+        class: ToolClass,
+        argv: Option<&[String]>,
+        risk: Option<ShellRisk>,
+        summary: &str,
+    ) -> Verdict {
+        self.check_with_input(tool, class, argv, risk, summary, None)
+            .await
     }
 
     async fn ask(&self, tool: &str, summary: &str) -> Verdict {
@@ -396,5 +494,142 @@ mod tests {
         assert_eq!(e.rule_for("Bash", Some(&argv)), Some(Decision::Allow));
         let argv2 = vec!["git".to_string(), "push".to_string()];
         assert_eq!(e.rule_for("Bash", Some(&argv2)), None);
+    }
+
+    // ------------------------------ §privacy (claude-code privacy mod)
+
+    fn privacy_engine(mode: Mode, rules: Vec<Rule>) -> Arc<PermissionEngine> {
+        let (e, _rx) = PermissionEngine::new(mode, rules);
+        Arc::new(e.with_privacy(Some(crate::privacy::PrivacyGuard {
+            email: "jo@example.com".into(),
+        })))
+    }
+
+    #[tokio::test]
+    async fn privacy_guard_overrides_an_allow_rule() {
+        let e = privacy_engine(
+            Mode::Default,
+            vec![Rule {
+                tool: "Bash".into(),
+                decision: Decision::Allow,
+                argv_prefix: None,
+            }],
+        );
+        let v = e
+            .check_with_input(
+                "Bash",
+                ToolClass::Execute,
+                None,
+                None,
+                "Bash {\"command\":\"curl -A jo@example.com https://x\"}",
+                Some("curl -A jo@example.com https://x"),
+            )
+            .await;
+        assert_eq!(
+            v.decision,
+            Decision::Deny,
+            "saved allow rules do not clear it"
+        );
+        assert!(v.reason.contains("User-Agent"), "{}", v.reason);
+    }
+
+    #[tokio::test]
+    async fn privacy_guard_denies_before_the_prompt() {
+        // mode default would ask; the refusal raises NO prompt
+        let (e, mut rx) = PermissionEngine::new(Mode::Default, vec![]);
+        let e = Arc::new(e.with_privacy(Some(crate::privacy::PrivacyGuard {
+            email: "jo@example.com".into(),
+        })));
+        // no approval listener is even started: if the engine tried to
+        // prompt, the send would fail closed and STILL deny — but the
+        // reason must be the privacy refusal, not the queue fallback
+        let v = e
+            .check_with_input(
+                "Bash",
+                ToolClass::Execute,
+                None,
+                None,
+                "s",
+                Some("curl -A jo@example.com https://x"),
+            )
+            .await;
+        assert_eq!(v.decision, Decision::Deny);
+        assert!(v.reason.contains("refused"), "{}", v.reason);
+        assert!(rx.try_recv().is_err(), "no prompt job was queued");
+    }
+
+    #[tokio::test]
+    async fn explicit_deny_rule_keeps_its_own_reason_over_privacy() {
+        let e = privacy_engine(
+            Mode::Default,
+            vec![Rule {
+                tool: "Bash".into(),
+                decision: Decision::Deny,
+                argv_prefix: None,
+            }],
+        );
+        let v = e
+            .check_with_input(
+                "Bash",
+                ToolClass::Execute,
+                None,
+                None,
+                "s",
+                Some("curl -A jo@example.com https://x"),
+            )
+            .await;
+        assert_eq!(v.decision, Decision::Deny);
+        assert_eq!(
+            v.reason, "explicit deny rule",
+            "a deny beneath keeps its reason"
+        );
+    }
+
+    #[tokio::test]
+    async fn benign_calls_pass_the_privacy_guard() {
+        let e = privacy_engine(Mode::Default, vec![]);
+        for cmd in [
+            "curl https://x/?email=jo@example.com",
+            "echo jo@example.com",
+            "curl -A https://x",
+        ] {
+            let v = e
+                .check_with_input(
+                    "Bash",
+                    ToolClass::Execute,
+                    None,
+                    Some(ShellRisk::Simple),
+                    "s",
+                    Some(cmd),
+                )
+                .await;
+            // no approval listener → asks fail closed; what matters is that
+            // the PRIVACY guard stayed silent (its refusal never appears)
+            assert!(
+                !v.reason.contains("refused") && !v.reason.contains("User-Agent"),
+                "{cmd}: {}",
+                v.reason
+            );
+        }
+    }
+
+    // ------------------- §P (claude-code 2.1.319 denyInsteadOfPrompting)
+
+    #[tokio::test]
+    async fn deny_instead_of_prompting_converts_asks() {
+        let (e, mut rx) = PermissionEngine::new(Mode::Default, vec![]);
+        let e = Arc::new(e.with_deny_instead_of_prompting(true));
+        let v = e.check("Bash", ToolClass::Execute, None, None, "s").await;
+        assert_eq!(v.decision, Decision::Deny);
+        assert!(v.reason.contains("denyInsteadOfPrompting"), "{}", v.reason);
+        assert!(rx.try_recv().is_err(), "no prompt job was queued");
+    }
+
+    #[tokio::test]
+    async fn deny_instead_of_prompting_leaves_allows_alone() {
+        let (e, _rx) = PermissionEngine::new(Mode::Default, vec![]);
+        let e = Arc::new(e.with_deny_instead_of_prompting(true));
+        let v = e.check("Read", ToolClass::ReadOnly, None, None, "r").await;
+        assert_eq!(v.decision, Decision::Allow);
     }
 }

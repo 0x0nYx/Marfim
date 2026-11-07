@@ -480,7 +480,14 @@ async fn build_session(
     let sandbox = Sandbox::probe();
     let (perm, approval_rx) =
         PermissionEngine::new(settings.permission_mode, settings.rules.clone());
-    let perm = Arc::new(perm);
+    // §privacy (claude-code `privacy` mod) + §P denyInsteadOfPrompting
+    // (2.1.319): wired from config truth, not CLI.
+    let perm = Arc::new(
+        perm.with_privacy(Some(marfim_core::privacy::PrivacyGuard {
+            email: settings.account_email.clone(),
+        }))
+        .with_deny_instead_of_prompting(settings.deny_instead_of_prompting),
+    );
 
     // D16: real subagent host — Task/TaskOutput spawn nested agent loops
     let subagents = Arc::new(ProductionSubagents {
@@ -1463,6 +1470,24 @@ async fn mcp_cmd(config: &Config) -> i32 {
         marfim_core::permissions::Mode::Default,
         settings::rules_from_config(config),
     );
+    let perm_engine = perm_engine
+        .with_privacy(Some(marfim_core::privacy::PrivacyGuard {
+            email: config
+                .get("accountEmail")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        }))
+        .with_deny_instead_of_prompting(
+            config
+                .get("permissions")
+                .map(|p| {
+                    p.get("denyInsteadOfPrompting")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+        );
     let perm = Arc::new(perm_engine);
     tokio::spawn(async move {
         while let Some(job) = approval_rx.recv().await {

@@ -465,6 +465,11 @@ pub struct EffectiveSettings {
     pub output_format: String,
     pub prompt: Option<String>,
     pub prompt_vars: Vec<(String, String)>,
+    /// §privacy (claude-code `privacy` mod): the account address the guard
+    /// protects; empty = guard disabled.
+    pub account_email: String,
+    /// §P (claude-code 2.1.319): asks become denies, the turn continues.
+    pub deny_instead_of_prompting: bool,
 }
 
 /// Permission rules from the config `permissions` section only (no CLI):
@@ -586,6 +591,7 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
     let mut permission_mode = cli.permission_mode.as_str();
     let mut rules: Vec<Rule> = Vec::new();
     let mut working_globs = cli.glob.clone();
+    let mut deny_instead_of_prompting = false;
     if let Some(perms) = config.get("permissions") {
         if let Some(m) = perms.get("mode").and_then(|v| v.as_str()) {
             permission_mode = m;
@@ -624,9 +630,20 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
                 working_globs.push(g.to_string());
             }
         }
+        deny_instead_of_prompting = perms
+            .get("denyInsteadOfPrompting")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
     }
     let mode = Mode::parse(permission_mode).unwrap_or(Mode::Default);
     let _ = config.get("tools");
+
+    // --- §privacy + §P permission-engine options ---
+    let account_email = config
+        .get("accountEmail")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     // --- budget ---
     let budget_spec = cli.budget.clone().or_else(|| {
@@ -763,6 +780,8 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         output_format: cli.output_format.clone(),
         prompt: cli.prompt.clone(),
         prompt_vars,
+        account_email,
+        deny_instead_of_prompting,
     })
 }
 
@@ -867,6 +886,7 @@ mod tests {
         "temperature",
         "thinkingBudget",
         "effort",
+        "accountEmail",
     ];
 
     use clap::CommandFactory;
@@ -917,6 +937,44 @@ mod tests {
         // missing provider errors
         let cfg3 = Config::default();
         assert!(effective(&cli(), &cfg3, PathBuf::from(".")).is_err());
+    }
+
+    #[test]
+    fn privacy_and_deny_instead_of_prompting_flow_from_config() {
+        // defaults: guard off (empty email), prompt conversion off
+        let cfg = Config::from_json_str(r#"{"provider": "mock", "model": "m"}"#).unwrap();
+        let s = effective(&cli(), &cfg, PathBuf::from(".")).unwrap();
+        assert_eq!(s.account_email, "");
+        assert!(!s.deny_instead_of_prompting);
+
+        // both wired from config truth
+        let cfg2 = Config::from_json_str(
+            r#"{"provider": "mock", "model": "m", "accountEmail": "jo@example.com",
+                "permissions": {"denyInsteadOfPrompting": true}}"#,
+        )
+        .unwrap();
+        let s2 = effective(&cli(), &cfg2, PathBuf::from(".")).unwrap();
+        assert_eq!(s2.account_email, "jo@example.com");
+        assert!(s2.deny_instead_of_prompting);
+
+        // the engine built from these settings actually refuses a
+        // User-Agent call holding the address — end to end
+        let (e, _rx) =
+            marfim_core::permissions::PermissionEngine::new(s2.permission_mode, s2.rules.clone());
+        let e = e.with_privacy(Some(marfim_core::privacy::PrivacyGuard {
+            email: s2.account_email.clone(),
+        }));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let v = rt.block_on(e.check_with_input(
+            "Bash",
+            marfim_core::permissions::ToolClass::Execute,
+            None,
+            None,
+            "s",
+            Some("curl -A jo@example.com https://x"),
+        ));
+        assert_eq!(v.decision, marfim_core::permissions::Decision::Deny);
+        assert!(v.reason.contains("User-Agent"), "{}", v.reason);
     }
 
     #[test]

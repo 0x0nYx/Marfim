@@ -475,11 +475,13 @@ impl ToolHost for HostTools {
         // 2. permission check with argv-level analysis for Bash
         let mut argv: Option<Vec<String>> = None;
         let mut risk: Option<ShellRisk> = None;
+        let mut raw_cmd: Option<&str> = None;
         if tool == "Bash" {
             if let Some(cmd) = args["command"].as_str() {
                 let a = marfim_core::shellparse::analyze(cmd);
                 risk = Some(a.risk);
                 argv = a.segments.first().cloned();
+                raw_cmd = Some(cmd);
             }
         }
         let class = self
@@ -487,14 +489,19 @@ impl ToolHost for HostTools {
             .get(tool)
             .map(|t| t.class)
             .unwrap_or(ToolClass::Execute);
+        // §privacy (distilled: claude-code `privacy` mod): the RAW command
+        // text rides along so the guard can read the line as written and
+        // stripped — not just the parsed argv.
+        let raw_input = raw_cmd;
         let verdict = self
             .permissions
-            .check(
+            .check_with_input(
                 tool,
                 class,
                 argv.as_deref(),
                 risk,
                 &format!("{tool} {args_json}"),
+                raw_input,
             )
             .await;
         if verdict.decision == marfim_core::permissions::Decision::Deny {

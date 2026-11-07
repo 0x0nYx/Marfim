@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.0 — ECC + Claude Code latest-build distillation (2026-11-07)
+
+Deep-extraction loop against the latest builds (ECC d2ef2680, claude-code
+0ed9469 / npm 2.1.319); every number computed from the artifacts
+(`docs/DISTILLATION.md` §CC, forensic delta sections). Three specs adopted
+clean-room, three+ queued, rejections ledgered.
+
+### Permission engine
+- **Outbound privacy guard** (`core::privacy`, clean-room from the claude
+  code `privacy` mod): a Bash call that BOTH holds the configured
+  `accountEmail` AND names a User-Agent (word family, client-flag pairs,
+  unicode dashes) is refused with no prompt — the address counts
+  as-written, quote-stripped, case-insensitive and one-pass
+  percent-decoded; the address is excised before the UA test; an explicit
+  deny beneath keeps its own reason; allow rules do not clear it. 10
+  new tests (module + engine + end-to-end settings wiring).
+- **`permissions.denyInsteadOfPrompting`** (2.1.319): asks — from rules or
+  mode defaults — become denies and the turn continues; test-asserted no
+  prompt job is queued.
+- Raw shell command text now reaches the engine (`check_with_input`)
+  alongside parsed argv.
+
+### Config integrity
+- Layered config parse errors now name the failing file path; regression
+  test asserts the damaged file is never rewritten (2.1.318 doctrine).
+
+### Docs / evidence
+- `docs/forensic/ecc.md` + `docs/forensic/claude-code.md` delta sections,
+  REA evidence refresh note; FEATURE-MATRIX rows; computed metrics
+  (CHANGELOG entry-type entropy, sdk/binary digests, CLI flag diff).
+
 ## 1.0.0 — wires + repomap batch (2026-11-07)
 
 The last two v0.2 roadmap gaps closed with fixture-backed evidence.
