@@ -69,3 +69,4 @@ an owner input is missing; the reason and the exact ask live in that file.
 | Phase | fmt | clippy -D warnings | test --workspace | gates.sh | deny/audit | Recorded |
 |---|---|---|---|---|---|---|
 | baseline (dc980ef) | ✓ | ✓ | 603 green | G1–G10 PASS | ✓ (CI) | W0.1 |
+| W1 phase end | ✓ | ✓ | 627 green | 9 PASS / 0 FAIL / 4 SKIP (G11-G14 pending artifacts) | cargo deny + cargo audit green, zero ignores (local, 2026-11-07) | W1.5b |

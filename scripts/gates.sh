@@ -22,7 +22,7 @@ else
 fi
 
 # G2: the mock wire is reachable ONLY through the explicit `mock` preset.
-if rg -n '"mock" =>' crates/marfim/src/settings.rs >/dev/null 2>&1; then
+if rg -n '"mock" =>' crates/marfim-app/src/settings.rs >/dev/null 2>&1; then
   if [ -z "$(rg -n "fallback.*mock|default_provider.*mock" crates/ -g '*.rs' 2>/dev/null | grep -v test || true)" ]; then
     ok 2 "mock wire only via explicit selection (D11); no silent fallback path"
   else
