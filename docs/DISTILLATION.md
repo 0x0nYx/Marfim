@@ -225,9 +225,10 @@ covered by tests in this commit.
 Baseline refresh loop against the latest builds of both reference repos
 (prior forensic baselines: ECC `b38be6a7` 2026-10-29 v2.2.3; claude-code
 `964d695` 2026-11-03 npm 2.1.317). Every number below is computed from the
-artifacts themselves by `scripts/analyze_specs.py`
-(evidence: `upstream/analysis-evidence.json` in the workspace, mirrored
-into the forensic docs).
+artifacts themselves by an analysis script run in the build workspace
+(NOT tracked in this repo — the no-.py gate G8 keeps the tree single-
+language); the computed numbers and evidence digests are mirrored into
+the forensic docs and `docs/forensic/`, which are the durable record.
 
 ### Deltas vs the prior baselines (computed)
 
