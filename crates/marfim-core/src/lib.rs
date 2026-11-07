@@ -12,6 +12,7 @@ pub mod config;
 pub mod credentials;
 pub mod events;
 pub mod faculty;
+pub mod git;
 pub mod guardian;
 pub mod hooks;
 pub mod journal;

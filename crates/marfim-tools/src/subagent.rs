@@ -78,64 +78,99 @@ pub fn blocked_rules(agent: &str) -> Vec<marfim_core::permissions::Rule> {
         .collect()
 }
 
-/// Git-worktree isolation (D16): when the project is a git repo, subagents
-/// run in a detached worktree so mutations cannot touch the main checkout.
+/// Subagent isolation (D16 + W1.5): git repos get a detached worktree
+/// (through the GitBackend); non-git projects degrade to a bounded COPY
+/// of the tree — never the same dir, mutations can never touch the
+/// original either way.
 pub struct WorktreeGuard {
     pub path: std::path::PathBuf,
     repo: Option<std::path::PathBuf>,
+    /// true = copy isolation (Drop removes the copy directory).
+    copied: bool,
+}
+
+/// Bounded recursive copy for non-git isolation (W1.5). `.git` is
+/// skipped; more than [`ISOLATION_COPY_FILE_CAP`] files is an honest
+/// error (a runaway copy is worse than a refusal).
+pub const ISOLATION_COPY_FILE_CAP: usize = 50_000;
+
+pub fn copy_tree_bounded(src: &std::path::Path, dst: &std::path::Path) -> Result<usize, String> {
+    fn walk(src: &std::path::Path, dst: &std::path::Path, count: &mut usize) -> Result<(), String> {
+        for entry in
+            std::fs::read_dir(src).map_err(|e| format!("copy read {}: {e}", src.display()))?
+        {
+            let entry = entry.map_err(|e| format!("copy entry: {e}"))?;
+            let name = entry.file_name();
+            if name == ".git" {
+                continue; // history stays behind; the snapshot is the tree
+            }
+            let from = entry.path();
+            let to = dst.join(&name);
+            if from.is_dir() {
+                std::fs::create_dir_all(&to).map_err(|e| format!("mkdir {to:?}: {e}"))?;
+                walk(&from, &to, count)?;
+            } else {
+                *count += 1;
+                if *count > ISOLATION_COPY_FILE_CAP {
+                    return Err(format!(
+                        "copy isolation refused: workspace exceeds {ISOLATION_COPY_FILE_CAP} files"
+                    ));
+                }
+                std::fs::copy(&from, &to)
+                    .map_err(|e| format!("copy {} → {}: {e}", from.display(), to.display()))?;
+            }
+        }
+        Ok(())
+    }
+    let mut count = 0;
+    std::fs::create_dir_all(dst).map_err(|e| format!("mkdir {dst:?}: {e}"))?;
+    walk(src, dst, &mut count)?;
+    Ok(count)
+}
+
+fn isolated_base(kind: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "marfim-{kind}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ))
 }
 
 impl WorktreeGuard {
-    /// Returns a guarded dir: a fresh worktree for git repos, or the same
-    /// dir for non-git projects (isolation not applicable there).
+    /// Returns a guarded dir: a fresh detached worktree for git repos, a
+    /// bounded copy for non-git projects. NEVER the original directory.
     pub fn create(cwd: &std::path::Path) -> Result<Self, String> {
-        let is_repo = std::process::Command::new("git")
-            .args(["rev-parse", "--git-dir"])
-            .current_dir(cwd)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !is_repo {
-            return Ok(Self {
-                path: cwd.to_path_buf(),
+        let backend = marfim_core::git::default_backend();
+        if backend.is_repo(cwd) {
+            let base = isolated_base("worktree");
+            backend.worktree_add_detached(cwd, &base)?;
+            Ok(Self {
+                path: base,
+                repo: Some(cwd.to_path_buf()),
+                copied: false,
+            })
+        } else {
+            let base = isolated_base("copy");
+            copy_tree_bounded(cwd, &base)?;
+            Ok(Self {
+                path: base,
                 repo: None,
-            });
+                copied: true,
+            })
         }
-        let base = std::env::temp_dir().join(format!(
-            "marfim-worktree-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let out = std::process::Command::new("git")
-            .args(["worktree", "add", "--detach"])
-            .arg(&base)
-            .current_dir(cwd)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !out.status.success() {
-            return Err(format!(
-                "worktree add failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            ));
-        }
-        Ok(Self {
-            path: base,
-            repo: Some(cwd.to_path_buf()),
-        })
     }
 }
 
 impl Drop for WorktreeGuard {
     fn drop(&mut self) {
         if let Some(repo) = &self.repo {
-            let _ = std::process::Command::new("git")
-                .args(["worktree", "remove", "--force"])
-                .arg(&self.path)
-                .current_dir(repo)
-                .output();
+            let _ = marfim_core::git::default_backend().worktree_remove(repo, &self.path);
+        }
+        if self.copied {
+            let _ = std::fs::remove_dir_all(&self.path);
         }
     }
 }
@@ -263,6 +298,40 @@ mod tests {
             "worktree cleaned up"
         );
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn non_git_projects_degrade_to_bounded_copy_isolation() {
+        let dir = marfim_testkit::unique_dir("marfim-sub-copy");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hello.txt"), "hi\n").unwrap();
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested/deep.txt"), "deep\n").unwrap();
+        {
+            let guard = WorktreeGuard::create(&dir).unwrap();
+            assert_ne!(guard.path, dir, "never the original dir");
+            assert!(
+                guard.path.join("hello.txt").is_file(),
+                "copy carries the files"
+            );
+            assert!(
+                guard.path.join("nested/deep.txt").is_file(),
+                "copy is recursive"
+            );
+            // mutations in the copy cannot touch the original
+            std::fs::write(guard.path.join("hello.txt"), "mutated\n").unwrap();
+        }
+        let original = std::fs::read_to_string(dir.join("hello.txt")).unwrap_or_default();
+        assert_eq!(original, "hi\n", "original untouched");
+        // the copy is cleaned up with the guard
+        let copies: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains("marfim-copy"))
+            .collect();
+        assert!(copies.is_empty(), "copy cleaned up on drop");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

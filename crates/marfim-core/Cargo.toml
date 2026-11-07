@@ -28,6 +28,22 @@ nix = { version = "0.29", default-features = false, features = ["signal"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4" 
 
+# W1.5: in-process git backend (feature-gated; heavy dep — the default
+# build ships CliGit, the `git` CLI wrapper).
+gix = { version = "0.69", optional = true, default-features = false, features = [
+    "parallel",
+    "revision",
+    "status",
+    "blob-diff",
+    "dirwalk",
+    "index",
+    "worktree-mutation",
+    "tree-editor",
+] }
+
+[features]
+gix = ["dep:gix"]
+
 [dev-dependencies]
 marfim-testkit = { path = "../marfim-testkit" }
 tokio = { workspace = true, features = ["test-util"] }
