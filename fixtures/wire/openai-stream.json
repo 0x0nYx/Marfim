@@ -1,5 +1,5 @@
 {
-  "comment": "Node v1.2.0 goldens: chat.completion.chunk deltas, finish_reason passthrough (openai.js:91-98), cached_tokens → cache_read",
+  "comment": "Node v1.2.0 goldens: chat.completion.chunk deltas, finish_reason passthrough (openai.js:91-98), cached_tokens \u2192 cache_read",
   "sse": [
     "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"work\"}}]}",
     "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"Bash\",\"arguments\":\"{\\\"comm\"}}]}}]}",
@@ -8,9 +8,22 @@
     "data: [DONE]"
   ],
   "golden": {
-    "stop": "tool_use", "stop_note": "OpenAI finish_reason tool_calls normalizes to canonical tool_use (Node harness treats both as tool-call steps)",
-    "usage": {"input_tokens": 50, "output_tokens": 7, "cache_read_tokens": 30, "cache_creation_tokens": 0},
-    "tool_calls": [{"id": "call_1", "name": "Bash", "arguments_json": "{\"command\": \"ls\"}"}],
-    "text": "work"
+    "stop": "tool_use",
+    "stop_note": "OpenAI finish_reason tool_calls normalizes to canonical tool_use (Node harness treats both as tool-call steps)",
+    "usage": {
+      "input_tokens": 20,
+      "output_tokens": 7,
+      "cache_read_tokens": 30,
+      "cache_creation_tokens": 0
+    },
+    "tool_calls": [
+      {
+        "id": "call_1",
+        "name": "Bash",
+        "arguments_json": "{\"command\": \"ls\"}"
+      }
+    ],
+    "text": "work",
+    "usage_note": "distilled de-dup math (docs/DISTILLATION.md \u00a7P, OMP openai-shared.ts:526): prompt_tokens INCLUDES cached_tokens; normalized input_tokens is the NON-cached billed part (50 \u2212 30 = 20). This intentionally supersedes the Node v1.2.0 double-count."
   }
 }

@@ -9,6 +9,7 @@
 //! - usage normalized to the Anthropic 4-token-shape everywhere
 
 use crate::{CoreError, Result};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -190,6 +191,11 @@ pub struct ChatRequest {
     /// §R1). Each wire emits its own dialect from this one value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
+    /// Session-derived prompt-cache affinity key (distilled §R2:
+    /// `pc_` + ≤64 chars). Only the Responses wire consumes it today;
+    /// `None` sends nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 }
 
 /// Single retry layer (INV-06): the ONLY place in the codebase that
@@ -206,6 +212,68 @@ pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     let v = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
     let secs: u64 = v.trim().parse().ok()?;
     Some(secs.saturating_mul(1000))
+}
+
+/// Stream watchdog (distilled: docs/DISTILLATION.md §F, OMP `PI_STREAM_*`):
+/// a silent stream must never wedge the harness. Two deadlines — the
+/// FIRST event and every subsequent IDLE gap — each default 300s,
+/// overridable via `PI_STREAM_FIRST_MS` / `PI_STREAM_IDLE_MS` (values
+/// ≤ 0 or unparsable keep the default; the watchdog never disables
+/// itself). Deadline expiry is a hard transport error, which the
+/// single retry layer treats like any other provider failure.
+pub struct StreamWatchdog {
+    first_ms: u64,
+    idle_ms: u64,
+    seen_first: bool,
+}
+
+pub const STREAM_FIRST_DEFAULT_MS: u64 = 300_000;
+pub const STREAM_IDLE_DEFAULT_MS: u64 = 300_000;
+
+impl StreamWatchdog {
+    pub fn from_env() -> Self {
+        let parse_ms = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|&ms| ms > 0)
+        };
+        Self {
+            first_ms: parse_ms("PI_STREAM_FIRST_MS").unwrap_or(STREAM_FIRST_DEFAULT_MS),
+            idle_ms: parse_ms("PI_STREAM_IDLE_MS").unwrap_or(STREAM_IDLE_DEFAULT_MS),
+            seen_first: false,
+        }
+    }
+
+    /// Await the next chunk under the active watchdog budget.
+    pub async fn next<S, T, E>(&mut self, stream: &mut S) -> Result<Option<T>>
+    where
+        S: futures_util::Stream<Item = std::result::Result<T, E>> + Unpin,
+        E: std::fmt::Display,
+    {
+        let budget = if self.seen_first {
+            self.idle_ms
+        } else {
+            self.first_ms
+        };
+        let phase = if self.seen_first {
+            "idle"
+        } else {
+            "first-event"
+        };
+        match tokio::time::timeout(std::time::Duration::from_millis(budget), stream.next()).await {
+            Ok(item) => {
+                if item.is_some() {
+                    self.seen_first = true;
+                }
+                item.transpose()
+                    .map_err(|e| CoreError::Provider(format!("stream error: {e}")))
+            }
+            Err(_) => Err(CoreError::Provider(format!(
+                "stream {phase} watchdog fired after {budget}ms"
+            ))),
+        }
+    }
 }
 
 /// Wire trait: streaming one assistant step.
@@ -461,5 +529,75 @@ mod tests {
         };
         let c = cb.cost_usd("claude-haiku-4-5", &u).unwrap();
         assert!((c - 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn watchdog_env_overrides_are_bounded_and_safe() {
+        // unparsable / zero / negative keep the defaults: the watchdog
+        // never disables itself via a bad env value.
+        std::env::set_var("PI_STREAM_FIRST_MS", "not-a-number");
+        std::env::set_var("PI_STREAM_IDLE_MS", "0");
+        let wd = StreamWatchdog::from_env();
+        assert_eq!(wd.first_ms, STREAM_FIRST_DEFAULT_MS);
+        assert_eq!(wd.idle_ms, STREAM_IDLE_DEFAULT_MS);
+        std::env::set_var("PI_STREAM_FIRST_MS", "1234");
+        std::env::set_var("PI_STREAM_IDLE_MS", "5678");
+        let wd2 = StreamWatchdog::from_env();
+        assert_eq!(wd2.first_ms, 1234);
+        assert_eq!(wd2.idle_ms, 5678);
+        std::env::remove_var("PI_STREAM_FIRST_MS");
+        std::env::remove_var("PI_STREAM_IDLE_MS");
+        let wd3 = StreamWatchdog::from_env();
+        assert_eq!(wd3.first_ms, STREAM_FIRST_DEFAULT_MS);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_first_event_deadline_fires_on_silent_stream() {
+        let mut wd = StreamWatchdog {
+            first_ms: 1_000,
+            idle_ms: 5_000,
+            seen_first: false,
+        };
+        let mut silent = Box::pin(futures_util::stream::pending::<
+            std::result::Result<&'static str, std::convert::Infallible>,
+        >());
+        let err = wd.next(&mut silent).await.unwrap_err();
+        // (Paused-time semantics: the budget is asserted via the message,
+        // not wall-clock — Instant does not track tokio's paused clock.)
+        assert!(
+            err.to_string()
+                .contains("first-event watchdog fired after 1000ms"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_idle_deadline_fires_after_first_event() {
+        let mut wd = StreamWatchdog {
+            first_ms: 5_000,
+            idle_ms: 1_000,
+            seen_first: false,
+        };
+        let items: Vec<std::result::Result<&'static str, std::convert::Infallible>> =
+            vec![Ok("a"), Ok("b")];
+        let mut stream =
+            Box::pin(futures_util::stream::iter(items).chain(futures_util::stream::pending()));
+        assert_eq!(wd.next(&mut stream).await.unwrap(), Some("a"));
+        assert_eq!(wd.next(&mut stream).await.unwrap(), Some("b"));
+        let err = wd.next(&mut stream).await.unwrap_err();
+        assert!(err.to_string().contains("idle watchdog"), "{err}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_stream_end_passes_through() {
+        let mut wd = StreamWatchdog {
+            first_ms: 1_000,
+            idle_ms: 1_000,
+            seen_first: false,
+        };
+        let items: Vec<std::result::Result<&'static str, std::convert::Infallible>> = vec![Ok("x")];
+        let mut stream = Box::pin(futures_util::stream::iter(items));
+        assert_eq!(wd.next(&mut stream).await.unwrap(), Some("x"));
+        assert_eq!(wd.next(&mut stream).await.unwrap(), None, "stream end");
     }
 }

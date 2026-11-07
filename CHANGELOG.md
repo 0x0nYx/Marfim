@@ -1,5 +1,83 @@
 # Changelog
 
+## 1.0.0 — distillation batch 2 (2026-11-07)
+
+Hermes v0.23.0 + Oh My Pi v18.18.0 QUEUED specs promoted to ADOPTED
+(ledger: docs/DISTILLATION.md), all wired, bounded, observable,
+reversible, and tested.
+
+### Providers / wires
+- Stream watchdogs in ALL four SSE loops: first-event + idle deadlines
+  (300s each), `PI_STREAM_FIRST_MS`/`PI_STREAM_IDLE_MS` overrides —
+  unparsable or zero values keep the defaults (the watchdog never
+  disables itself). A silent stream is now a hard transport error that
+  the single retry layer can fail over on.
+- Usage de-dup math (OMP openai-shared.ts:526): chat-completions
+  `prompt_tokens` INCLUDES cache components — DeepSeek's
+  hit/miss pair splits exactly, OpenRouter `cache_write_tokens` and
+  OpenAI `cached_tokens` are subtracted from the billed input. The Node
+  golden fixture is updated to the corrected semantics (note recorded
+  in the fixture itself).
+- Anthropic hard cap of 4 cache_control breakpoints (system + last 3
+  tools, deterministic suffix placement) — counting happens at body
+  build, not on the wire's rejection.
+- `prompt_cache_key` reaches the Responses wire (`pc_` + session id,
+  ≤64 chars).
+
+### Loop / harness
+- Denial circuit breaker: 3 consecutive permission denials in a turn
+  inject an anti-retry STOP addendum (once per trip, journaled, reset
+  on success / turn end).
+- Interrupt placeholder healing: an aborted turn closes with the
+  structural `[interrupt: aborted]` marker at the next turn start
+  (echo-poisoning impossible by construction).
+- Memory nudge cadence: every 10th turn the system surface carries a
+  one-line review checkpoint (base prompt byte-identical otherwise).
+- Compaction: token-budget protected tail (2.5% window, clamp
+  [10k, 25k]) EXPANDS the message-count tail; verbatim user-request
+  section (24k/4k caps, newest-first) + recovery footer into the
+  summarizer prompt.
+
+### Permissions / tools
+- Hardline floor corpus (`ShellRisk::Hardline`): recursive protected-
+  root deletes, mkfs, dd to raw devices, fork bombs, shutdown family,
+  chmod 777 on system roots, raw-device redirects — denied BEFORE any
+  rule/mode (floor-before-bypass), per-argv-segment so sequencing
+  cannot smuggle it.
+- Approval provenance: allow-rule-approved executions carry
+  `[auto-approved: allowlist entry rules[N]]`; provenance never decides.
+- `SessionSearch` tool: BM25-lite + quoted-phrase search over the
+  newest 300 journal records (2k-char snippets, deterministic ranking).
+- Read selector grammar: `file:A-B` (1-lead/3-trail `[ctx]` lines),
+  `file:-N`, `file:raw`; non-matching suffixes stay part of the path.
+- Edit ladder rung 4 `fuzzy-dominant`: banded Levenshtein windows,
+  auto-apply only at ≥0.97 similarity AND ≥+0.08 dominance; weaker
+  bands refuse (fail-closed — no mid-edit confirm surface exists).
+
+### TUI
+- `token_rate` header segment: bounded 64-sample ring, chars→tokens,
+  shown only while streaming.
+
+### Step 5 completion (brain → harness)
+- `LearningFaculty` implements the trait `actuations` surface with two
+  Hoeffding-gated powers: `model_select` (candidate must beat the
+  baseline's pessimistic LCB with its own LCB + strictly higher mean —
+  lucky UCB streaks can never promote a worse model) and
+  `permission_tighten` (error-rate LCB > 0.5 over ≥20 attempts, ≤4
+  tools per round). Every actuation is validated/clamped by the loop,
+  journaled with its disposition, and turn-scoped.
+- Trait `why`/`forget` overrides wired; `/why` prints every attached
+  faculty's inspectable state, `/forget` resets them (reversible).
+- Faculty `observe_tool` hook feeds per-tool (attempts, errors) — the
+  tighten evidence stream; the production harness attaches the brain
+  faculty at session build.
+- CancelToken deadline audit documented on the type (OMP split
+  semantics held by construction).
+
+### Gates
+- 577 tests green; fmt + clippy -D warnings + scripts/gates.sh (9/9)
+  green. COMMANDS 65 → 67 (docs updated in lockstep).
+
 ## 1.0.0 — engineering round 2 (2026-11-06)
 
 ### Step 2: MCP wired end-to-end

@@ -23,6 +23,7 @@ pub mod router;
 pub mod sandbox;
 pub mod session;
 pub mod session_host;
+pub mod sessionsearch;
 pub mod shellparse;
 pub mod skills;
 pub mod trust;

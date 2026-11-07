@@ -19,6 +19,11 @@ pub enum ShellRisk {
     /// Nested execution (`$(...)`, backticks, process substitution
     /// `<( )`): never auto-allow.
     NestedExec,
+    /// §A hardline corpus (distilled: Hermes approval_detection.py:124
+    /// floor stack): irreversible destruction — denies BEFORE any
+    /// rule/mode bypass (floor-before-bypass ordering). Top of the
+    /// escalation order by declaration.
+    Hardline,
 }
 
 #[derive(Debug)]
@@ -319,6 +324,10 @@ pub fn analyze(cmd: &str) -> Analysis {
         })
         .collect();
 
+    if hardline_matches(&segments, &s.redirects, cmd).is_some() {
+        risk = risk.max(ShellRisk::Hardline);
+    }
+
     Analysis {
         risk,
         segments,
@@ -327,8 +336,118 @@ pub fn analyze(cmd: &str) -> Analysis {
     }
 }
 
+// ---------------------------------------------------------------------
+// §A hardline corpus (distilled: Hermes approval_detection.py:124-157
+// floor stack — command-position anchored, applied to EVERY argv
+// segment so sequencing cannot smuggle a floor pattern past it).
+
+/// Filesystem roots whose wholesale deletion is always denied.
+const HARDLINE_DELETE_ROOTS: &[&str] = &[
+    "/", "/home", "/etc", "/usr", "/var", "/bin", "/sbin", "/lib", "/lib64", "/boot", "/opt",
+    "/root", "/dev", "/proc", "/sys", "~", "$HOME", "~/", "*", "/*",
+];
+
+/// Commands that always shut the machine down.
+const HARDLINE_SHUTDOWN_CMDS: &[&str] = &["shutdown", "reboot", "halt", "poweroff"];
+
+/// Pseudo-device redirect targets that are safe (excluded from the
+/// raw-device rule).
+const SAFE_DEV_TARGETS: &[&str] = &["null", "stdout", "stderr", "stdin", "tty", "zero"];
+
+/// The hardline match: `Some(reason)` when ANY argv segment or raw
+/// construct hits the corpus. Pure + deterministic.
+pub fn hardline_matches(
+    segments: &[Vec<String>],
+    redirects: &[String],
+    raw_cmd: &str,
+) -> Option<&'static str> {
+    for seg in segments {
+        let Some(argv0) = seg.first().map(|s| s.as_str()) else {
+            continue;
+        };
+        let base = argv0.rsplit('/').next().unwrap_or(argv0);
+
+        // wholesale deletes: rm -r… against a protected root
+        if base == "rm" {
+            let recursive = seg
+                .iter()
+                .skip(1)
+                .any(|a| (a.starts_with('-') && a.contains('r')) || a == "--recursive");
+            if recursive
+                && seg.iter().skip(1).any(|a| {
+                    HARDLINE_DELETE_ROOTS.contains(&a.as_str())
+                        || a.starts_with("/*")
+                        || a.starts_with("~/")
+                        || a == "$HOME/"
+                })
+            {
+                return Some("recursive delete of a protected root");
+            }
+        }
+
+        // filesystem creation on any target (mkfs, mkfs.ext4, …)
+        if base == "mkfs" || base.starts_with("mkfs.") {
+            return Some("filesystem creation (mkfs)");
+        }
+
+        // dd writing to a raw device
+        if base == "dd"
+            && seg
+                .iter()
+                .any(|a| a.starts_with("of=/dev/") || a == "of=/dev")
+        {
+            return Some("dd write to a raw device");
+        }
+
+        // shutdown-family + init 0/6
+        if HARDLINE_SHUTDOWN_CMDS.contains(&base) {
+            return Some("system shutdown/reboot");
+        }
+        if base == "init" && seg.iter().any(|a| a == "0" || a == "6") {
+            return Some("init runlevel 0/6 (shutdown/reboot)");
+        }
+
+        // open-permission system roots
+        if base == "chmod"
+            && seg.iter().any(|a| {
+                let digits: String = a.chars().filter(|c| c.is_ascii_digit()).collect();
+                digits == "777"
+            })
+            && seg
+                .iter()
+                .any(|a| a == "/" || a == "/*" || a.starts_with("/etc") || a == "/usr")
+        {
+            return Some("chmod 777 on a system root");
+        }
+    }
+
+    // fork bomb (classic bash construct, spacing-insensitive)
+    let squeezed: String = raw_cmd.chars().filter(|c| !c.is_whitespace()).collect();
+    if squeezed.contains(":(){:|:&};:") {
+        return Some("fork bomb");
+    }
+
+    // redirect into a raw device (the target survives in the segment
+    // argv; SAFE_DEV_TARGETS are the sanctioned exceptions)
+    for seg in segments {
+        for tok in seg.iter().skip(1) {
+            if let Some(dev) = tok.strip_prefix("/dev/") {
+                if !SAFE_DEV_TARGETS.contains(&dev)
+                    && redirects
+                        .iter()
+                        .any(|r| r == ">" || r == ">>" || r == "2>" || r == "2>>")
+                {
+                    return Some("redirect into a raw device");
+                }
+            }
+        }
+    }
+    None
+}
+
 // derive(Ord) orders variants by declaration: Simple < Redirect < Pipeline
-// < Sequenced < Heredoc < NestedExec — exactly the risk escalation order.
+// < Sequenced < Heredoc < NestedExec < Hardline — exactly the risk
+// escalation order.
 
 #[cfg(test)]
 mod tests {
@@ -418,5 +537,58 @@ mod tests {
         let a = analyze("echo \"a > b\"");
         assert_eq!(a.risk, ShellRisk::Simple);
         assert!(a.redirects.is_empty());
+    }
+
+    // ---- §A hardline corpus ----
+
+    #[test]
+    fn hardline_catches_protected_root_deletes() {
+        for cmd in [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -rf /home",
+            "rm -fr $HOME",
+            "rm -r /etc",
+            "echo hi; rm -rf /", // sequencing cannot smuggle it
+        ] {
+            let a = analyze(cmd);
+            assert_eq!(a.risk, ShellRisk::Hardline, "{cmd}");
+            assert!(hardline_matches(&a.segments, &a.redirects, cmd).is_some());
+        }
+    }
+
+    #[test]
+    fn hardline_catches_mkfs_dd_shutdown_forkbomb() {
+        for (cmd, why) in [
+            ("mkfs.ext4 /dev/sda1", "filesystem creation (mkfs)"),
+            ("dd if=zero of=/dev/sda", "dd write to a raw device"),
+            ("shutdown -h now", "system shutdown/reboot"),
+            ("reboot", "system shutdown/reboot"),
+            ("init 6", "init runlevel 0/6 (shutdown/reboot)"),
+            (":(){ :|:& };:", "fork bomb"),
+            ("echo x > /dev/sda", "redirect into a raw device"),
+            ("chmod -R 777 /", "chmod 777 on a system root"),
+        ] {
+            let a = analyze(cmd);
+            assert_eq!(a.risk, ShellRisk::Hardline, "{cmd}");
+            assert_eq!(hardline_matches(&a.segments, &a.redirects, cmd), Some(why));
+        }
+    }
+
+    #[test]
+    fn hardline_never_flags_benign_commands() {
+        for cmd in [
+            "rm -rf ./build",
+            "rm file.txt",
+            "dd if=a of=b bs=4k",
+            "echo hi > /dev/null",
+            "ls 2>/dev/null",
+            "chmod 755 script.sh",
+            "git status",
+            "cargo test --all",
+        ] {
+            let a = analyze(cmd);
+            assert_ne!(a.risk, ShellRisk::Hardline, "{cmd}");
+        }
     }
 }

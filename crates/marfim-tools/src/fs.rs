@@ -27,41 +27,142 @@ fn read_capped(path: &Path, max_bytes: usize) -> Result<String, String> {
 /// D24: Read supports `offset`/`limit` (0-based line offset, max lines)
 /// and marks truncation EXPLICITLY — the model must never silently lose
 /// the tail of a file.
+///
+/// §S selector grammar (distilled: OMP read tool): the `path` argument
+/// may carry a suffix — `path:A-B` (1-based inclusive line range),
+/// `path:-N` (last N lines), `path:raw` (whole file within the byte
+/// cap, still bounded). Explicit ranges add 1 leading / 3 trailing
+/// context lines marked `[ctx]`. A suffix that does not match the
+/// grammar is part of the path (deterministic fallback).
 pub fn read(_ctx: &ToolCtx, args: &Value) -> ToolOutput {
-    let Some(path) = args["path"].as_str() else {
+    let Some(raw_path) = args["path"].as_str() else {
         return ToolOutput::err("missing `path`");
     };
+    let (path, selector) = split_selector(raw_path);
     let full = resolve(&_ctx.cwd, path);
     match read_capped(&full, 512 * 1024) {
         Ok(text) => {
             let lines: Vec<&str> = text.lines().collect();
             let total = lines.len();
-            let offset = args["offset"].as_u64().unwrap_or(0) as usize; // 0-based
-            let limit = args["limit"].as_u64().map(|v| v as usize).unwrap_or(2000);
-            if offset >= total && total > 0 {
-                return ToolOutput::ok(format!(
-                    "[truncated: offset {offset} is past end of file ({total} lines)]"
-                ));
+            match selector {
+                Some(Selector::Range(a, b)) => range_output(path, &lines, a, b),
+                Some(Selector::LastN(n)) => {
+                    let n = n.min(total);
+                    let start = total - n;
+                    let mut out = format!("[last {n} of {total} lines]\n");
+                    for (i, line) in lines[start..].iter().enumerate() {
+                        out.push_str(&format!("{:>6}\t{line}\n", start + i + 1));
+                    }
+                    ToolOutput::ok(out)
+                }
+                Some(Selector::Raw) => {
+                    let mut out = String::new();
+                    for (i, line) in lines.iter().enumerate() {
+                        out.push_str(&format!("{:>6}\t{line}\n", i + 1));
+                    }
+                    ToolOutput::ok(out)
+                }
+                None => {
+                    let offset = args["offset"].as_u64().unwrap_or(0) as usize; // 0-based
+                    let limit = args["limit"].as_u64().map(|v| v as usize).unwrap_or(2000);
+                    if offset >= total && total > 0 {
+                        return ToolOutput::ok(format!(
+                            "[truncated: offset {offset} is past end of file ({total} lines)]"
+                        ));
+                    }
+                    let start = offset.min(total);
+                    let end = (start.saturating_add(limit)).min(total);
+                    let mut out = String::new();
+                    for (i, line) in lines[start..end].iter().enumerate() {
+                        out.push_str(&format!("{:>6}\t{line}\n", start + i + 1));
+                    }
+                    if end < total {
+                        out.push_str(&format!(
+                            "[truncated: showing lines {}-{} of {} — re-read with offset={} for more]\n",
+                            start + 1,
+                            end,
+                            total,
+                            end
+                        ));
+                    }
+                    ToolOutput::ok(out)
+                }
             }
-            let start = offset.min(total);
-            let end = (start.saturating_add(limit)).min(total);
-            let mut out = String::new();
-            for (i, line) in lines[start..end].iter().enumerate() {
-                out.push_str(&format!("{:>6}\t{line}\n", start + i + 1));
-            }
-            if end < total {
-                out.push_str(&format!(
-                    "[truncated: showing lines {}-{} of {} — re-read with offset={} for more]\n",
-                    start + 1,
-                    end,
-                    total,
-                    end
-                ));
-            }
-            ToolOutput::ok(out)
         }
         Err(e) => ToolOutput::err(format!("Read failed for {path}: {e}")),
     }
+}
+
+/// Explicit range output with 1-lead / 3-trail `[ctx]` context lines.
+fn range_output(path: &str, lines: &[&str], a: usize, b: usize) -> ToolOutput {
+    let total = lines.len();
+    if total == 0 || a == 0 || a > b || a > total {
+        return ToolOutput::err(format!(
+            "range {a}-{b} invalid for {path} ({total} lines; ranges are 1-based inclusive)"
+        ));
+    }
+    let a = a.min(total);
+    let b = b.min(total);
+    let lead_start = a.saturating_sub(2); // 1 line before (1-based)
+    let trail_end = (b + 3).min(total + 1); // 3 lines after
+    let mut out = String::new();
+    for (idx, line) in lines
+        .iter()
+        .enumerate()
+        .skip(lead_start)
+        .take(trail_end.saturating_sub(lead_start))
+    {
+        let n = idx + 1;
+        let mark = if n >= a && n <= b { "" } else { "[ctx] " };
+        out.push_str(&format!("{:>6}\t{mark}{line}\n", n));
+    }
+    ToolOutput::ok(out)
+}
+
+/// §S selector suffix grammar.
+#[derive(Debug, PartialEq, Eq)]
+enum Selector {
+    /// 1-based inclusive line range A-B.
+    Range(usize, usize),
+    /// Last N lines.
+    LastN(usize),
+    /// Whole file (within the byte cap).
+    Raw,
+}
+
+/// Split `path:SEL` — the suffix must STRICTLY match the grammar
+/// (`A-B` digits, `-N`, `raw`); anything else is part of the path.
+fn split_selector(raw: &str) -> (&str, Option<Selector>) {
+    if let Some((p, sel)) = raw.rsplit_once(':') {
+        if p.is_empty() {
+            return (raw, None);
+        }
+        if sel == "raw" {
+            return (p, Some(Selector::Raw));
+        }
+        if let Some(n) = sel.strip_prefix('-') {
+            if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) {
+                if let Ok(k) = n.parse::<usize>() {
+                    if k > 0 {
+                        return (p, Some(Selector::LastN(k)));
+                    }
+                }
+            }
+            return (raw, None);
+        }
+        if let Some((a, b)) = sel.split_once('-') {
+            let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+            if ok(a) && ok(b) {
+                if let (Ok(x), Ok(y)) = (a.parse::<usize>(), b.parse::<usize>()) {
+                    if x > 0 && y > 0 {
+                        return (p, Some(Selector::Range(x, y)));
+                    }
+                }
+            }
+            return (raw, None);
+        }
+    }
+    (raw, None)
 }
 
 pub fn write(_ctx: &ToolCtx, args: &Value) -> ToolOutput {
@@ -256,6 +357,7 @@ mod tests {
         ToolCtx {
             cwd: root.to_path_buf(),
             session_id: "t".into(),
+            journal_path: Arc::new(std::sync::Mutex::new(None)),
             board: Arc::new(Default::default()),
             evidence: Arc::new(Default::default()),
             memory: Arc::new(Default::default()),
@@ -430,5 +532,53 @@ mod tests {
         std::fs::write(c.cwd.join("small.txt"), "only line\n").unwrap();
         let o4 = read(&c, &serde_json::json!({"path": "small.txt"}));
         assert!(!o4.output.contains("[truncated"));
+    }
+
+    // --------------------------------------------- §S: selector grammar
+    #[test]
+    fn selector_range_with_context_lines() {
+        let (_t, c) = setup();
+        let body: String = (1..=20).map(|i| format!("line {i}\n")).collect::<String>();
+        std::fs::write(c.cwd.join("r.txt"), &body).unwrap();
+        let o = read(&c, &serde_json::json!({"path": "r.txt:5-7"}));
+        assert!(!o.is_error, "{o:?}");
+        assert!(o.output.contains("\tline 5\n"), "{}", o.output);
+        assert!(o.output.contains("\tline 7\n"));
+        assert!(!o.output.contains("\tline 9\n"), "range respected");
+        // 1 lead + 3 trail context, marked
+        assert!(o.output.contains("[ctx] line 4\n"), "{}", o.output);
+        assert!(o.output.contains("[ctx] line 8\n"));
+        assert!(o.output.contains("[ctx] line 10\n"));
+        assert!(!o.output.contains("line 11\n"), "3-trail cap");
+    }
+
+    #[test]
+    fn selector_last_n_and_raw() {
+        let (_t, c) = setup();
+        let body: String = (1..=30).map(|i| format!("row {i}\n")).collect::<String>();
+        std::fs::write(c.cwd.join("t.txt"), &body).unwrap();
+        let o = read(&c, &serde_json::json!({"path": "t.txt:-5"}));
+        assert!(o.output.contains("[last 5 of 30 lines]"));
+        assert!(o.output.contains("row 30"));
+        assert!(!o.output.contains("row 25\n"), "only the last 5");
+        let o2 = read(&c, &serde_json::json!({"path": "t.txt:raw"}));
+        assert!(o2.output.contains("row 1\n") && o2.output.contains("row 30\n"));
+    }
+
+    #[test]
+    fn selector_invalid_suffix_falls_back_to_path() {
+        let (_t, c) = setup();
+        std::fs::write(c.cwd.join("plain.txt"), "content\n").unwrap();
+        // `a:b` is not a valid selector — the whole string stays a path
+        let o = read(&c, &serde_json::json!({"path": "plain.txt:x-y"}));
+        assert!(
+            o.is_error,
+            "non-matching suffix stays part of the path → missing file"
+        );
+        assert!(o.output.contains("plain.txt:x-y"));
+        // explicit out-of-bounds range is an honest error, not a guess
+        let o2 = read(&c, &serde_json::json!({"path": "plain.txt:5-9"}));
+        assert!(o2.is_error);
+        assert!(o2.output.contains("range 5-9 invalid"));
     }
 }

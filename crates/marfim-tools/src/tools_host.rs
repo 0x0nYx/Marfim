@@ -108,13 +108,23 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
 
     tool!(
         "Read",
-        "Read a file (line-numbered; offset/limit supported, truncation marked).",
+        "Read a file (line-numbered; offset/limit supported, truncation marked; selector suffixes :A-B / :-N / :raw).",
         TC::ReadOnly,
         true,
         false,
         10_000,
-        serde_json::json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"0-based line offset"},"limit":{"type":"integer","description":"max lines returned"}}}),
+        serde_json::json!({"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"path with optional selector: file:A-B (1-based range, 1-lead/3-trail [ctx] lines), file:-N (last N lines), file:raw (whole file within cap)"},"offset":{"type":"integer","description":"0-based line offset"},"limit":{"type":"integer","description":"max lines returned"}}}),
         crate::fs::read
+    );
+    tool!(
+        "SessionSearch",
+        "Search THIS session's journal history (BM25-lite ranking, quoted phrases, newest-300-record window, 2k-char snippets). Use after compaction or to recover earlier details.",
+        TC::ReadOnly,
+        true,
+        false,
+        10_000,
+        serde_json::json!({"type":"object","required":["query"],"properties":{"query":{"type":"string","description":"keywords; quoted spans are verbatim phrases"}}}),
+        crate::misc_tools::session_search
     );
     tool!(
         "Write",
@@ -442,6 +452,16 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
     );
 }
 
+/// §A provenance annotation: appends the allowlist-entry note to a
+/// successful tool result. Only ALLOW-with-provenance results are
+/// annotated; deny/ask results carry nothing.
+fn with_provenance(output: String, note: &Option<String>) -> String {
+    match note {
+        Some(n) if !output.is_empty() => format!("{output}\n[auto-approved: {n}]"),
+        _ => output,
+    }
+}
+
 #[async_trait::async_trait]
 impl ToolHost for HostTools {
     async fn execute(&self, tool: &str, args: &Value, session: &LoopCtx) -> (String, bool) {
@@ -480,6 +500,11 @@ impl ToolHost for HostTools {
         if verdict.decision == marfim_core::permissions::Decision::Deny {
             return (format!("permission denied: {}", verdict.reason), true);
         }
+        // §A provenance note (distilled: Hermes approval_provenance.py):
+        // rule-allowed executions carry WHICH allowlist entry approved
+        // them, appended to the result. Provenance never decides — the
+        // verdict above already did.
+        let provenance_note = verdict.provenance.clone();
 
         // 3. dispatch — MCP tools first (Ask-class: every external server
         //    tool goes through the permission verdict above), then builtins
@@ -508,7 +533,7 @@ impl ToolHost for HostTools {
             return match client.call_tool(tool_name, args.clone()).await {
                 Ok(result) => {
                     let (text, is_err) = mcp_result_to_output(&result);
-                    (text, is_err)
+                    (with_provenance(text, &provenance_note), is_err)
                 }
                 Err(e) => (format!("mcp {tool} failed: {e}"), true),
             };
@@ -564,7 +589,7 @@ impl ToolHost for HostTools {
 
         // 4. PostToolUse hooks (best-effort)
         self.hooks.post_tool_use(tool, &out.output).await;
-        (out.output, out.is_error)
+        (with_provenance(out.output, &provenance_note), out.is_error)
     }
 
     fn schemas(&self) -> Vec<Value> {
@@ -671,6 +696,7 @@ mod tests {
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
+            journal_path: Arc::new(std::sync::Mutex::new(None)),
         };
         (
             Arc::new(HostTools::new(
@@ -735,6 +761,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn allow_rule_execution_carries_provenance_note() {
+        // §A: an allow-rule-approved call annotates its result with the
+        // allowlist entry; mode-default allows carry no note.
+        let (h, _rx) = host(
+            Mode::Default,
+            vec![Rule {
+                tool: "Bash".into(),
+                decision: Decision::Allow,
+                argv_prefix: Some(vec!["echo".into()]),
+            }],
+        );
+        let (out, err) = h
+            .execute(
+                "Bash",
+                &serde_json::json!({"command": "echo provenance-check"}),
+                &LoopCtx::default(),
+            )
+            .await;
+        assert!(!err, "{out}");
+        assert!(out.contains("provenance-check"), "{out}");
+        assert!(
+            out.contains("[auto-approved: allowlist entry rules[0]]"),
+            "provenance note missing: {out}"
+        );
+        let (h2, _rx2) = host(Mode::Yolo, vec![]);
+        let (out2, err2) = h2
+            .execute(
+                "Bash",
+                &serde_json::json!({"command": "echo no-note"}),
+                &LoopCtx::default(),
+            )
+            .await;
+        assert!(!err2, "{out2}");
+        assert!(!out2.contains("auto-approved"), "no rule → no note: {out2}");
+    }
+
+    #[tokio::test]
+    async fn hardline_commands_are_denied_by_the_floor() {
+        // §A: the hardline corpus denies BEFORE any allow rule or mode —
+        // even an explicit allow rule for rm cannot un-deny `rm -rf /`.
+        let (h, _rx) = host(
+            Mode::Yolo,
+            vec![Rule {
+                tool: "Bash".into(),
+                decision: Decision::Allow,
+                argv_prefix: Some(vec!["rm".into()]),
+            }],
+        );
+        for cmd in ["rm -rf /", "rm -rf /home", "mkfs.ext4 /dev/sda1"] {
+            let (out, err) = h
+                .execute(
+                    "Bash",
+                    &serde_json::json!({"command": cmd}),
+                    &LoopCtx::default(),
+                )
+                .await;
+            assert!(err, "{cmd} must be denied");
+            assert!(out.contains("hardline pattern"), "{cmd}: {out}");
+        }
+    }
+
+    #[tokio::test]
+    async fn session_search_reads_the_journal() {
+        // §S: the tool needs a journal path; without one it says so.
+        let (h, _rx) = host(Mode::Yolo, vec![]);
+        let (out, err) = h
+            .execute(
+                "SessionSearch",
+                &serde_json::json!({"query": "x"}),
+                &LoopCtx::default(),
+            )
+            .await;
+        assert!(err, "{out}");
+        assert!(out.contains("no session journal"), "{out}");
+
+        // with a journal attached: ranked hits come back
+        let dir = std::env::temp_dir().join(format!("marfim-ss-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("s.jsonl");
+        let body = [
+            r#"{"kind":"user_message","text":"please fix the frobnicator in src/lib.rs"}"#,
+            r#"{"kind":"assistant_message","text":"on it"}"#,
+            r#"{"kind":"tool_result","output":"frobnicator calibration 0.42"}"#,
+            r#"{"kind":"turn_started","turn":1}"#,
+        ]
+        .join("\n");
+        std::fs::write(&path, body + "\n").unwrap();
+        *h.state.journal_path.lock().unwrap() = Some(path);
+        let (out, err) = h
+            .execute(
+                "SessionSearch",
+                &serde_json::json!({"query": "frobnicator"}),
+                &LoopCtx::default(),
+            )
+            .await;
+        assert!(!err, "{out}");
+        assert!(out.contains("2 hit(s)"), "{out}");
+        assert!(out.contains("user_message"), "{out}");
+        assert!(out.contains("tool_result"), "{out}");
+        // phrase search narrows to the exact record
+        let (out2, err2) = h
+            .execute(
+                "SessionSearch",
+                &serde_json::json!({"query": "\"src/lib.rs\""}),
+                &LoopCtx::default(),
+            )
+            .await;
+        assert!(!err2, "{out2}");
+        assert!(out2.contains("1 hit(s)"), "{out2}");
+        // unknown keywords: honest empty answer
+        let (out3, err3) = h
+            .execute(
+                "SessionSearch",
+                &serde_json::json!({"query": "zzzznothing"}),
+                &LoopCtx::default(),
+            )
+            .await;
+        assert!(!err3);
+        assert!(out3.contains("no records match"), "{out3}");
+    }
+
+    #[tokio::test]
     async fn hook_failure_blocks_tool() {
         let (perm, rx) = PermissionEngine::new(Mode::Yolo, vec![]);
         drop(rx); // no approval listener
@@ -753,6 +901,7 @@ mod tests {
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
+            journal_path: Arc::new(std::sync::Mutex::new(None)),
         };
         let h = HostTools::new(
             Arc::new(perm),

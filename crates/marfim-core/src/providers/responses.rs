@@ -14,7 +14,6 @@
 //! request — the harness owns history, never `previous_response_id`.
 
 use super::*;
-use futures_util::StreamExt;
 
 pub struct OpenAiResponses {
     pub client: reqwest::Client,
@@ -80,6 +79,12 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
         // Stateless by contract: Marfim replays full history every turn.
         "store": false,
     });
+    // §R2 prompt-cache affinity (QUEUED → ADOPTED): when the harness
+    // supplies a session-derived key it reaches the wire verbatim; the
+    // `pc_` prefix and ≤64 length are enforced by the producer.
+    if let Some(k) = &req.prompt_cache_key {
+        body["prompt_cache_key"] = serde_json::json!(k);
+    }
     if let Some(sys) = &req.system {
         body["instructions"] = serde_json::json!(sys);
     }
@@ -386,8 +391,9 @@ impl Provider for OpenAiResponses {
         let mut st = ResponsesAcc::new();
         let mut buf = String::new();
         let mut stream = res.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| CoreError::Provider(format!("stream error: {e}")))?;
+        // §F stream watchdog: first-event + idle deadlines (300s defaults).
+        let mut wd = StreamWatchdog::from_env();
+        while let Some(chunk) = wd.next(&mut stream).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(pos) = buf.find('\n') {
                 let line: String = buf.drain(..=pos).collect();
@@ -457,6 +463,7 @@ mod tests {
             cache_breakpoints: false,
             system: Some("be terse".into()),
             effort: Some(super::super::effort::Effort::High),
+            ..Default::default()
         }
     }
 

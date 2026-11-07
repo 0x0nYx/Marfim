@@ -496,7 +496,7 @@ fn d14_repl_prints_errors_and_survives_across_turns() {
 
     // slash commands work before any provider traffic
     send("/help");
-    wait_for(&out_buf, "commands (65)");
+    wait_for(&out_buf, "commands (67)");
 
     // turn: provider error → printed on stderr EXACTLY ONCE, REPL stays alive
     send("one");

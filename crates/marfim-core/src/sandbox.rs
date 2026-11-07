@@ -625,11 +625,21 @@ mod policy_battery {
 
     #[tokio::test]
     async fn chained_deletion_is_caught_per_segment() {
-        // `true && rm -rf /` — the innocent head must not launder the tail
+        // `true && rm -rf /` — the innocent head must not launder the tail.
+        // §A distillation: the rm tail now trips the HARDLINE corpus, so
+        // the whole command escalates past Sequenced to Hardline.
         let a = analyze("true && rm -rf /");
         assert!(
-            matches!(a.risk, crate::shellparse::ShellRisk::Sequenced),
+            matches!(
+                a.risk,
+                crate::shellparse::ShellRisk::Sequenced | crate::shellparse::ShellRisk::Hardline
+            ),
             "chained rm flagged above Simple: {a:?}"
+        );
+        assert_eq!(
+            a.risk,
+            crate::shellparse::ShellRisk::Hardline,
+            "hardline floor upgraded from sequenced: {a:?}"
         );
         assert!(a.segments.len() >= 2, "per-segment split: {a:?}");
         let (e, rx) = engine(Mode::Default);

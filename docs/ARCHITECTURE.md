@@ -22,7 +22,7 @@ crates/
                    · server (expose the marfim catalog)
   marfim-gateway   serve (HTTP/1.1+SSE, hand-rolled) · acp (agent+client)
                    · lsp (Content-Length framing)
-  marfim           CLI: headless text|json|stream-json · REPL + 65 slash
+  marfim           CLI: headless text|json|stream-json · REPL + 67 slash
                    commands · serve/acp/lsp/mcp/doctor/agents/sessions
 ```
 

@@ -38,7 +38,7 @@ applied as the acceptance filter.
 | `response.completed/incomplete/failed/error` terminal mapping; incomplete→MaxTokens; tool-call presence wins; failed-with-no-output→Provider error | OMP + Hermes error taxonomy | ADOPTED |
 | Usage: `input_tokens`, `output_tokens` (incl. reasoning), `input_tokens_details.cached_tokens` → cacheRead | OMP accounting | ADOPTED |
 | `previous_response_id` + `store:true` chaining with stale-chain reset | OMP stateful mode | REJECTED — Marfim owns history and replays it (stateless `store:false`); chaining would split truth between two stores |
-| `prompt_cache_key "pc_" + ≤64`, `prompt_cache_retention "24h"` | OMP wire | QUEUED — useful once session→key mapping is stable; one-line addition |
+| `prompt_cache_key "pc_" + ≤64`, `prompt_cache_retention "24h"` | OMP wire | ADOPTED (batch 2) — `prompt_cache_key(session_id)` on every Responses request (`pc_` + session id, ≤64); retention stays QUEUED (needs cache-TTL plumbing) |
 | Custom tools (`apply_patch` grammar tools, `custom_tool_call_input.delta`) | OMP wire | REJECTED for now — Marfim has no custom-grammar tool yet |
 | ZDR forces `store:false` | OMP compat | MOOT — Marfim is always `store:false` |
 
@@ -70,7 +70,7 @@ applied as the acceptance filter.
 | Key rotation mutating the published context in place | Hermes `auxiliary_key_rotation.py` | REJECTED for now — single-credential-per-provider model; revisit when credential pools exist |
 | In-provider capability-scoped recovery (strict-tool 400 → disable strict for session) | OMP settings | QUEUED — needs session-scoped compat flags |
 | `no retry after user-visible output` (first emitted delta commits the attempt) | OMP retry rules | ALREADY HELD — Marfim's provider transports retry only before the stream is consumed (transport retry loop wraps the POST; stream errors after first byte are terminal `stream error`) |
-| Stream watchdogs: first-event 300s + idle 300s, env-overridable | OMP `PI_STREAM_*` | QUEUED — S-effort addition to the SSE loops |
+| Stream watchdogs: first-event 300s + idle 300s, env-overridable | OMP `PI_STREAM_*` | ADOPTED (batch 2) — `providers::StreamWatchdog` in all four SSE loops (`PI_STREAM_FIRST_MS`/`PI_STREAM_IDLE_MS`; bad/zero values keep the default — the watchdog never disables itself) |
 
 ## §C Compaction / context — ADOPTED (trigger math)
 
@@ -78,8 +78,8 @@ applied as the acceptance filter.
 |---|---|---|
 | Trigger = `(ctx − max_out) × pct`, 64k floor **capped at 85%** of effective, `<512k` windows get raise-only 75% floor | Hermes `_compute_threshold_tokens` | ADOPTED — `compact::trigger_tokens` (pure, 6 hand-derived golden tests); wired into `maybe_compact` as a raise-only floor on the configured threshold; actuation override still wins |
 | `compression.threshold = 0.50` default | Hermes config | ADOPTED — `DEFAULT_TRIGGER_PCT` |
-| Lean tail budget: floor 10k / cap 25k / 2.5% window / ≤20% window | Hermes `context_compressor_tail.py` | QUEUED — Marfim's micro-compaction uses protected-tail-by-message-count; token-budget tail is the next refinement |
-| Verbatim user-message section in summaries (24k chars / 4k per msg, newest-first) + recovery footer steering to session search | Hermes lean summary | QUEUED — pairs with the session_search tool |
+| Lean tail budget: floor 10k / cap 25k / 2.5% window / ≤20% window | Hermes `context_compressor_tail.py` | ADOPTED (batch 2) — `compact::tail_budget_tokens` + `micro_compact_budget`: the message-count tail EXPANDS to cover the token budget (never shrinks); a budget covering the whole history elides nothing and stage 2 owns the reduction |
+| Verbatim user-message section in summaries (24k chars / 4k per msg, newest-first) + recovery footer steering to session search | Hermes lean summary | ADOPTED (batch 2) — `compact_via_small` carries the verbatim section + the footer (pairs with SessionSearch, adopted in the same batch) |
 | Cut point never at a toolResult; split-turn prefix summary | OMP compaction | PARTIAL — micro_compact already never elides the live exchange (protected tail); full-summarizer cut-point logic QUEUED |
 | Micro-compaction defrag ≥2000 tokens; 3-failure skip | Hermes `micro_compaction.py` | PARTIAL — Marfim has micro-compaction; the defrag counter QUEUED |
 | Skill-prune marker re-injection (`[SKILL_PRUNED: …]`, max 20) | Hermes | QUEUED — applies once skills enter the prompt (§S) |
@@ -92,8 +92,8 @@ applied as the acceptance filter.
 | Spec | Source | Decision |
 |---|---|---|
 | Preset table: gemini native + openai-responses wires | this distillation | ADOPTED — presets now 10, gemini on native wire, new `openai-responses` preset; xai/openrouter/groq stay on chat-compat (documented) |
-| Anthropic cache_control: ≤4 breakpoints, last-block placement, TTL-reject retry ladder | OMP `anthropic-wire.ts` | PARTIAL — Marfim already places breakpoints (system + last tool); the 4-breakpoint counter + TTL latch QUEUED |
-| Usage de-dup math (DeepSeek `prompt_cache_miss_tokens` = billed input, OpenRouter `cache_write_tokens`) | OMP `openai-shared.ts:526` | QUEUED — one-file fix in the chat usage mapping |
+| Anthropic cache_control: ≤4 breakpoints, last-block placement, TTL-reject retry ladder | OMP `anthropic-wire.ts` | ADOPTED (batch 2) — hard cap: system + last 3 tools, deterministic suffix placement; TTL-reject ladder stays QUEUED (needs a live 400 to justify) |
+| Usage de-dup math (DeepSeek `prompt_cache_miss_tokens` = billed input, OpenRouter `cache_write_tokens`) | OMP `openai-shared.ts:526` | ADOPTED (batch 2) — `normalize_usage` in `openai.rs`: input_tokens is the NON-cached billed part (golden fixture updated to the corrected semantics, note recorded in the fixture) |
 | Model catalog: 81 providers / 8,675 models, KDL compat cascade | OMP `packages/catalog` | REJECTED (scale) — Marfim's committed models.dev snapshot is deliberately small; the KDL cascade is over-engineering at this stage |
 | Credentials precedence chain (env → models.yml → OAuth pool → keychain) + `.env` chain | OMP docs/providers.md | PARTIAL — env-var model kept; OAuth pool QUEUED |
 | Service tiers (`auto\|default\|flex\|scale\|priority\|ultrafast` per family) | OMP | REJECTED for now — single-tier requests; the enum is captured |
@@ -103,7 +103,7 @@ applied as the acceptance filter.
 | Spec | Source | Decision |
 |---|---|---|
 | Status segments `token_total`, `cost`, `context_pct` (+cache) | OMP `packages/tui/src/status-line/segments.ts` | ADOPTED — header now renders `tok in/out (cache N) | $cost | ctx N%` once usage is observed (never invented); ctx% = (in+cacheR+cacheW)/catalog window |
-| `token_rate` (live tok/s) segment | OMP segments | QUEUED — needs a rate window in the event loop |
+| `token_rate` (live tok/s) segment | OMP segments | ADOPTED (batch 2) — bounded 64-sample ring in the TUI (chars→tokens at 4/char), shown only while streaming; display-only, never persisted |
 | Interrupt-and-redirect (type while streaming → deny pending + steer), queued follow-ups | OMP/Hermes TUI | PARTIAL — Marfim has steer queues; mid-stream deny-and-steer QUEUED |
 | Display transcript survives compaction with divider | OMP TUI | QUEUED |
 | Deny-and-steer approval UX (typed message denies + steers) | OMP approval | QUEUED |
@@ -114,11 +114,11 @@ applied as the acceptance filter.
 | Spec | Source | Decision |
 |---|---|---|
 | Floor-before-bypass ordering: user deny globs + hardline patterns run BEFORE yolo/mode-off | Hermes `approval_floors.py` | ADOPTED (already held) — Marfim's PermissionEngine evaluates deny before mode shortcuts; re-verified in gates |
-| Hardline pattern corpus (root/home deletes, mkfs, dd to raw device, fork bombs, shutdown…), command-position anchoring, quote-masking, GNU rm flag permutation, Windows tier | Hermes `approval_detection.py:124-157` | QUEUED (M) — extend `shellparse.rs` detection set; corpus captured above |
+| Hardline pattern corpus (root/home deletes, mkfs, dd to raw device, fork bombs, shutdown…), command-position anchoring, quote-masking, GNU rm flag permutation, Windows tier | Hermes `approval_detection.py:124-157` | ADOPTED (batch 2, unix tier) — `ShellRisk::Hardline` + `hardline_matches` over EVERY argv segment; denies BEFORE rules/modes (floor-before-bypass); GNU flag-permutation + Windows tiers QUEUED |
 | Compound-command allowlist guard (quote-aware `$()`/backtick detection; control-chars + `-c/-e` reinterpretation) | Hermes port of OMP#7553 | PARTIAL — Marfim's shellparse splits compound commands already; quote-aware allowlist short-circuit QUEUED |
 | Fail-closed unattended matrix (`cron_mode/single_query_mode/unattended_mode` default deny; no-human plugin escalation blocks) | Hermes config defaults | ADOPTED (already held) — no-UI ask fails closed in Marfim's permission engine |
-| Approval provenance notes ("auto-approved by allowlist entry …" into tool result; provenance never decides) | Hermes `approval_provenance.py` | QUEUED (S) |
-| Denial circuit breaker (3 consecutive denies → hard-stop addendum; anti-retry "STOP" contract) | Hermes breaker | QUEUED (S) |
+| Approval provenance notes ("auto-approved by allowlist entry …" into tool result; provenance never decides) | Hermes `approval_provenance.py` | ADOPTED (batch 2) — `Verdict.provenance` on rule-allow, appended as `[auto-approved: …]` by `with_provenance`; never decides |
+| Denial circuit breaker (3 consecutive denies → hard-stop addendum; anti-retry "STOP" contract) | Hermes breaker | ADOPTED (batch 2) — turn-scoped consecutive counter in the loop; exactly one addendum per trip, journaled; resets on success / turn end |
 | Guardian-LLM smart approval (untrusted-command delimiting, temp 0, 16-token verdicts, APPROVE=command-only) | Hermes `approval_smart.py` | REJECTED for now — an LLM guardian needs an aux-model budget surface; revisit after §F aux rungs |
 | Parser-limit save-and-recover (oversized payload auto-saved with `bash <file>` hint) | Hermes | QUEUED (S) |
 | Human-wait accounting excluded from batch deadlines (timeout+60s ceiling) | Hermes `approval_human_wait.py` | REJECTED for now — Marfim approvals are synchronous |
@@ -127,21 +127,21 @@ applied as the acceptance filter.
 
 | Spec | Source | Decision |
 |---|---|---|
-| FTS5 session search: external-content FTS + trigram tokenizer, trigger-sync with stale state machine, quoted-token sanitizer, lineage-aware `session_search` tool (2k-char reads, scan cap 300) | Hermes `hermes_state_fts.py`/`_search.py` | QUEUED (M) — top of the next batch; Marfim's JSONL journal is the corpus, the recovery footer of §C depends on it |
-| Memory loop: MEMORY.md/USER.md caps (2200/1375 chars), nudge every 10 turns, background review fork (read-before-write, do-not-capture list) | Hermes memory stack | PARTIAL — Marfim has memory.rs + faculties; nudge cadence + review fork QUEUED |
+| FTS5 session search: external-content FTS + trigram tokenizer, trigger-sync with stale state machine, quoted-token sanitizer, lineage-aware `session_search` tool (2k-char reads, scan cap 300) | Hermes `hermes_state_fts.py`/`_search.py` | ADOPTED (batch 2, Marfim corpus) — pure `core::sessionsearch` (BM25-lite + quoted phrases, scan cap 300, ≤2k snippets, deterministic ties) + `SessionSearch` tool over the JSONL journal; SQLite/trigram/stale-state-machine machinery QUEUED (no SQLite in the tree — the JSONL corpus needs none of it) |
+| Memory loop: MEMORY.md/USER.md caps (2200/1375 chars), nudge every 10 turns, background review fork (read-before-write, do-not-capture list) | Hermes memory stack | PARTIAL — nudge cadence ADOPTED (batch 2: `NUDGE_EVERY_TURNS=10` appends a one-line checkpoint to the system surface, byte-identical base prompt otherwise); caps + background review fork QUEUED |
 | Skills: agentskills.io SKILL.md format, usage telemetry sidecar, curator lifecycle, audit ledger with blob backups | Hermes skills system | PARTIAL — skills.rs loads SKILL.md; telemetry/curator QUEUED |
 | JSONL session tree (`parentId` + leaf pointer), fork + branch summaries, `reset_boundary`, UUIDv7 | OMP sessions | PARTIAL — journal is append-only JSONL already; tree/fork QUEUED |
 | Hashline edit anchors `[PATH#TAG]` + stale-tag recovery + seen-line enforcement (−61% tokens measured) | OMP pi-edit | QUEUED (L) — highest measured value; needs edit-tool redesign, planned after §S |
-| Fuzzy-match edit policy suite (exact→banded Levenshtein→dominant ≥0.97/+0.08 auto-apply→≤5 occurrence previews; constants 0.95/0.92/0.8) | OMP `pi-edit/fuzzy.rs` | QUEUED (M) — constants captured verbatim |
+| Fuzzy-match edit policy suite (exact→banded Levenshtein→dominant ≥0.97/+0.08 auto-apply→≤5 occurrence previews; constants 0.95/0.92/0.8) | OMP `pi-edit/fuzzy.rs` | ADOPTED (batch 2, conservative subset) — 4th rung `fuzzy-dominant`: banded Levenshtein (band = len/8+4, capped 64), auto-apply only at ≥0.97 similarity with ≥+0.08 dominance; the 0.95/0.92 preview bands NEVER auto-apply (no mid-edit confirm surface → fail-closed refusal) |
 | Structural file summarization (tree-sitter fold + BFS unfold, min 4/6 lines) | OMP `pi-ast/summary.rs` | REJECTED for now — tree-sitter dependency budget; regex-based repomap stays |
-| Read-tool summarization + selector grammar (`:A-B,:-N,:raw`), 1-lead/3-trail context | OMP read tool | QUEUED (M) |
+| Read-tool summarization + selector grammar (`:A-B,:-N,:raw`), 1-lead/3-trail context | OMP read tool | ADOPTED (batch 2, selectors) — strict-suffix grammar (invalid suffixes stay part of the path), ranges add 1-lead/3-trail `[ctx]` lines; summarization QUEUED (needs the selector to drive it) |
 
 ## §X Rust-core engineering — LEDGERED (Oh My Pi natives)
 
 | Spec | Source | Decision |
 |---|---|---|
 | Fail-closed trait defaults as sandbox pattern (`signal_process → Unsupported`, `child_opens → false`, `is_native_local → false`) | OMP `bash/host.rs`, `pi-vfs` | ADOPTED (already held) — Marfim sandbox denies by default; pattern documented |
-| CancelToken split semantics (`abort_reason()` excludes elapsed deadlines so completed work is never spuriously rejected) | OMP `pi-natives/task.rs` | QUEUED (S) — audit Marfim's CancelToken against the deadline rule |
+| CancelToken split semantics (`abort_reason()` excludes elapsed deadlines so completed work is never spuriously rejected) | OMP `pi-natives/task.rs` | AUDITED (batch 2) — Marfim's token is flag-only and never conflated with deadlines (timeouts live in `tokio::time::timeout` wrappers that own their error); the OMP invariant holds by construction — audit conclusion documented on the type |
 | Chunk-fed grep state machine (`search_push`, Send across awaits) | OMP vendored grep-searcher | QUEUED (M) — for the async grep tool |
 | Stamp-based directory listing cache (64 shards, 64MiB, 50ms racy window, zero invalidation API) | OMP `pi-walker/cache.rs` | QUEUED (M) |
 | Parse-cache cost model (16 B/byte + 64 B/node, 64MiB cap) | OMP `pi-ast/parse_cache.rs` | QUEUED |
@@ -176,7 +176,7 @@ applied as the acceptance filter.
 | BEGIN IMMEDIATE write core (3 patience tiers, one pre-callback IOERR retry, FTS fail-open vs structural quarantine, checkpoint every 50 writes) | Hermes `hermes_state.py` | QUEUED (M) |
 | Token-accounting writer (background coalescing deltas, atexit drain, non-blocking flush) | Hermes `hermes_state_usage.py` | PARTIAL — Ledger is synchronous today; background writer QUEUED |
 | Maintenance prune+VACUUM (90d retention, freelist >0.25 gate, PASSIVE→VACUUM→TRUNCATE) | Hermes `hermes_state_maintenance.py` | QUEUED |
-| Interrupt placeholder healing (structural `[interrupt: …]`, never prose) | Hermes placeholders | QUEUED (S) — prevents echo-poisoning |
+| Interrupt placeholder healing (structural `[interrupt: …]`, never prose) | Hermes placeholders | ADOPTED (batch 2) — an aborted turn closes with the exact `[interrupt: aborted]` marker at the next turn start; journal replay can never echo-poison |
 | Trajectory compressor (protect head/first-of-role/last-4, tool-pair boundary snap, target 15250/summary 750) | Hermes `trajectory_compressor.py` | QUEUED (S) — for eval dataset prep |
 
 ---
@@ -187,9 +187,25 @@ applied as the acceptance filter.
   wire; Gemini wire; router cooldown ladder + mark_failure/mark_success;
   compaction trigger math; TUI header usage/cost/ctx segments; presets +
   config `effort` key (10 presets).
-- **QUEUED (spec fully captured above)**: 30 items across failover rungs,
-  FTS session search, approval floors corpus, hashline edits, WAL state
-  module, delegation ledger, cache-aware compaction, stream watchdogs.
+- **ADOPTED in batch 2 (this commit)**: stream watchdogs; usage de-dup
+  (DeepSeek/OpenRouter dialects); Anthropic 4-breakpoint cap;
+  `prompt_cache_key`; token-budget compaction tail; verbatim summary
+  section + recovery footer; hardline floor corpus; approval provenance
+  notes; denial circuit breaker; session search (`core::sessionsearch` +
+  `SessionSearch` tool); read selector grammar; fuzzy-dominant edit rung;
+  memory nudge cadence; interrupt placeholder healing; token_rate header
+  segment; CancelToken deadline audit; the brain's LearningFaculty
+  actuations (Hoeffding model_select + permission_tighten, trait
+  why/forget) attached to the production harness with /why and /forget.
+- **QUEUED (spec fully captured above)**: aux failover rungs, health
+  TTLs, thought signatures, cachedContent, lean-summary cut-point logic,
+  skill-prune markers, cache-aware idle compaction, shake artifact refs,
+  context promotion, TTL-reject ladder, OAuth pools, mid-stream
+  deny-and-steer, display-transcript divider, synthetic-aborted entries,
+  hashline edits, session tree/fork, chunk-fed grep, walker cache,
+  parse-cache, CoW isolation, delegation ledger, subagent contract, cron
+  forms, browser floors, worker receipts, turn leases, WAL state module,
+  background usage writer, maintenance prune, trajectory compressor.
 - **REJECTED with reasons**: snapcompact bitmaps, Juice prompt hack,
   Vertex family, KDL 8.7k-model cascade, LLM guardian approvals,
   safepoint shell VM, in-place key rotation.

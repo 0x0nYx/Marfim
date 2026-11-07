@@ -4,7 +4,6 @@
 //! Differential-tested against fixtures.
 
 use super::*;
-use futures_util::StreamExt;
 
 pub struct Anthropic {
     pub client: reqwest::Client,
@@ -77,6 +76,9 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
         "messages": msgs,
         "stream": true
     });
+    // §P breakpoint accounting happens BEFORE system_val is moved into the
+    // body (see the tool-block cap below).
+    let system_breakpoint = req.cache_breakpoints && !system_val.is_null();
     // Reasoning effort (distillation §R1): an explicit thinking budget
     // wins; the canonical ladder converts through the Hermes budget table.
     // Anthropic requires temperature 1 and max_tokens >= budget + 4096
@@ -104,22 +106,28 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
         }
     }
     if !req.tools.is_empty() {
-        let mut tools: Vec<serde_json::Value> = req
+        // §P 4-breakpoint cap (distilled: OMP anthropic-wire.ts): Anthropic
+        // accepts AT MOST 4 cache_control blocks per request. The system
+        // block takes one, so at most the LAST 3 tools carry breakpoints —
+        // deterministic placement (suffix of the tool list), and counting
+        // happens HERE, not on the wire's rejection.
+        const MAX_BREAKPOINTS: usize = 4;
+        let system_bps = usize::from(system_breakpoint);
+        let tool_bp_budget = MAX_BREAKPOINTS.saturating_sub(system_bps);
+        let n_tools = req.tools.len();
+        let bp_from = n_tools.saturating_sub(tool_bp_budget);
+        let tools: Vec<serde_json::Value> = req
             .tools
             .iter()
-            .map(|t| {
+            .enumerate()
+            .map(|(i, t)| {
                 let mut c = t.clone();
-                if req.cache_breakpoints {
+                if req.cache_breakpoints && i >= bp_from {
                     c["cache_control"] = serde_json::json!({"type": "ephemeral"});
                 }
                 c
             })
             .collect();
-        if req.cache_breakpoints {
-            if let Some(last) = tools.last_mut() {
-                last["cache_control"] = serde_json::json!({"type": "ephemeral"});
-            }
-        }
         body["tools"] = serde_json::json!(tools);
     }
     body
@@ -314,8 +322,9 @@ impl Provider for Anthropic {
         let mut tool_blocks = std::collections::BTreeMap::new();
         let mut buf = String::new();
         let mut stream = res.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| CoreError::Provider(format!("stream error: {e}")))?;
+        // §F stream watchdog: first-event + idle deadlines (300s defaults).
+        let mut wd = StreamWatchdog::from_env();
+        while let Some(chunk) = wd.next(&mut stream).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(pos) = buf.find('\n') {
                 let line: String = buf.drain(..=pos).collect();

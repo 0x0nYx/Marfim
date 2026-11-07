@@ -497,6 +497,7 @@ async fn build_session(
         last_repomap: Arc::new(Default::default()),
         subagent: subagents.clone(),
         bash_default_timeout_ms: settings.bash_default_timeout_ms,
+        journal_path: Arc::new(std::sync::Mutex::new(None)),
     };
     let mut host = HostTools::new(
         perm.clone(),
@@ -614,6 +615,19 @@ async fn build_session(
     harness.context_window = marfim_core::catalog::catalog_provider_for(&settings.provider_name)
         .and_then(|pid| marfim_core::catalog::lookup_fuzzy(pid, &settings.model))
         .and_then(|m| m.context_tokens);
+    // §S session_search corpus: the tool context reaches the journal.
+    *tool_ctx
+        .journal_path
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = Some(paths.journal.clone());
+    // P5/Step 5: the brain's LearningFaculty is attached to the production
+    // harness — observational hooks + turn-scoped validated actuations
+    // (model_select / permission_tighten), journaled end to end. The Arc
+    // is returned so the /why and /forget slash commands can inspect and
+    // reset the SAME instance the loop feeds.
+    let learning: Arc<dyn marfim_core::faculty::Faculty> =
+        Arc::new(marfim_brain::faculty::LearningFaculty::new());
+    harness.add_faculty(learning);
     let harness = Arc::new(harness);
     // P2 resume semantics: a resumed session rebuilds its conversation
     // history from the journal (user/assistant turns + compaction

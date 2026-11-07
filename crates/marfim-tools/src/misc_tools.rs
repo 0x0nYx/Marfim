@@ -370,6 +370,7 @@ mod tests {
         ToolCtx {
             cwd: std::env::temp_dir(),
             session_id: "t".into(),
+            journal_path: Arc::new(std::sync::Mutex::new(None)),
             board: Arc::new(Default::default()),
             evidence: Arc::new(Default::default()),
             memory: Arc::new(Default::default()),
@@ -611,6 +612,95 @@ pub fn compute_tool(args: &Value) -> ToolOutput {
     }
 }
 
+/// §S session_search (distilled: Hermes `hermes_state_fts.py`/`_search.py`
+/// — lineage-aware session search over the journal corpus, adapted to
+/// Marfim's JSONL journal). Bounded: scans the NEWEST [`marfim_core::
+/// sessionsearch::SCAN_CAP`] text-bearing records; hits are ≤ 2k-char
+/// snippets. Deterministic ranking (BM25-lite + phrase bonus).
+pub fn session_search(ctx: &ToolCtx, args: &Value) -> ToolOutput {
+    let Some(query) = args["query"]
+        .as_str()
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+    else {
+        return ToolOutput::err("missing `query`");
+    };
+    let journal = {
+        let p = ctx.journal_path.lock().unwrap_or_else(|p| p.into_inner());
+        p.clone()
+    };
+    let Some(path) = journal else {
+        return ToolOutput::err(
+            "no session journal is attached to this tool context (session_search unavailable)",
+        );
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => return ToolOutput::err(format!("journal unreadable: {e}")),
+    };
+    // newest SCAN_CAP lines: the journal is append-only, so the tail is
+    // the most recent history (bounded window contract).
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines
+        .len()
+        .saturating_sub(marfim_core::sessionsearch::SCAN_CAP);
+    let window = &lines[start..];
+    // map each JSONL record to (kind, text) via its tagged fields
+    let records: Vec<(String, String)> = window
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            let kind = v["kind"].as_str().unwrap_or("other").to_string();
+            let text = text_of_record(&v)?;
+            Some((format!("[{}]", i), format!("{kind}: {text}")))
+        })
+        .collect();
+    if records.is_empty() {
+        return ToolOutput::ok("(no text-bearing records in the journal window)");
+    }
+    let q = marfim_core::sessionsearch::parse_query(query);
+    let hits = marfim_core::sessionsearch::search(&records, &q);
+    if hits.is_empty() {
+        return ToolOutput::ok(format!(
+            "(no records match {query:?} in the last {} journal records — try shorter keywords)",
+            records.len()
+        ));
+    }
+    let mut out = format!(
+        "session search: {} hit(s) for {query:?} over the newest {} record(s)\n",
+        hits.len(),
+        records.len()
+    );
+    for h in &hits {
+        out.push_str(&format!(
+            "\n[record {} | {} | score {:.3}]\n{}\n",
+            h.index, h.kind, h.score, h.snippet
+        ));
+    }
+    ToolOutput::ok(out)
+}
+
+/// The text-bearing fields of a journal record (serde `kind`-tagged).
+/// Records without text (turn markers, usage) are skipped.
+fn text_of_record(v: &serde_json::Value) -> Option<String> {
+    let kind = v["kind"].as_str()?;
+    let text = match kind {
+        "user_message" => v["text"].as_str()?.to_string(),
+        "assistant_message" => v["text"].as_str()?.to_string(),
+        "tool_result" => v["output"].as_str()?.to_string(),
+        "compaction" => v["summary"].as_str()?.to_string(),
+        "steer" => v["text"].as_str()?.to_string(),
+        "actuation" => v["detail"].to_string(),
+        _ => return None,
+    };
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
 pub fn tool_search(ctx: &ToolCtx, args: &Value) -> ToolOutput {
     let _ = ctx;
     let Some(query) = args["query"].as_str() else {
@@ -660,6 +750,7 @@ mod tests_extra {
         ToolCtx {
             cwd: std::env::temp_dir().join(format!("marfim-extra-{}", std::process::id())),
             session_id: "t".into(),
+            journal_path: Arc::new(std::sync::Mutex::new(None)),
             board: Arc::new(Default::default()),
             evidence: Arc::new(Default::default()),
             memory: Arc::new(Default::default()),

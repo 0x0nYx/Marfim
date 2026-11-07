@@ -103,6 +103,10 @@ pub trait Faculty: Send + Sync {
     /// conformal risk, regret audit all consume this stream).
     async fn post_step(&self, _ctx: &HookCtx, _outcome: &StepOutcome) {}
 
+    /// After each tool result lands (§A learning stream for the tighten
+    /// actuation: per-tool (attempts, errors)). Default: no-op.
+    async fn observe_tool(&self, _ctx: &HookCtx, _tool: &str, _is_error: bool) {}
+
     /// Before compaction: given the history as texts, return the INDICES
     /// whose information is too salient to summarize away. The loop
     /// re-appends protected messages after the summary.
@@ -155,6 +159,25 @@ pub async fn run_post_step(
             faculty: f.name().into(),
             hook: "post_step".into(),
             detail: serde_json::to_value(outcome).unwrap_or(Value::Null),
+        });
+    }
+}
+
+/// §A observe one tool outcome per faculty (bounded event volume: one
+/// hook event per tool result).
+pub async fn run_observe_tool(
+    bus: &EventBus,
+    faculties: &[Arc<dyn Faculty>],
+    ctx: &HookCtx,
+    tool: &str,
+    is_error: bool,
+) {
+    for f in faculties {
+        f.observe_tool(ctx, tool, is_error).await;
+        bus.publish(Event::FacultyHook {
+            faculty: f.name().into(),
+            hook: "observe_tool".into(),
+            detail: serde_json::json!({ "tool": tool, "is_error": is_error }),
         });
     }
 }

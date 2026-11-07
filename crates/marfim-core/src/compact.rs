@@ -35,6 +35,44 @@ pub fn micro_compact(
     target_tokens: u64,
     protected_tail: usize,
 ) -> u64 {
+    micro_compact_budget(history, target_tokens, protected_tail, None)
+}
+
+// ---------------------------------------------------------------------
+// Distillation §C2: token-budget protected tail (Hermes
+// `context_compressor_tail.py`). A message-count tail is blind to size:
+// six protected messages can be six 40k-blob tool reads. The budget form
+// grows the protected tail until it holds at least `tail_budget_tokens`
+// (bounded by the message-count tail as a hard ceiling):
+//   budget = clamp(2.5% of the context window, 10k floor, 25k cap)
+//   (Hermes constants: TAIL_BUDGET_RATIO / TAIL_FLOOR / TAIL_CAP).
+
+/// Window share for the protected-tail token budget.
+pub const TAIL_BUDGET_RATIO: f64 = 0.025;
+/// Absolute floor of the protected-tail budget in tokens.
+pub const TAIL_FLOOR_TOKENS: u64 = 10_000;
+/// Absolute cap of the protected-tail budget in tokens.
+pub const TAIL_CAP_TOKENS: u64 = 25_000;
+
+/// Pure helper: the protected-tail budget for a context window.
+/// `None` (unknown window) keeps the floor — bounded either way.
+pub fn tail_budget_tokens(context_window: Option<u64>) -> u64 {
+    let from_window = context_window
+        .map(|w| (w as f64 * TAIL_BUDGET_RATIO) as u64)
+        .unwrap_or(TAIL_FLOOR_TOKENS);
+    from_window.clamp(TAIL_FLOOR_TOKENS, TAIL_CAP_TOKENS).max(1)
+}
+
+/// micro-compaction with a token-budget protected tail: the protected
+/// tail is `protected_tail` messages EXPANDED (never shrunk) so the
+/// newest messages cover at least `tail_budget_tokens`. Estimation is
+/// the same len/4 heuristic; the function stays pure and deterministic.
+pub fn micro_compact_budget(
+    history: &mut [ChatMessage],
+    target_tokens: u64,
+    protected_tail: usize,
+    tail_budget_tokens: Option<u64>,
+) -> u64 {
     let estimate = |h: &[ChatMessage]| -> u64 {
         h.iter()
             .map(|m| m.content.len() as u64)
@@ -44,7 +82,17 @@ pub fn micro_compact(
     if estimate(history) <= target_tokens {
         return 0;
     }
-    let protected_start = history.len().saturating_sub(protected_tail);
+    // Expand the message-count tail until it covers the token budget.
+    let mut protected_start = history.len().saturating_sub(protected_tail);
+    if let Some(budget) = tail_budget_tokens {
+        let mut covered = estimate(&history[protected_start.min(history.len())..]);
+        let mut start = protected_start;
+        while start > 0 && covered < budget {
+            start -= 1;
+            covered += history[start].content.len().div_ceil(4) as u64;
+        }
+        protected_start = start;
+    }
     let mut removed_bytes = 0u64;
     // Oldest-first, but never inside the protected tail.
     for i in 0..protected_start.min(history.len()) {
@@ -121,6 +169,93 @@ mod tests {
                 .collect()
         };
         assert_eq!(dump(&a), dump(&b), "same input, same output");
+    }
+
+    // ---- §C2 token-budget tail ----
+
+    #[test]
+    fn tail_budget_clamped_between_floor_and_cap() {
+        // Unknown window → floor.
+        assert_eq!(tail_budget_tokens(None), TAIL_FLOOR_TOKENS);
+        // 200k window → 2.5% = 5k → floored at 10k.
+        assert_eq!(tail_budget_tokens(Some(200_000)), 10_000);
+        // 2M window → 2.5% = 50k → capped at 25k.
+        assert_eq!(tail_budget_tokens(Some(2_000_000)), TAIL_CAP_TOKENS);
+        // 1M window → 2.5% = 25k = cap exactly.
+        assert_eq!(tail_budget_tokens(Some(1_000_000)), 25_000);
+    }
+
+    #[test]
+    fn budget_tail_protects_more_than_message_count_when_newest_are_huge() {
+        let big = "x".repeat(40_000); // 10k tokens each
+        let small = "s".repeat(200);
+        let mut h = vec![
+            tool_result("t0", &big),   // old, budget elides this one
+            tool_result("t1", &small), // old, message-tail would elide; budget protects
+            ChatMessage::user("q"),
+            tool_result("t2", &big), // message-tail protected (last 3)
+        ];
+        let removed = micro_compact_budget(&mut h, 9_000, 3, Some(12_000));
+        assert_eq!(removed, 0, "budget grew the tail past the message count");
+        assert!(h[0].content.starts_with("xxxx"), "old result intact");
+        assert!(h[1].content.starts_with("ssss"), "small result intact");
+    }
+
+    #[test]
+    fn budget_tail_still_elides_when_target_forces_it() {
+        let big = "x".repeat(40_000); // ~10k tokens each
+        let small = "s".repeat(200); // not elidable (<256 bytes)
+        let mut h = vec![
+            tool_result("t0", &small),
+            tool_result("t1", &big),
+            tool_result("t2", &big),
+            ChatMessage::user("q"),
+            tool_result("t3", &big),
+        ];
+        // Tail budget 12k already covered by t2+user+t3 (~20k): no
+        // expansion; the OLDEST elidable result (t1) goes first.
+        let removed = micro_compact_budget(&mut h, 9_000, 3, Some(12_000));
+        assert!(removed >= 40_000);
+        assert!(h[1].content.starts_with(ELIDE_MARKER_PREFIX));
+        assert!(h[0].content.starts_with("ssss"), "not elidable, intact");
+        assert!(h[4].content.starts_with("xxxx"), "tail intact");
+    }
+
+    #[test]
+    fn budget_covering_all_history_elides_nothing_stage2_takes_over() {
+        let big = "x".repeat(40_000);
+        let mut h = vec![
+            tool_result("t0", &big),
+            tool_result("t1", &big),
+            ChatMessage::user("q"),
+            tool_result("t2", &big),
+        ];
+        // Tail budget larger than the whole history: the protected tail
+        // expands to cover everything — micro-compaction honestly reports
+        // 0 (nothing is outside the tail) and the SUMMARIZER (stage 2)
+        // owns the reduction. Eliding inside the live exchange would
+        // destroy context the model is actively reasoning about.
+        let removed = micro_compact_budget(&mut h, 6_000, 3, Some(50_000));
+        assert_eq!(removed, 0);
+        assert!(h[0].content.starts_with("xxxx"));
+    }
+
+    #[test]
+    fn budget_none_behaves_exactly_like_message_count() {
+        let big = "y".repeat(4_000);
+        let mk = || {
+            vec![
+                tool_result("t1", &big),
+                tool_result("t2", &big),
+                ChatMessage::user("now act"),
+                tool_result("t3", &big),
+            ]
+        };
+        let mut a = mk();
+        let mut b = mk();
+        let ra = micro_compact(&mut a, 300, 2);
+        let rb = micro_compact_budget(&mut b, 300, 2, None);
+        assert_eq!(ra, rb);
     }
 }
 

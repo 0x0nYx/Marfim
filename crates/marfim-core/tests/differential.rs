@@ -206,6 +206,60 @@ async fn anthropic_request_body_carries_cache_breakpoints_and_thinking() {
 
 // ---------------------------------------------------------------- OpenAI
 
+#[test]
+fn anthropic_breakpoints_capped_at_four_total() {
+    // §P (OMP anthropic-wire.ts): Anthropic accepts AT MOST 4
+    // cache_control blocks. With 6 tools + system, only the LAST 3
+    // tools may carry breakpoints (deterministic suffix placement).
+    let tools: Vec<Value> = (0..6)
+        .map(|i| serde_json::json!({"name": format!("T{i}"), "input_schema": {}}))
+        .collect();
+    let req = ChatRequest {
+        messages: vec![ChatMessage::user("hi")],
+        tools,
+        cache_breakpoints: true,
+        system: Some("sys".into()),
+        ..Default::default()
+    };
+    let body = marfim_core::providers::anthropic::build_body(&req, "m");
+    let tool_bps = body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t.get("cache_control").is_some())
+        .count();
+    let sys_bps = body["system"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s.get("cache_control").is_some())
+        .count();
+    assert_eq!(tool_bps + sys_bps, 4, "exactly the cap, never more");
+    let arr = body["tools"].as_array().unwrap();
+    assert!(
+        arr[..3].iter().all(|t| t.get("cache_control").is_none()),
+        "prefix stays breakpoint-free"
+    );
+    assert!(
+        arr[3..].iter().all(|t| t.get("cache_control").is_some()),
+        "suffix carries the breakpoints"
+    );
+}
+
+#[test]
+fn responses_prompt_cache_key_round_trips_and_absent_means_absent() {
+    use marfim_core::providers::responses::build_body as rb;
+    let mut req = ChatRequest {
+        messages: vec![ChatMessage::user("hi")],
+        ..Default::default()
+    };
+    let body = rb(&req, "m");
+    assert!(body.get("prompt_cache_key").is_none(), "no key, no field");
+    req.prompt_cache_key = Some("pc_abc123".into());
+    let body = rb(&req, "m");
+    assert_eq!(body["prompt_cache_key"], "pc_abc123");
+}
+
 #[tokio::test]
 async fn openai_usage_mapping_and_tool_delta_match_node_golden() {
     let fx = fixture("openai-stream.json");

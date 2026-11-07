@@ -3,7 +3,6 @@
 //! `thinking` round-trip. Differential-tested against fixtures.
 
 use super::*;
-use futures_util::StreamExt;
 
 pub struct OpenAiCompat {
     pub client: reqwest::Client,
@@ -54,13 +53,55 @@ struct OaiFn {
 }
 
 #[derive(serde::Deserialize)]
-struct OaiUsage {
+pub(crate) struct OaiUsage {
     #[serde(default)]
     prompt_tokens: u64,
     #[serde(default)]
     completion_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: Option<PromptDetails>,
+    // DeepSeek dialect (distillation §P, OMP openai-shared.ts:526): the
+    // cache split arrives as its own pair; miss tokens are the BILLED
+    // (non-cached) input.
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u64>,
+    #[serde(default)]
+    prompt_cache_miss_tokens: Option<u64>,
+    // OpenRouter dialect: cache WRITES are billed inside prompt_tokens;
+    // they must be split out, not double-counted.
+    #[serde(default)]
+    cache_write_tokens: Option<u64>,
+}
+
+/// Usage de-dup math (distillation §P): every dialect's prompt_tokens
+/// INCLUDES its cache components; the normalized Anthropic-shaped Usage
+/// counts input_tokens as the NON-cached billed part. Double-counting
+/// cache tokens inflates both cost and the compaction trigger.
+pub(crate) fn normalize_usage(u: &OaiUsage) -> Usage {
+    // DeepSeek pair: hit + miss sum to prompt_tokens, so split exactly.
+    if let (Some(hit), Some(miss)) = (u.prompt_cache_hit_tokens, u.prompt_cache_miss_tokens) {
+        return Usage {
+            input_tokens: miss,
+            output_tokens: u.completion_tokens,
+            cache_read_tokens: hit,
+            cache_creation_tokens: 0,
+        };
+    }
+    let cache_read = u
+        .prompt_tokens_details
+        .as_ref()
+        .map(|d| d.cached_tokens)
+        .unwrap_or(0);
+    let cache_write = u.cache_write_tokens.unwrap_or(0);
+    Usage {
+        input_tokens: u
+            .prompt_tokens
+            .saturating_sub(cache_read)
+            .saturating_sub(cache_write),
+        output_tokens: u.completion_tokens,
+        cache_read_tokens: cache_read,
+        cache_creation_tokens: cache_write,
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -274,16 +315,7 @@ impl OpenAiCompat {
             }
         }
         if let Some(u) = &ch.usage {
-            acc.usage = Usage {
-                input_tokens: u.prompt_tokens,
-                output_tokens: u.completion_tokens,
-                cache_read_tokens: u
-                    .prompt_tokens_details
-                    .as_ref()
-                    .map(|d| d.cached_tokens)
-                    .unwrap_or(0),
-                cache_creation_tokens: 0,
-            };
+            acc.usage = normalize_usage(u);
         }
     }
 }
@@ -324,8 +356,9 @@ impl Provider for OpenAiCompat {
         let mut acc = Step::default();
         let mut stream = res.bytes_stream();
         let mut buf = String::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| CoreError::Provider(format!("stream error: {e}")))?;
+        // §F stream watchdog: first-event + idle deadlines (300s defaults).
+        let mut wd = StreamWatchdog::from_env();
+        while let Some(chunk) = wd.next(&mut stream).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(pos) = buf.find('\n') {
                 let line: String = buf.drain(..=pos).collect();
@@ -367,4 +400,67 @@ fn captured_events(ch: &OaiChunk) -> Vec<StreamEvent> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usage(v: serde_json::Value) -> OaiUsage {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn dedup_plain_openai_cache_read_stays_inside_prompt() {
+        // OpenAI dialect: prompt_tokens INCLUDES cached_tokens; the
+        // normalized shape must not double-count.
+        let u = usage(serde_json::json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_tokens_details": {"cached_tokens": 400}
+        }));
+        let n = normalize_usage(&u);
+        assert_eq!(n.input_tokens, 600);
+        assert_eq!(n.cache_read_tokens, 400);
+        assert_eq!(n.output_tokens, 50);
+        assert_eq!(n.cache_creation_tokens, 0);
+    }
+
+    #[test]
+    fn dedup_deepseek_pair_splits_hit_and_miss() {
+        let u = usage(serde_json::json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_cache_hit_tokens": 700,
+            "prompt_cache_miss_tokens": 300
+        }));
+        let n = normalize_usage(&u);
+        assert_eq!(n.input_tokens, 300, "miss = billed non-cached input");
+        assert_eq!(n.cache_read_tokens, 700);
+        assert_eq!(n.output_tokens, 50);
+    }
+
+    #[test]
+    fn dedup_openrouter_cache_write_splits_out() {
+        let u = usage(serde_json::json!({
+            "prompt_tokens": 1200,
+            "completion_tokens": 50,
+            "cache_write_tokens": 200,
+            "prompt_tokens_details": {"cached_tokens": 500}
+        }));
+        let n = normalize_usage(&u);
+        assert_eq!(n.input_tokens, 500);
+        assert_eq!(n.cache_read_tokens, 500);
+        assert_eq!(n.cache_creation_tokens, 200);
+    }
+
+    #[test]
+    fn dedup_no_cache_fields_is_identity() {
+        let u = usage(serde_json::json!({"prompt_tokens": 100, "completion_tokens": 7}));
+        let n = normalize_usage(&u);
+        assert_eq!(n.input_tokens, 100);
+        assert_eq!(n.cache_read_tokens, 0);
+        assert_eq!(n.cache_creation_tokens, 0);
+        assert_eq!(n.output_tokens, 7);
+    }
 }

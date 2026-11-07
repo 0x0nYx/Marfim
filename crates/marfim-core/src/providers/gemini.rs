@@ -14,7 +14,6 @@
 //! - usage rides `usageMetadata` with separate thought-token accounting.
 
 use super::*;
-use futures_util::StreamExt;
 
 pub struct Gemini {
     pub client: reqwest::Client,
@@ -343,8 +342,9 @@ impl Provider for Gemini {
         let mut call_n: usize = 0;
         let mut buf = String::new();
         let mut stream = res.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| CoreError::Provider(format!("stream error: {e}")))?;
+        // §F stream watchdog: first-event + idle deadlines (300s defaults).
+        let mut wd = StreamWatchdog::from_env();
+        while let Some(chunk) = wd.next(&mut stream).await? {
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(pos) = buf.find('\n') {
                 let line: String = buf.drain(..=pos).collect();
@@ -404,6 +404,7 @@ mod tests {
             cache_breakpoints: false,
             system: Some("be terse".into()),
             effort: Some(super::super::effort::Effort::Xhigh),
+            ..Default::default()
         }
     }
 

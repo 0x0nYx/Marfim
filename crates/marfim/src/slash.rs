@@ -1,4 +1,4 @@
-//! Slash commands: all 65 Node v1.2.0 names + aliases, each wired to a
+//! Slash commands: all 65 Node v1.2.0 names + 2 distilled names (/why, /forget) + aliases, each wired to a
 //! REAL behaviour (journal reads/writes, tool execution, config access,
 //! git/terminal inspection). The old "available" catch-all is gone (D15):
 //! unknown commands error with did-you-mean, and every command does
@@ -36,6 +36,7 @@ pub const COMMANDS: &[&str] = &[
     "explain",
     "export",
     "forecast",
+    "forget",
     "fork",
     "goal",
     "handoff",
@@ -75,6 +76,7 @@ pub const COMMANDS: &[&str] = &[
     "usage",
     "verify",
     "wal",
+    "why",
     "workflow",
     "yolo",
 ];
@@ -159,6 +161,38 @@ pub async fn dispatch(
             let body: Vec<String> =
                 kinds.iter().map(|(k, n)| format!("{k}: {n}")).collect();
             format!("journal audit ({} records):\n{}", recs.len(), body.join("\n"))
+        }
+        "why" => {
+            // P5/Step5: the inspectable learning state of every attached
+            // faculty (nothing here mutates; /why is read-only).
+            let mut parts: Vec<String> = Vec::new();
+            for f in &harness.faculties {
+                let state = f.why();
+                parts.push(format!(
+                    "{}: {}",
+                    f.name(),
+                    serde_json::to_string_pretty(&state)
+                        .unwrap_or_else(|_| state.to_string())
+                ));
+            }
+            if parts.is_empty() {
+                "(no faculties attached)".into()
+            } else {
+                parts.join("\n\n")
+            }
+        }
+        "forget" => {
+            // P5/Step5: reset EVERY faculty's learned state (REVERSIBLE
+            // by contract); each faculty reports its reset via /why.
+            for f in &harness.faculties {
+                f.forget();
+            }
+            let n = harness.faculties.len();
+            if n == 0 {
+                "(no faculties attached)".into()
+            } else {
+                format!("forgot: {n} facult{} reset to zero state", if n == 1 { "y" } else { "ies" })
+            }
         }
         "wal" => {
             let recs = journal_records(harness);
@@ -1197,7 +1231,7 @@ mod tests {
         };
     }
 
-    behaviour!(help_lists_all_65, "/help", contains = ["commands (65)"]);
+    behaviour!(help_lists_all_67, "/help", contains = ["commands (67)"]);
     behaviour!(status_real, "/status", contains = ["sess-test", "mock"]);
     behaviour!(stats_real, "/stats", contains = ["tool results"]);
     behaviour!(
@@ -1306,10 +1340,10 @@ mod tests {
 
     #[tokio::test]
     async fn every_command_dispatches_with_real_output() {
-        // D15 structural check: 65 commands, and every single one must
+        // D15 structural check: 67 commands, and every single one must
         // dispatch to a REAL arm (never the internal fall-through, never
         // the old "available" catch-all).
-        assert_eq!(COMMANDS.len(), 65);
+        assert_eq!(COMMANDS.len(), 67);
         for c in COMMANDS {
             let out = run(&format!("/{c}")).await;
             assert!(

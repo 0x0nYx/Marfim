@@ -74,6 +74,9 @@ pub struct ToolCtx {
     /// Config truth: `bash.defaultTimeoutMs` reaches the Bash tool here
     /// (explicit per-call `timeout_ms` still wins).
     pub bash_default_timeout_ms: u64,
+    /// §S session_search corpus: the CURRENT session journal path (set by
+    /// the binary when a session opens; `None` → the tool says so).
+    pub journal_path: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
 impl Default for ToolCtx {
@@ -91,6 +94,7 @@ impl Default for ToolCtx {
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
+            journal_path: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }

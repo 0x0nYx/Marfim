@@ -256,6 +256,12 @@ pub struct TuiModel {
     /// Catalog context window for the primary model, when known — powers
     /// the header `ctx` gauge (distillation §H1, OMP `context_pct`).
     pub context_window: Option<u64>,
+    /// §H `token_rate` live segment (distilled: OMP status-line segments):
+    /// bounded ring of (wall instant, cumulative stream chars). Rate is
+    /// derived chars/4-per-sec over the window — display-only, never
+    /// persisted, never affects the loop.
+    pub rate_window: std::collections::VecDeque<(std::time::Instant, u64)>,
+    pub stream_chars: u64,
     pub snapshot: Option<SessionSnapshot>,
     pub why: VecDeque<WhyEntry>,
     pub modal: Option<ApprovalModal>,
@@ -285,6 +291,8 @@ impl TuiModel {
             input: String::new(),
             usage: UsageTotals::default(),
             context_window: None,
+            rate_window: VecDeque::new(),
+            stream_chars: 0,
             snapshot: None,
             why: VecDeque::new(),
             modal: None,
@@ -333,6 +341,15 @@ impl TuiModel {
                     self.stream_thinking.push_str(text);
                 } else {
                     self.stream_text.push_str(text);
+                }
+                // §H rate window: bounded sample push (cap 64).
+                self.stream_chars = self
+                    .stream_chars
+                    .saturating_add(text.chars().count() as u64);
+                self.rate_window
+                    .push_back((std::time::Instant::now(), self.stream_chars));
+                while self.rate_window.len() > 64 {
+                    self.rate_window.pop_front();
                 }
             }
             Event::ToolCallStarted { id, tool, args } => {
@@ -890,6 +907,19 @@ fn render_header(f: &mut Frame<'_>, model: &TuiModel, area: Rect) {
             tok.push_str(&format!(" (cache {})", u.cache_read));
         }
         spans.push(Span::raw(tok));
+        // §H token_rate: chars→tokens over the ring window, shown only
+        // while actually streaming (≥2 samples spanning ≥1s).
+        if let (Some(first), Some(last)) = (model.rate_window.front(), model.rate_window.back()) {
+            let dt = last.0.saturating_duration_since(first.0);
+            if dt.as_secs_f64() >= 1.0 {
+                let chars = last.1.saturating_sub(first.1);
+                let tps = (chars as f64 / 4.0) / dt.as_secs_f64();
+                if tps > 0.5 {
+                    spans.push(Span::styled(" | ", pal.dim()));
+                    spans.push(Span::raw(format!("{tps:.0} tok/s")));
+                }
+            }
+        }
         if u.cost > 0.0 {
             spans.push(Span::styled(" | ", pal.dim()));
             spans.push(Span::raw(format!("${:.4}", u.cost)));

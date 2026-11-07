@@ -58,6 +58,20 @@ pub enum Decision {
 pub struct Verdict {
     pub decision: Decision,
     pub reason: String,
+    /// §A approval provenance (distilled: Hermes approval_provenance.py):
+    /// which rule produced an ALLOW, for the tool-result note. Provenance
+    /// NEVER decides — it only annotates; deny/ask paths carry None.
+    pub provenance: Option<String>,
+}
+
+impl Verdict {
+    fn new(decision: Decision, reason: impl Into<String>) -> Self {
+        Self {
+            decision,
+            reason: reason.into(),
+            provenance: None,
+        }
+    }
 }
 
 pub struct PermissionEngine {
@@ -95,6 +109,14 @@ impl PermissionEngine {
     }
 
     pub fn rule_for(&self, tool: &str, argv: Option<&[String]>) -> Option<Decision> {
+        self.matching_rule(tool, argv).map(|(_, d)| d)
+    }
+
+    /// The matched rule (index + decision) with the engine's precedence:
+    /// later rules override earlier ones at equal specificity; deny wins
+    /// over ask wins over allow at the same position. Exposed so an
+    /// ALLOW can carry its §A provenance (which entry approved it).
+    pub fn matching_rule(&self, tool: &str, argv: Option<&[String]>) -> Option<(usize, Decision)> {
         let mut best: Option<(usize, Decision)> = None;
         for (i, r) in self.rules.iter().enumerate() {
             if r.tool != tool {
@@ -120,7 +142,7 @@ impl PermissionEngine {
                 _ => best = Some((i, r.decision)),
             }
         }
-        best.map(|(_, d)| d)
+        best
     }
 
     /// Check a tool invocation. `argv` is Some for Bash-like tools after
@@ -134,12 +156,24 @@ impl PermissionEngine {
         risk: Option<ShellRisk>,
         summary: &str,
     ) -> Verdict {
+        // §A hardline floor (distilled: Hermes approval_floors.py —
+        // floor-before-bypass ordering): the corpus denies BEFORE any
+        // explicit rule, yolo mode or unattended default. deny>ask>allow
+        // starts here.
+        if let Some(ShellRisk::Hardline) = risk {
+            return Verdict::new(
+                Decision::Deny,
+                "hardline pattern — denied unconditionally (floor-before-bypass)",
+            );
+        }
+
         // 1. explicit rules first (deny > ask > allow)
-        if let Some(d) = self.rule_for(tool, argv) {
+        if let Some((idx, d)) = self.matching_rule(tool, argv) {
             return match d {
                 Decision::Deny => Verdict {
                     decision: Decision::Deny,
                     reason: "explicit deny rule".into(),
+                    provenance: None,
                 },
                 Decision::Ask => {
                     return self.ask(tool, summary).await;
@@ -158,6 +192,7 @@ impl PermissionEngine {
                     Verdict {
                         decision: Decision::Allow,
                         reason: "explicit allow rule".into(),
+                        provenance: Some(format!("allowlist entry rules[{idx}]")),
                     }
                 }
             };
@@ -192,12 +227,14 @@ impl PermissionEngine {
                 Verdict {
                     decision: Decision::Allow,
                     reason: format!("mode {:?} default", self.mode),
+                    provenance: None,
                 }
             }
             Decision::Ask => self.ask(tool, summary).await,
             other => Verdict {
                 decision: other,
                 reason: format!("mode {:?} default", self.mode),
+                provenance: None,
             },
         }
     }
@@ -213,16 +250,19 @@ impl PermissionEngine {
             return Verdict {
                 decision: Decision::Deny,
                 reason: "no approval listener — fail closed".into(),
+                provenance: None,
             };
         }
         match rx.await {
             Ok(ApprovalAnswer::Allow) | Ok(ApprovalAnswer::AllowAlways) => Verdict {
                 decision: Decision::Allow,
                 reason: "user approved".into(),
+                provenance: None,
             },
             Ok(ApprovalAnswer::Deny) | Err(_) => Verdict {
                 decision: Decision::Deny,
                 reason: "user denied".into(),
+                provenance: None,
             },
         }
     }

@@ -26,6 +26,16 @@ use std::sync::Arc;
 use tokio::sync::{Notify, RwLock};
 
 /// Cooperative cancellation (D8): Ctrl-C sets the flag, waiters wake.
+///
+/// §X audit (distilled: OMP `pi-natives/task.rs` CancelToken split —
+/// `abort_reason()` excludes elapsed deadlines so completed work is never
+/// spuriously rejected): Marfim's token is FLAG-ONLY and never conflated
+/// with deadlines — timeouts live in `tokio::time::timeout` wrappers
+/// (exec_one, the provider transports) that produce their own error and
+/// never touch this flag. A completed tool result can therefore never be
+/// retroactively reclassified as aborted. Conclusion: the OMP split
+/// semantics are already held by construction; no deadline field was
+/// added to keep the invariant trivially checkable.
 #[derive(Clone, Default)]
 pub struct CancelToken {
     flag: Arc<AtomicBool>,
@@ -183,6 +193,11 @@ pub struct Harness {
     /// turn start from validated faculty actuations, cleared at turn end:
     /// an actuation never outlives the turn it was granted for.
     turn_overrides: std::sync::Mutex<TurnOverrides>,
+    /// §A consecutive permission denials this turn (circuit breaker).
+    consecutive_denials: std::sync::Mutex<u32>,
+    /// §W whether the previous turn ended Aborted (drives the interrupt
+    /// placeholder healing at the next turn start).
+    last_turn_aborted: AtomicBool,
 }
 
 /// Turn-scoped faculty overrides. Every field is optional and validated:
@@ -195,6 +210,32 @@ struct TurnOverrides {
     tightened_tools: Vec<String>,
     compact_threshold: Option<u64>,
 }
+
+/// §R2 prompt-cache affinity: `pc_` + the session id, truncated so the
+/// whole key stays ≤64 chars (OMP wire rule). Deterministic per session.
+pub fn prompt_cache_key(session_id: &str) -> String {
+    let mut k = format!("pc_{session_id}");
+    k.truncate(64);
+    k
+}
+
+/// §W interrupt placeholder healing (distilled: Hermes structural
+/// placeholders, never prose): an aborted exchange closes with this
+/// EXACT structural marker, so replay never echo-poisons the model
+/// into answering a message that was never answered.
+pub const INTERRUPT_PLACEHOLDER: &str = "[interrupt: aborted]";
+
+/// §A denial circuit breaker (distilled: Hermes anti-retry contract):
+/// after this many CONSECUTIVE permission denials in one turn, an
+/// explicit stop-addendum lands in the conversation — identical retries
+/// keep failing; the model must change approach or ask.
+pub const DENIAL_BREAKER_LIMIT: u32 = 3;
+
+/// §S memory nudge cadence (distilled: Hermes memory loop): every Nth
+/// turn the system prompt carries a one-line review reminder.
+pub const NUDGE_EVERY_TURNS: u64 = 10;
+pub const MEMORY_NUDGE: &str =
+    "[memory cadence] turn checkpoint: if anything durable about the user or project surfaced (preferences, constraints, invariants), record it via the memory tool now.";
 
 /// Steering queues (omp-style two-queue: amend vs follow-up).
 #[derive(Default)]
@@ -282,6 +323,8 @@ impl Harness {
             steer: Arc::new(std::sync::Mutex::new(SteerQueues::default())),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
+            consecutive_denials: std::sync::Mutex::new(0),
+            last_turn_aborted: AtomicBool::new(false),
         }
     }
 
@@ -425,6 +468,16 @@ impl Harness {
         }
 
         // D1: the user message lands in history at turn start.
+        // §W healing first: an aborted previous turn may have left a
+        // trailing unanswered user message — close that exchange with the
+        // structural interrupt placeholder before appending a new one.
+        {
+            let aborted = self.last_turn_aborted.load(Ordering::SeqCst);
+            let mut h = self.history.write().await;
+            if aborted && h.last().map(|m| m.role == "user").unwrap_or(false) {
+                h.push(ChatMessage::assistant(INTERRUPT_PLACEHOLDER));
+            }
+        }
         if let Err(e) = self.journal_rec(&JournalRecord::UserMessage {
             text: user_text.into(),
         }) {
@@ -456,6 +509,14 @@ impl Harness {
             .turn_overrides
             .lock()
             .unwrap_or_else(|p| p.into_inner()) = TurnOverrides::default();
+        // §A the denial breaker is turn-scoped too.
+        *self
+            .consecutive_denials
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = 0;
+        // §W record the abort so the next turn heals the exchange.
+        self.last_turn_aborted
+            .store(matches!(stop, StopReason::Aborted(_)), Ordering::SeqCst);
         self.bus.publish(Event::TurnEnded {
             turn,
             stop_reason: stop.normalized().into(),
@@ -525,6 +586,8 @@ impl Harness {
         let mut verify_used = 0u32;
         // D4: per-step context tokens (the LAST step's usage), not cumulative.
         let mut last_step_input_tokens: u64;
+        // §S memory-cadence base: the current turn number (already incremented).
+        let turn_counter_local = self.turn_counter.load(Ordering::SeqCst);
 
         loop {
             // D8: Ctrl-C between steps ends the turn.
@@ -549,11 +612,18 @@ impl Harness {
                 messages: history_snapshot,
                 tools: self.tools.schemas(),
                 cache_breakpoints: true,
-                system: Some(system_prompt(&self.ctx)),
+                system: Some(system_prompt_with_nudge(
+                    &self.ctx,
+                    // §S memory cadence: every Nth turn carries the
+                    // one-line review reminder in the system surface.
+                    (turn_counter_local % NUDGE_EVERY_TURNS == 0).then_some(MEMORY_NUDGE),
+                )),
                 max_completion_tokens: self.sampling.max_completion_tokens,
                 temperature: self.sampling.temperature,
                 thinking_budget: self.sampling.thinking_budget,
                 effort: self.sampling.effort,
+                // §R2 session-derived prompt-cache affinity key.
+                prompt_cache_key: Some(prompt_cache_key(&self.ctx.session_id)),
             };
 
             // P4 pre_model hook (observational)
@@ -975,6 +1045,7 @@ impl Harness {
 
         let mut arm = false;
         let mut any_error = false;
+        let mut denial_streak_changed = false;
         for (i, tc) in calls.iter().enumerate() {
             let (output, is_error) = results[i].clone().unwrap_or_else(|| {
                 (
@@ -988,6 +1059,19 @@ impl Harness {
             }
             if is_error && output.starts_with("permission denied") {
                 self.denied_tools.fetch_add(1, Ordering::SeqCst);
+                // §A breaker: consecutive denials count up; any non-denial
+                // result breaks the streak.
+                let mut c = self
+                    .consecutive_denials
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                *c = c.saturating_add(1);
+                denial_streak_changed = true;
+            } else {
+                *self
+                    .consecutive_denials
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = 0;
             }
             if !is_error && (self.tools.is_mutating(&tc.name) || output.contains("[verify]")) {
                 arm = true;
@@ -1009,6 +1093,16 @@ impl Harness {
                 is_error,
                 duration_ms: 0,
             });
+            // §A per-tool outcome stream into the faculties (tighten
+            // actuation evidence; bounded, observational).
+            crate::faculty::run_observe_tool(
+                &self.bus,
+                &self.faculties,
+                &self.hook_ctx(self.turn_counter.load(Ordering::SeqCst)),
+                &tc.name,
+                is_error,
+            )
+            .await;
             self.history.write().await.push(ChatMessage::tool_result(
                 tc.id.clone(),
                 output,
@@ -1017,6 +1111,24 @@ impl Harness {
         }
         if arm {
             self.verify_armed.store(true, Ordering::SeqCst);
+        }
+        // §A denial circuit breaker: LIMIT consecutive denials → an
+        // explicit stop-addendum lands as the next user-role message
+        // (bounded: one addendum per trip; journaled + evented).
+        if denial_streak_changed {
+            let streak = *self
+                .consecutive_denials
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if streak == DENIAL_BREAKER_LIMIT {
+                let addendum = format!(
+                    "[circuit breaker] {DENIAL_BREAKER_LIMIT} consecutive permission denials — the same call keeps failing closed. STOP retrying it: change the approach or ask the user. Identical retries will keep being denied."
+                );
+                let _ = self.journal_rec(&JournalRecord::Steer {
+                    text: addendum.clone(),
+                });
+                self.history.write().await.push(ChatMessage::user(addendum));
+            }
         }
         any_error
     }
@@ -1064,10 +1176,17 @@ impl Harness {
         }
         // Stage 1: micro-compaction — elide stale tool results (cheap,
         // pure, no provider call). Protected tail keeps the live exchange
-        // intact; errors are never elided.
+        // intact — §C2: with a known window the tail is sized in TOKENS
+        // (2.5% clamped [10k, 25k]) on top of the message-count floor;
+        // errors are never elided.
         {
             let mut history = self.history.write().await;
-            let removed = crate::compact::micro_compact(&mut history, threshold, 6);
+            let removed = crate::compact::micro_compact_budget(
+                &mut history,
+                threshold,
+                6,
+                Some(crate::compact::tail_budget_tokens(self.context_window)),
+            );
             if removed > 0 {
                 let after =
                     (history.iter().map(|m| m.content.len() as u64).sum::<u64>()).div_ceil(4);
@@ -1124,6 +1243,11 @@ impl Harness {
     }
 
     /// D4: compaction via the Small role, usage returned for ledgering.
+    /// §C: the summary prompt carries a VERBATIM user-message section
+    /// (24k chars total / 4k per message, newest-first — Hermes lean
+    /// summary spec) and a recovery footer steering to the session
+    /// search tool, so post-compaction work can still reach pre-compaction
+    /// facts through the journal.
     async fn compact_via_small(&self) -> crate::Result<(String, Usage, String)> {
         let router = self.router.read().await;
         let (entry, _tried) = router.resolve(Role::Small, |_| true)?;
@@ -1148,10 +1272,36 @@ impl Harness {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        // Verbatim user messages, newest-first, hard-capped: 4000 chars
+        // per message, 24000 chars total. Deterministic selection.
+        const VERBATIM_TOTAL_CAP: usize = 24_000;
+        const VERBATIM_PER_MSG_CAP: usize = 4_000;
+        let mut verbatim = String::new();
+        for m in history.iter().rev().filter(|m| m.role == "user") {
+            if verbatim.len() >= VERBATIM_TOTAL_CAP {
+                break;
+            }
+            let mut t: String = m.content.chars().take(VERBATIM_PER_MSG_CAP).collect();
+            if m.content.chars().count() > VERBATIM_PER_MSG_CAP {
+                t.push_str(" …[truncated]");
+            }
+            let room = VERBATIM_TOTAL_CAP - verbatim.len();
+            let t: String = t.chars().take(room).collect();
+            verbatim.push_str("\n---\n");
+            verbatim.push_str(&t);
+        }
+        if verbatim.is_empty() {
+            verbatim.push_str("\n---\n(no user messages)");
+        }
         let req = ChatRequest {
             messages: vec![ChatMessage::user(format!(
                 "Summarize the following conversation for context continuation. \
-                 Keep file paths, decisions, and pending work.\n\n{body}"
+                 Keep file paths, decisions, and pending work.\
+                 \n\n=== VERBATIM RECENT USER REQUESTS (newest first; preserve these goals EXACTLY) ==={verbatim}\
+                 \n\n=== CONVERSATION ===\
+                 \n{body}\
+                 \n\nNOTE: older tool outputs may have been elided or summarized away. \
+                 For exact details from earlier in this session, run the SessionSearch tool with keywords from the original task."
             ))],
             ..Default::default()
         };
@@ -1177,12 +1327,23 @@ impl Harness {
 }
 
 pub fn system_prompt(ctx: &LoopCtx) -> String {
-    format!(
+    system_prompt_with_nudge(ctx, None)
+}
+
+/// System prompt with an optional cadence note (§S memory nudge). The
+/// note is appended as its own line; `None` keeps the base prompt byte-
+/// identical (reversible, observable).
+pub fn system_prompt_with_nudge(ctx: &LoopCtx, nudge: Option<&str>) -> String {
+    let base = format!(
         "You are Marfim, a coding agent (Rust v{}). Working directory: {}. \
 Use the provided tools to read, edit and run code. Be precise and verify your work.",
         crate::VERSION,
         ctx.cwd
-    )
+    );
+    match nudge {
+        Some(n) if !n.is_empty() => format!("{base}\n{n}"),
+        _ => base,
+    }
 }
 
 #[cfg(test)]
@@ -1202,6 +1363,9 @@ mod tests {
         pub started: Mutex<Vec<(String, std::time::Instant)>>,
         /// Tools scripted to return an error result (D12 stop-on-fail path).
         pub fail_tools: Mutex<Vec<String>>,
+        /// Tools scripted to be DENIED by the permission surface (the
+        /// tools_host contract: the error text starts with "permission denied").
+        pub deny_tools: Mutex<Vec<String>>,
     }
 
     impl ScriptedTools {
@@ -1213,6 +1377,7 @@ mod tests {
                 slow_ms: Mutex::new(None),
                 started: Mutex::new(vec![]),
                 fail_tools: Mutex::new(vec![]),
+                deny_tools: Mutex::new(vec![]),
             }
         }
     }
@@ -1230,6 +1395,9 @@ mod tests {
             }
             if self.fail_tools.lock().unwrap().iter().any(|t| t == tool) {
                 return (format!("{tool} failed (scripted error)"), true);
+            }
+            if self.deny_tools.lock().unwrap().iter().any(|t| t == tool) {
+                return ("permission denied: explicit deny rule".to_string(), true);
             }
             self.executed
                 .lock()
@@ -1310,6 +1478,8 @@ mod tests {
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
+            consecutive_denials: std::sync::Mutex::new(0),
+            last_turn_aborted: AtomicBool::new(false),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1464,6 +1634,8 @@ mod tests {
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
+            consecutive_denials: std::sync::Mutex::new(0),
+            last_turn_aborted: AtomicBool::new(false),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -1913,6 +2085,8 @@ mod tests {
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
+            consecutive_denials: std::sync::Mutex::new(0),
+            last_turn_aborted: AtomicBool::new(false),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -2006,6 +2180,8 @@ mod tests {
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
+            consecutive_denials: std::sync::Mutex::new(0),
+            last_turn_aborted: AtomicBool::new(false),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
@@ -2375,5 +2551,211 @@ mod tests {
                 .any(|m| m.role == "assistant" && m.content.contains("second turn")),
             "second turn ran on the default chain (overrides cleared)"
         );
+    }
+
+    // ---- Distillation batch 2 tests (§A breaker, §W healing, §R2 key,
+    //      §S nudge, §C verbatim+footer, §C2 tail budget) ----
+
+    #[test]
+    fn prompt_cache_key_is_prefixed_and_capped() {
+        let k = prompt_cache_key("0123456789abcdef".repeat(8).as_str());
+        assert!(k.starts_with("pc_"));
+        assert!(k.len() <= 64, "len {}", k.len());
+        assert_eq!(prompt_cache_key("abc"), "pc_abc");
+    }
+
+    #[test]
+    fn system_prompt_nudge_appends_only_when_present() {
+        let ctx = LoopCtx::default();
+        let base = system_prompt(&ctx);
+        let with = system_prompt_with_nudge(&ctx, Some(MEMORY_NUDGE));
+        assert!(with.starts_with(&base));
+        assert!(with.contains(MEMORY_NUDGE));
+        assert_eq!(system_prompt_with_nudge(&ctx, None), base);
+        assert_eq!(system_prompt_with_nudge(&ctx, Some("")), base);
+    }
+
+    #[tokio::test]
+    async fn interrupt_healing_closes_aborted_exchange_structurally() {
+        let tools = Arc::new(ScriptedTools::new());
+        let script = vec![MockProvider::text("answer")];
+        let (h, _bus) = harness(script, tools);
+        // simulate an aborted turn that left a trailing user message
+        h.history
+            .write()
+            .await
+            .push(ChatMessage::user("was cut off"));
+        h.last_turn_aborted.store(true, Ordering::SeqCst);
+        let stop = h.run_turn("next question").await;
+        assert_eq!(stop, StopReason::EndTurn);
+        let hist = h.history.read().await;
+        assert!(
+            hist.iter()
+                .any(|m| m.role == "assistant" && m.content == INTERRUPT_PLACEHOLDER),
+            "structural placeholder closes the aborted exchange"
+        );
+        // and it is NOT re-added on the next turn
+        let placeholders = hist
+            .iter()
+            .filter(|m| m.content == INTERRUPT_PLACEHOLDER)
+            .count();
+        assert_eq!(placeholders, 1);
+    }
+
+    #[tokio::test]
+    async fn no_healing_when_previous_turn_ended_cleanly() {
+        let tools = Arc::new(ScriptedTools::new());
+        let script = vec![MockProvider::text("ok")];
+        let (h, _bus) = harness(script, tools);
+        h.history.write().await.push(ChatMessage::user("old"));
+        h.last_turn_aborted.store(false, Ordering::SeqCst);
+        let _ = h.run_turn("new").await;
+        let hist = h.history.read().await;
+        assert!(
+            !hist.iter().any(|m| m.content == INTERRUPT_PLACEHOLDER),
+            "clean history is never touched"
+        );
+    }
+
+    #[tokio::test]
+    async fn denial_circuit_breaker_injects_stop_addendum_at_three() {
+        // Four denied Read calls: the streak trips at exactly 3, so ONE
+        // addendum lands; the 4th denial does not add a second one.
+        let tools = Arc::new(ScriptedTools::new());
+        tools.deny_tools.lock().unwrap().push("Read".into());
+        let script = vec![
+            MockProvider::tool_call("c1", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::tool_call("c2", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::tool_call("c3", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::tool_call("c4", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::text("gave up"),
+        ];
+        let (h, _bus) = harness(script, tools);
+        let stop = h.run_turn("try reads").await;
+        assert_eq!(stop, StopReason::EndTurn);
+        let hist = h.history.read().await;
+        let addenda = hist
+            .iter()
+            .filter(|m| m.role == "user" && m.content.contains("[circuit breaker]"))
+            .count();
+        assert_eq!(addenda, 1, "exactly one addendum at the LIMIT");
+        assert_eq!(h.denied_tools.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
+    async fn denial_streak_resets_on_a_successful_call_and_at_turn_end() {
+        let tools = Arc::new(ScriptedTools::new());
+        tools.deny_tools.lock().unwrap().push("Read".into());
+        // deny, deny, SUCCESS (Write), deny, deny → never trips (streak
+        // broken by the success).
+        let script = vec![
+            MockProvider::tool_call("c1", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::tool_call("c2", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::tool_call("c3", "Write", serde_json::json!({"path": "a"})),
+            MockProvider::tool_call("c4", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::tool_call("c5", "Read", serde_json::json!({"path": "a"})),
+            MockProvider::text("done"),
+        ];
+        let (h, _bus) = harness(script, tools);
+        let _ = h.run_turn("mixed").await;
+        let hist = h.history.read().await;
+        assert!(
+            !hist.iter().any(|m| m.content.contains("[circuit breaker]")),
+            "streak broken by success — no addendum"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_summary_prompt_carries_verbatim_and_footer() {
+        let tools = Arc::new(ScriptedTools::new());
+        let script = vec![MockProvider::text("step text")];
+        let (h, _bus) = harness(script, tools);
+        h.history.write().await.push(ChatMessage::user(
+            "please fix the frobnicator in src/lib.rs",
+        ));
+        h.history
+            .write()
+            .await
+            .push(ChatMessage::assistant("working on it"));
+        // Keep the typed Arc so the captured calls stay reachable.
+        let small_mock = Arc::new(MockProvider::new(vec![MockProvider::text("summary")]));
+        h.router.write().await.set_chain(
+            Role::Small,
+            vec![crate::router::ModelEntry {
+                model: "mock-small".into(),
+                provider: small_mock.clone(),
+                priced: true,
+            }],
+        );
+        let (_s, _u, _m) = h.compact_via_small().await.unwrap();
+        let calls = small_mock.calls.lock().unwrap();
+        let body = calls.last().unwrap().messages[0].content.clone();
+        assert!(
+            body.contains("VERBATIM RECENT USER REQUESTS"),
+            "verbatim section present"
+        );
+        assert!(
+            body.contains("frobnicator in src/lib.rs"),
+            "user message text carried verbatim"
+        );
+        assert!(
+            body.contains("SessionSearch"),
+            "recovery footer steers to session search"
+        );
+        assert!(body.contains("=== CONVERSATION ==="));
+    }
+
+    #[tokio::test]
+    async fn run_turn_request_carries_session_prompt_cache_key() {
+        let tools = Arc::new(ScriptedTools::new());
+        let primary_mock = Arc::new(MockProvider::new(vec![MockProvider::text("hi")]));
+        let (h, _bus) = harness(vec![], tools);
+        h.router.write().await.set_chain(
+            Role::Primary,
+            vec![crate::router::ModelEntry {
+                model: "mock-primary".into(),
+                provider: primary_mock.clone(),
+                priced: true,
+            }],
+        );
+        let _ = h.run_turn("q").await;
+        let calls = primary_mock.calls.lock().unwrap();
+        let key = calls.last().unwrap().prompt_cache_key.clone();
+        assert_eq!(key, Some(prompt_cache_key(&h.ctx.session_id)));
+        assert!(key.unwrap().starts_with("pc_"));
+    }
+
+    #[tokio::test]
+    async fn memory_nudge_fires_every_tenth_turn() {
+        let tools = Arc::new(ScriptedTools::new());
+        // Empty script: the mock answers with its default step forever,
+        // so the test can drive 12 real turns.
+        let primary_mock = Arc::new(MockProvider::new(vec![]));
+        let (h, _bus) = harness(vec![], tools);
+        h.router.write().await.set_chain(
+            Role::Primary,
+            vec![crate::router::ModelEntry {
+                model: "mock-primary".into(),
+                provider: primary_mock.clone(),
+                priced: true,
+            }],
+        );
+        for _ in 0..12 {
+            let _ = h.run_turn("q").await;
+        }
+        let calls = primary_mock.calls.lock().unwrap();
+        assert_eq!(calls.len(), 12);
+        let nudged: Vec<usize> = calls
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| {
+                r.system
+                    .as_deref()
+                    .map(|s| s.contains(MEMORY_NUDGE))
+                    .unwrap_or(false)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(nudged, vec![9], "exactly turn 10 (0-based index 9)");
     }
 }

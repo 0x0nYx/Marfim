@@ -15,7 +15,7 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | Surface | Rust status |
 |---|---|
 | 34 tools (Node v1.2.0 names) | 🦢✅ (`marfim-tools`, AstQuery/Eval/JsModuleGraph honestly gated on external binaries) |
-| 65 slash commands + aliases | 🦢✅ (`marfim` REPL) |
+| 67 slash commands + aliases (65 Node + /why + /forget) | 🦢✅ (`marfim` REPL) |
 | Headless text/json/stream-json | 🦢✅ (e2e-tested against the binary) |
 | OpenAI-compat + Anthropic wires + mock | 🦢✅ (differential-tested vs Node goldens) |
 | Router roles + failover + fail-closed pricing | 🦢✅ |
