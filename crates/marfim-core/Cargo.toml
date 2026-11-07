@@ -30,15 +30,16 @@ landlock = "0.4"
 
 # W1.5: in-process git backend (feature-gated; heavy dep — the default
 # build ships CliGit, the `git` CLI wrapper).
-gix = { version = "0.69", optional = true, default-features = false, features = [
+gix = { version = "0.90", optional = true, default-features = false, features = [
     "parallel",
+    "sha1",
     "revision",
     "status",
     "blob-diff",
     "dirwalk",
     "index",
     "worktree-mutation",
-    "tree-editor",
+    "worktree-stream",
 ] }
 
 [features]

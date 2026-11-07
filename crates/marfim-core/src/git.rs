@@ -212,9 +212,7 @@ mod gix_impl {
                 .map_err(|e| e.to_string())?;
             for item in iter {
                 match item {
-                    Ok(gix::status::index_worktree::iter::Item::Modification {
-                        rela_path, ..
-                    }) => {
+                    Ok(gix::status::index_worktree::Item::Modification { rela_path, .. }) => {
                         s.dirty = true;
                         s.modified.push(rela_path.to_str_lossy().into_owned());
                     }
@@ -377,24 +375,42 @@ mod gix_impl {
                 .peel_to_tree()
                 .map_err(|e| format!("gix: {e}"))?
                 .id;
-            let mut index = repo
-                .index_from_tree(&tree)
-                .map_err(|e| format!("gix: {e}"))?;
+            let (mut stream, mut index) = repo
+                .worktree_stream(tree)
+                .map_err(|e| format!("gix stream: {e}"))?;
             let wt = repo
                 .worktree()
                 .ok_or("gix: bare repository has no worktree")?
                 .base()
                 .to_path_buf();
-            gix::worktree::state::checkout(
-                &mut index,
-                wt,
-                repo.clone(),
-                &gix::progress::Discard,
-                &gix::progress::Discard,
-                &std::sync::atomic::AtomicBool::default(),
-                Default::default(),
-            )
-            .map_err(|e| format!("gix checkout: {e}"))?;
+            // materialize the tree: the stream yields entries in order,
+            // each fully read before the next
+            while let Some(mut entry) = stream
+                .next_entry()
+                .map_err(|e| format!("gix stream entry: {e}"))?
+            {
+                let rel = entry
+                    .relative_path()
+                    .to_path()
+                    .map_err(|e| format!("gix: non-utf8 path in tree: {e}"))?;
+                let dest = wt.join(rel);
+                if entry.mode.is_tree() {
+                    std::fs::create_dir_all(&dest)
+                        .map_err(|e| format!("mkdir {}: {e}", dest.display()))?;
+                } else {
+                    if let Some(parent) = dest.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+                    }
+                    use std::io::Read as _;
+                    let mut buf = Vec::new();
+                    entry
+                        .read_to_end(&mut buf)
+                        .map_err(|e| format!("read {}: {e}", dest.display()))?;
+                    std::fs::write(&dest, buf)
+                        .map_err(|e| format!("write {}: {e}", dest.display()))?;
+                }
+            }
             index
                 .write(Default::default())
                 .map_err(|e| format!("gix index write: {e}"))?;
