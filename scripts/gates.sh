@@ -4,12 +4,15 @@
 # phase spec (G1 hygiene, G2 no-silent-mocks, G3 loop invariants, G4 wire
 # compat, G5 sandbox fail-closed, G6 determinism, G7 no placeholders,
 # G8 no Node/Python, G9 version/license/docs consistency, G10 release
-# artifacts).
+# artifacts; W0.3 adds G11 protocol fixtures, G12 mobile build+size,
+# G13 emulator suite, G14 FFI hygiene). A gate whose artifact does not
+# exist yet SKIPs with the activating ledger row — a SKIP is never a PASS.
 set -u
 export CARGO_INCREMENTAL=0
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 ok()  { echo "PASS G$1: $2"; PASS=$((PASS+1)); }
 bad() { echo "FAIL G$1: $2"; FAIL=$((FAIL+1)); }
+skip(){ echo "SKIP G$1: $2"; SKIP=$((SKIP+1)); }
 
 # G1 + G7 live as the enforced hygiene test; run it explicitly.
 if cargo test -p marfim-core --test source_hygiene 2>/dev/null | grep -q "test result: ok"; then
@@ -90,6 +93,60 @@ else
   bad 10 "release binary missing"
 fi
 
+# G11: protocol-fixture contract — Rust regen must be byte-identical to
+# fixtures/protocol/*.json (activates at W2.2; SKIP until then).
+if [ -d fixtures/protocol ] && ls fixtures/protocol/*.json >/dev/null 2>&1; then
+  if cargo test -p marfim-gateway --test protocol_fixtures 2>/dev/null | grep -q "test result: ok"; then
+    ok 11 "protocol fixtures regenerate byte-identical ($(ls fixtures/protocol/*.json | wc -l | tr -d ' ') files)"
+  else
+    bad 11 "protocol fixture regen test failed"
+  fi
+else
+  skip 11 "fixtures/protocol/ not shipped yet (W2.2)"
+fi
+
+# G12: mobile build + size budget — needs cargo-ndk + the android target
+# (activates at W4.2; SKIP when the toolchain is absent, e.g. desktop CI).
+if command -v cargo-ndk >/dev/null 2>&1 && rustup target list --installed 2>/dev/null | grep -q aarch64-linux-android && [ -d apps/flutter ]; then
+  if cargo ndk -t arm64-v8a -o apps/flutter/android/app/src/main/jniLibs build --release -p marfim-ffi 2>/dev/null; then
+    SO=apps/flutter/android/app/src/main/jniLibs/arm64-v8a/libmarfim_ffi.so
+    SIZE=$(stat -c%s "$SO" 2>/dev/null || echo 0)
+    if [ "$SIZE" -gt 0 ] && [ "$SIZE" -le 36700160 ]; then
+      ok 12 "libmarfim_ffi.so ${SIZE} bytes (<=35MB budget)"
+    else
+      bad 12 "libmarfim_ffi.so size ${SIZE} over budget"
+    fi
+  else
+    bad 12 "cargo-ndk build failed"
+  fi
+else
+  skip 12 "android toolchain or apps/flutter absent (W4.2)"
+fi
+
+# G13: emulator instrumented suite (activates at W4.4; SKIP without adb+device).
+if command -v adb >/dev/null 2>&1 && adb devices 2>/dev/null | grep -q "emulator\|device$"; then
+  if [ -d apps/flutter ]; then
+    (cd apps/flutter && flutter test integration_test 2>/dev/null | grep -q "All tests passed") && ok 13 "emulator instrumented suite green" || bad 13 "emulator suite failed"
+  else
+    skip 13 "apps/flutter absent (W4.4)"
+  fi
+else
+  skip 13 "no adb device/emulator attached (W4.4)"
+fi
+
+# G14: FFI hygiene — marfim-ffi is the ONLY crate allowed unsafe: every
+# unsafe block carries a SAFETY comment, every extern fn wraps
+# catch_unwind, forbid(unsafe) stays everywhere else (activates at W4.1).
+if [ -d crates/marfim-ffi ]; then
+  if cargo test -p marfim-ffi --test ffi_hygiene 2>/dev/null | grep -q "test result: ok"; then
+    ok 14 "FFI hygiene: SAFETY comments + catch_unwind + forbid-elsewhere green"
+  else
+    bad 14 "FFI hygiene test failed"
+  fi
+else
+  skip 14 "crates/marfim-ffi not shipped yet (W4.1)"
+fi
+
 echo "----"
-echo "gates: $PASS passed, $FAIL failed"
+echo "gates: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]
