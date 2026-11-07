@@ -338,8 +338,13 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
         }
 
         let handle = tokio::spawn(async move {
-            // role-restricted permissions (D16)
-            let (perm, mut approval_rx) = PermissionEngine::new(mode, vec![]);
+            // role-restricted permissions (D16) + §G blocked-tool deny
+            // rules (children never recurse, never write the parent's
+            // memory/journal): ONE engine owns both the approval queue
+            // and the host path — deny>ask>allow stays authoritative.
+            let rules = marfim_tools::subagent::blocked_rules(&agent);
+            let (engine, mut approval_rx) = PermissionEngine::new(mode, rules);
+            let perm = Arc::new(engine);
             tokio::spawn(async move {
                 // subagents never prompt the user: asks fail closed
                 while let Some(job) = approval_rx.recv().await {
@@ -354,7 +359,7 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
                 ..Default::default()
             };
             let host = HostTools::new(
-                Arc::new(PermissionEngine::new(mode, vec![]).0),
+                perm.clone(),
                 tool_ctx.clone(),
                 Sandbox::probe(),
                 marfim_core::hooks::Hooks::default(),
@@ -396,7 +401,7 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
                     },
                 )),
                 ctx,
-                Arc::new(perm),
+                perm,
                 24,
                 1,
                 120_000,

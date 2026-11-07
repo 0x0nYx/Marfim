@@ -160,7 +160,7 @@ applied as the acceptance filter.
 |---|---|---|
 | Platform-specific toolset presets (untrusted webhook surface gets only web_search/web_extract/vision/clarify) | Hermes `toolsets.py` | QUEUED — maps to Marfim gateway tool filtering |
 | Async delegation ledger (SQLite dispatch rows, replay ≤48h, ≤8 attempts, orphan sweep 30s, results enter as NEW turn) | Hermes `async_delegation.py` | QUEUED (L) — when subagents land |
-| Subagent contract (forced `yield`, per-call model/effort caps, yolo-forced children, blocked-tool set {delegate, clarify, memory, send_message, cron}, worktree isolation) | OMP task tool + Hermes delegation | QUEUED (L) |
+| Subagent contract (forced `yield`, per-call model/effort caps, yolo-forced children, blocked-tool set {delegate, clarify, memory, send_message, cron}, worktree isolation) | OMP task tool + Hermes delegation | PARTIAL — blocked-tool set ADOPTED (batch 3): `subagent::blocked_rules` denies {Task, TaskOutput, Memory, SessionSearch, Monitor, MonitorKill} on the child engine (deny>ask>allow; recursion + parent channels closed); forced yield already held (TaskOutput poll → results enter as a NEW turn); worktree isolation already held (D16); per-call model/effort caps QUEUED (the spawner has no model surface yet — honest refusal, not a stub) |
 | Cron: natural-language 5 schedule forms, `paused_reason` audit, missed-run catch-up, per-job model pinning, `[SILENT]`/`[CRON_FAILURE]` markers | Hermes cron | QUEUED (M) |
 | Denial-breaker + coalesced pending approvals + request_id/settle | Hermes approval wait | QUEUED |
 | Browser URL/SSRF floors (IMDS unconditional, private/CGNAT gated on backend, JS URL-literal scan incl. scheme-relative) | Hermes `browser_url_policy.py` | QUEUED (M) — if a browser tool is added |
@@ -187,6 +187,10 @@ applied as the acceptance filter.
   wire; Gemini wire; router cooldown ladder + mark_failure/mark_success;
   compaction trigger math; TUI header usage/cost/ctx segments; presets +
   config `effort` key (10 presets).
+- **ADOPTED in batch 3 (this commit)**: the subagent blocked-tool
+  contract (children cannot recurse, write the parent's memory, read its
+  journal, or own long-lived monitors — whole-tool deny rules on the
+  child engine).
 - **ADOPTED in batch 2 (this commit)**: stream watchdogs; usage de-dup
   (DeepSeek/OpenRouter dialects); Anthropic 4-breakpoint cap;
   `prompt_cache_key`; token-budget compaction tail; verbatim summary

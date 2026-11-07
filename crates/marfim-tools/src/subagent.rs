@@ -45,6 +45,39 @@ pub fn agent_permissions(agent: &str) -> (marfim_core::permissions::Mode, String
     }
 }
 
+/// §G subagent contract (distilled: OMP task tool + Hermes delegation):
+/// tools a CHILD agent may NEVER call. Recursive delegation (Task /
+/// TaskOutput) closes fork bombs; Memory / SessionSearch are the parent
+/// session's channels (a child writing to the parent's user model or
+/// reading its journal would leak state across the boundary); Monitor /
+/// MonitorKill are long-lived surfaces a poll-based child cannot own.
+/// The binary turns this into deny RULES on the child's engine —
+/// deny>ask>allow keeps the engine the sole authority.
+pub fn blocked_tools(agent: &str) -> Vec<&'static str> {
+    let _ = agent;
+    vec![
+        "Task",
+        "TaskOutput",
+        "Memory",
+        "SessionSearch",
+        "Monitor",
+        "MonitorKill",
+    ]
+}
+
+/// The deny rules derived from [`blocked_tools`] (exact tool match, no
+/// argv prefix: whole-tool denial).
+pub fn blocked_rules(agent: &str) -> Vec<marfim_core::permissions::Rule> {
+    blocked_tools(agent)
+        .into_iter()
+        .map(|tool| marfim_core::permissions::Rule {
+            tool: tool.to_string(),
+            decision: marfim_core::permissions::Decision::Deny,
+            argv_prefix: None,
+        })
+        .collect()
+}
+
 /// Git-worktree isolation (D16): when the project is a git repo, subagents
 /// run in a detached worktree so mutations cannot touch the main checkout.
 pub struct WorktreeGuard {
@@ -230,6 +263,24 @@ mod tests {
             "worktree cleaned up"
         );
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn blocked_tools_close_recursion_and_parent_channels() {
+        use marfim_core::permissions::Decision;
+        // §G: the blocked set is persona-independent (a child is a child)
+        for persona in ["general", "explore", "reviewer", "unknown-x"] {
+            let rules = blocked_rules(persona);
+            let names: Vec<&str> = blocked_tools(persona);
+            assert_eq!(rules.len(), names.len());
+            assert!(names.contains(&"Task"), "recursion closed: {persona}");
+            assert!(names.contains(&"Memory"), "parent memory closed");
+            assert!(names.contains(&"SessionSearch"), "parent journal closed");
+            for r in &rules {
+                assert_eq!(r.decision, Decision::Deny);
+                assert!(r.argv_prefix.is_none(), "whole-tool denial");
+            }
+        }
     }
 
     #[test]

@@ -74,8 +74,16 @@ reversible, and tested.
 - CancelToken deadline audit documented on the type (OMP split
   semantics held by construction).
 
+### Step 5 / subagents (batch 3)
+- §G blocked-tool contract: child agents run with whole-tool DENY rules
+  on {Task, TaskOutput, Memory, SessionSearch, Monitor, MonitorKill} —
+  no recursive delegation, no writes to the parent's user model, no
+  reads of the parent's journal, no long-lived monitors. The child's
+  ONE PermissionEngine now serves both the approval queue (asks fail
+  closed) and the tool path (previously two disconnected engines).
+
 ### Gates
-- 577 tests green; fmt + clippy -D warnings + scripts/gates.sh (9/9)
+- 578 tests green; fmt + clippy -D warnings + scripts/gates.sh (9/9)
   green. COMMANDS 65 → 67 (docs updated in lockstep).
 
 ## 1.0.0 — engineering round 2 (2026-11-06)
