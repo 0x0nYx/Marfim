@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn notebook_edit_replaces_cell() {
-        let dir = std::env::temp_dir().join(format!("marfim-nb-{}", std::process::id()));
+        let dir = marfim_testkit::unique_dir("marfim-nb");
         let _ = std::fs::create_dir_all(&dir);
         let nb_path = dir.join("n.ipynb");
         std::fs::write(
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn bin_tools_work_on_real_bytes() {
-        let dir = std::env::temp_dir().join(format!("marfim-bin-{}", std::process::id()));
+        let dir = marfim_testkit::unique_dir("marfim-bin");
         let _ = std::fs::create_dir_all(&dir);
         let p = dir.join("blob.bin");
         let mut data = vec![0x7f, b'E', b'L', b'F'];
@@ -748,7 +748,7 @@ mod tests_extra {
 
     fn ctx() -> ToolCtx {
         ToolCtx {
-            cwd: std::env::temp_dir().join(format!("marfim-extra-{}", std::process::id())),
+            cwd: marfim_testkit::unique_dir("marfim-extra"),
             session_id: "t".into(),
             journal_path: Arc::new(std::sync::Mutex::new(None)),
             board: Arc::new(Default::default()),

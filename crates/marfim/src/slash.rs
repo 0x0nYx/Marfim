@@ -1184,15 +1184,11 @@ mod tests {
         // hermetic sessions dir: MARFIM_HOME set once per test process
         static HOME: std::sync::Once = std::sync::Once::new();
         HOME.call_once(|| {
-            let home = std::env::temp_dir().join(format!("marfim-home-{}", std::process::id()));
+            let home = marfim_testkit::unique_dir("marfim-home");
             let _ = std::fs::create_dir_all(&home);
             std::env::set_var("MARFIM_HOME", &home);
         });
-        let tmp = std::env::temp_dir().join(format!(
-            "marfim-slash-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let tmp = marfim_testkit::unique_dir("marfim-slash");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let harness = test_harness(&tmp).await;

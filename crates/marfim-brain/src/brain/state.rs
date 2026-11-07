@@ -477,8 +477,7 @@ mod tests {
 
     #[test]
     fn atomic_write_and_load_roundtrip() {
-        let dir =
-            std::env::temp_dir().join(format!("marfim-brain-state-test-{}", std::process::id()));
+        let dir = marfim_testkit::unique_dir("marfim-brain-state-test");
         let path = dir.join("nested").join("state.json");
         let state = json!({ "learner": { "alpha": 1.5, "counts": { "a": 2 } } });
         save_at(&state, &path).unwrap_or_else(|e| panic!("save: {e}"));

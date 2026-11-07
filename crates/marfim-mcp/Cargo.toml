@@ -15,4 +15,5 @@ serde_json.workspace = true
 async-trait.workspace = true
 
 [dev-dependencies]
+marfim-testkit = { path = "../marfim-testkit" }
 serde_json.workspace = true

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/marfim-testkit",
     "crates/marfim-core",
     "crates/marfim-tools",
     "crates/marfim-mcp",
@@ -11,7 +12,7 @@ members = [
 
 [workspace.package]
 version = "1.0.0"
-rust-version = "1.78"
+rust-version = "1.89"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/0x0nYx/Marfim"
@@ -33,8 +34,8 @@ http-body-util = "0.1"
 http-body = "1"
 bytes = "1"
 getrandom = "0.3"
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 
 [profile.release]
 strip = true

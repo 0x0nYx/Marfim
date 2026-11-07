@@ -112,14 +112,7 @@ fn tools_catalog() -> Arc<Vec<ToolInfo>> {
 }
 
 async fn start(steps: Vec<Step>) -> (u16, String) {
-    let dir = std::env::temp_dir().join(format!(
-        "marfim-serve-e2e-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    let dir = marfim_testkit::unique_dir("marfim-serve-e2e");
     let _ = std::fs::create_dir_all(&dir);
     let token = "e2e-secret".to_string();
     let state = ServeState::new(

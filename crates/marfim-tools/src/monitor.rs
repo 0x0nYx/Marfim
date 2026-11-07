@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn watch_detects_change() {
-        let dir = std::env::temp_dir().join(format!("marfim-mon-{}", std::process::id()));
+        let dir = marfim_testkit::unique_dir("marfim-mon");
         let _ = std::fs::create_dir_all(&dir);
         let f = dir.join("watched.txt");
         std::fs::write(&f, "v1").unwrap();

@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn worktree_isolation_creates_and_removes() {
-        let repo = std::env::temp_dir().join(format!("marfim-sub-repo-{}", std::process::id()));
+        let repo = marfim_testkit::unique_dir("marfim-sub-repo");
         let _ = std::fs::remove_dir_all(&repo);
         std::fs::create_dir_all(&repo).unwrap();
         let run = |args: &[&str]| {

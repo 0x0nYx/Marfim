@@ -384,7 +384,11 @@ mod tests {
         pub struct Temp(pub std::path::PathBuf);
         impl Temp {
             pub fn new(tag: &str) -> Self {
-                let p = std::env::temp_dir().join(format!("{tag}-{}", std::process::id()));
+                // pid + monotonic counter: parallel test threads in ONE process
+                // must never share a directory (the old pid-only scheme let a
+                // sibling test's remove_dir_all delete another test's fixtures
+                // mid-run — the CI MSRV flake class).
+                let p = marfim_testkit::unique_dir(tag);
                 let _ = std::fs::remove_dir_all(&p);
                 std::fs::create_dir_all(&p).unwrap();
                 Self(p)

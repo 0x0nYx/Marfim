@@ -17,3 +17,6 @@ futures-util.workspace = true
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1.10", default-features = false, features = ["server-auto", "tokio"] }
 http-body-util = "0.1"
+
+[dev-dependencies]
+marfim-testkit = { path = "../marfim-testkit" }

@@ -402,7 +402,7 @@ mod sandbox_policy_tests {
     use std::path::Path;
 
     fn tmp_root(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("marfim-sandbox-{tag}-{}", std::process::id()));
+        let d = marfim_testkit::unique_dir(&format!("marfim-sandbox-{tag}"));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d

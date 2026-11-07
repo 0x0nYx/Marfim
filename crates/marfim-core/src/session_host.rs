@@ -346,18 +346,13 @@ pub(crate) mod session_host_tests {
 
     /// Deterministic unique-ish journal path per test process+counter.
     fn scratch_journal(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("marfim-session-host-tests");
+        // NOTE: the counter is FILE-STATIC — the previous local AtomicU64::new(0)
+        // reset on every call, so uniqueness rested on wall-clock nanos.
+        static SCRATCH_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = marfim_testkit::unique_dir("marfim-session-host");
         let _ = std::fs::create_dir_all(&dir);
-        let n = std::sync::atomic::AtomicU64::new(0);
-        let k = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let path = dir.join(format!(
-            "{tag}-{}-{k}-{}.jsonl",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let k = SCRATCH_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let path = dir.join(format!("{tag}-{}-{k}.jsonl", std::process::id()));
         Journal::open(&path).expect("journal open");
         path
     }
@@ -389,13 +384,11 @@ pub(crate) mod session_host_tests {
             let mut rx = keep_rx;
             while rx.recv().await.is_some() {}
         });
+        static ID_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = format!(
             "sh-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(0)
+            ID_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         );
         let harness = Harness::new(
             bus,

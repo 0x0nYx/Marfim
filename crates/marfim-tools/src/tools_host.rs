@@ -688,7 +688,7 @@ mod tests {
         tokio::sync::mpsc::Receiver<marfim_core::permissions::ApprovalJob>,
     ) {
         let (perm, rx) = PermissionEngine::new(mode, rules);
-        let dir = std::env::temp_dir().join(format!("marfim-host-{}", std::process::id()));
+        let dir = marfim_testkit::unique_dir("marfim-host");
         let _ = std::fs::create_dir_all(&dir);
         let state = ToolCtx {
             cwd: dir,
@@ -844,7 +844,7 @@ mod tests {
         assert!(out.contains("no session journal"), "{out}");
 
         // with a journal attached: ranked hits come back
-        let dir = std::env::temp_dir().join(format!("marfim-ss-{}", std::process::id()));
+        let dir = marfim_testkit::unique_dir("marfim-ss");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("s.jsonl");
         let body = [
@@ -893,7 +893,7 @@ mod tests {
     async fn hook_failure_blocks_tool() {
         let (perm, rx) = PermissionEngine::new(Mode::Yolo, vec![]);
         drop(rx); // no approval listener
-        let dir = std::env::temp_dir().join(format!("marfim-host-{}", std::process::id()));
+        let dir = marfim_testkit::unique_dir("marfim-host");
         let _ = std::fs::create_dir_all(&dir);
         let state = ToolCtx {
             cwd: dir,

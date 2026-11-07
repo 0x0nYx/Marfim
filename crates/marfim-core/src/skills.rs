@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn discovers_sorted_skills() {
-        let root = std::env::temp_dir().join(format!("marfim-skills-{}", std::process::id()));
+        let root = marfim_testkit::unique_dir("marfim-skills");
         let _ = std::fs::remove_dir_all(&root);
         for n in ["b-skill", "a-skill"] {
             let d = root.join(n);

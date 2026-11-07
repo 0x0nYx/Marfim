@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.0.0 — CI-green: MSRV 1.89, supply-chain clean, race-free tests (2026-11-07)
+
+### Supply chain (cargo audit + cargo deny now exit 0, zero ignores)
+- `cargo update` + targeted bumps clear all 7 advisories without a single
+  documented ignore: quinn-proto 0.11.3→0.11.19 (RUSTSEC-2024-0373,
+  2026-0037/0338/0339/0340/0342), tokio 1.43.1→1.54.1 (RUSTSEC-2026-0386),
+  reqwest 0.12.9→0.12.28 (drops unmaintained rustls-pemfile), lru
+  0.12.5→0.18.5 (RUSTSEC-2026-0253/0002), ratatui 0.29→0.30.2 +
+  crossterm 0.28→0.29 (drops unmaintained `paste` from the tree
+  entirely).
+- **MSRV 1.78 → 1.89**: the advisory-clean tree floors above the old
+  target at every level — quinn-proto ≥0.11.17 (the only builds that fix
+  RUSTSEC-2026-*) declares rust ≥ 1.85, its cluster
+  (rand 0.10 → chacha20 0.10 → cpufeatures 0.3) ships manifests cargo
+  1.78 cannot parse, and the current locked set floors at 1.89
+  (uuid 1.29; ratatui 0.30 and the ICU 2.x chain floor at 1.88).
+  Downgrading any of these would regress a security fix. Security wins
+  over the older floor. CI's MSRV job, `rust-version`, and clippy `msrv`
+  all moved to 1.89; the pinned build toolchain stays 1.99.1.
+
+### Test infrastructure (three CI flake/failure classes fixed at the root)
+- **Race-free temp dirs**: the `temp_dir/{tag}-{pid}` scheme gave every
+  test thread in one process the SAME directory — a parallel test's
+  `remove_dir_all` deleted a sibling's fixtures mid-run (the MSRV-runner
+  failure class). New `marfim-testkit` dev-dependency (pid + per-process
+  monotonic counter) migrated into every test fixture across all six
+  crates; two tests that shared the same tag can no longer collide.
+- **D8 concurrency test is scheduler-proof**: the wall-clock assertion
+  (two 150ms tools must finish under 280ms) failed on loaded CI runners
+  (observed 535ms). Replaced with observed-overlap detection — an atomic
+  high-water mark of concurrent executions inside `ScriptedTools` —
+  which asserts exactly the property under test, independent of machine
+  speed.
+- **Portable Read fixture**: the MCP permission-path e2e read
+  `/etc/hostname` (Linux-only; macOS runners fail). The target is now a
+  test-created file with a portable absolute path.
+- `inv05` now reads the harness's journal path directly instead of
+  scanning a formerly-shared temp directory; `session_host` scratch
+  journals use a file-static counter (the old local `AtomicU64::new(0)`
+  reset on every call, leaving uniqueness to wall-clock nanos).
+
 ## 1.0.0 — ECC + Claude Code latest-build distillation (2026-11-07)
 
 Deep-extraction loop against the latest builds (ECC d2ef2680, claude-code

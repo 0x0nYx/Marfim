@@ -616,7 +616,9 @@ impl Harness {
                     &self.ctx,
                     // §S memory cadence: every Nth turn carries the
                     // one-line review reminder in the system surface.
-                    (turn_counter_local % NUDGE_EVERY_TURNS == 0).then_some(MEMORY_NUDGE),
+                    turn_counter_local
+                        .is_multiple_of(NUDGE_EVERY_TURNS)
+                        .then_some(MEMORY_NUDGE),
                 )),
                 max_completion_tokens: self.sampling.max_completion_tokens,
                 temperature: self.sampling.temperature,
@@ -1366,6 +1368,12 @@ mod tests {
         /// Tools scripted to be DENIED by the permission surface (the
         /// tools_host contract: the error text starts with "permission denied").
         pub deny_tools: Mutex<Vec<String>>,
+        /// Concurrency probe: how many execute() calls are inside the scripted
+        /// sleep right now, and the high-water mark ever reached. Wall-clock
+        /// elapsed time is scheduler-dependent (a loaded CI runner stretches a
+        /// 150ms sleep past any fixed budget) — overlap itself is not.
+        pub active: std::sync::atomic::AtomicUsize,
+        pub max_active: std::sync::atomic::AtomicUsize,
     }
 
     impl ScriptedTools {
@@ -1378,6 +1386,8 @@ mod tests {
                 started: Mutex::new(vec![]),
                 fail_tools: Mutex::new(vec![]),
                 deny_tools: Mutex::new(vec![]),
+                active: std::sync::atomic::AtomicUsize::new(0),
+                max_active: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
@@ -1391,7 +1401,16 @@ mod tests {
                 .push((tool.to_string(), std::time::Instant::now()));
             let slow = *self.slow_ms.lock().unwrap();
             if let Some(ms) = slow {
+                // overlap probe: enter the sleep "inside" the call
+                let now = self
+                    .active
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                self.max_active
+                    .fetch_max(now, std::sync::atomic::Ordering::SeqCst);
                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                self.active
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             }
             if self.fail_tools.lock().unwrap().iter().any(|t| t == tool) {
                 return (format!("{tool} failed (scripted error)"), true);
@@ -1457,7 +1476,7 @@ mod tests {
             cwd: "/tmp".into(),
             cancel: CancelToken::default(),
         };
-        let tmpdir = std::env::temp_dir().join(format!("marfim-loop-{}", std::process::id()));
+        let tmpdir = marfim_testkit::unique_dir("marfim-loop");
         let _ = std::fs::create_dir_all(&tmpdir);
         let journal = Journal::open(&tmpdir.join(format!("loop-{}.jsonl", rand_suffix()))).unwrap();
         let h = Harness {
@@ -1568,23 +1587,13 @@ mod tests {
         let tools = Arc::new(ScriptedTools::new());
         let (h, _bus) = harness(vec![MockProvider::text("done")], tools);
         let _ = h.run_turn("hi").await;
-        let tmpdir = std::env::temp_dir().join(format!("marfim-loop-{}", std::process::id()));
-        let mut found = false;
-        for e in std::fs::read_dir(&tmpdir).unwrap() {
-            let p = e.unwrap().path();
-            if p.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with("loop-")
-            {
-                let recs = crate::journal::Journal::replay(&p).unwrap();
-                if recs.iter().any(
-                    |r| matches!(r, JournalRecord::Usage { model, .. } if model == "mock-primary"),
-                ) {
-                    found = true;
-                }
-            }
-        }
+        // The harness owns its journal path — read it directly instead of
+        // scanning a (formerly shared) temp directory for `loop-*` files.
+        let journal_path = h.journal.lock().unwrap().path().to_path_buf();
+        let recs = crate::journal::Journal::replay(&journal_path).unwrap();
+        let found = recs
+            .iter()
+            .any(|r| matches!(r, JournalRecord::Usage { model, .. } if model == "mock-primary"));
         assert!(found, "usage with real model id must be journaled");
     }
 
@@ -2010,12 +2019,15 @@ mod tests {
             },
         ];
         h.history.write().await.push(ChatMessage::user("go"));
-        let t0 = std::time::Instant::now();
         h.execute_batch(&calls).await;
-        let elapsed = t0.elapsed();
-        assert!(
-            elapsed < std::time::Duration::from_millis(280),
-            "two 150ms safe tools must overlap (D8), took {elapsed:?}"
+        // D8 concurrency is asserted by OBSERVED OVERLAP, not elapsed time:
+        // two futures run in parallel iff both were inside their sleeps at the
+        // same moment. Sequential execution caps the mark at 1 regardless of
+        // how fast or slow the machine is — the assertion is scheduler-proof.
+        let max_active = tools.max_active.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            max_active, 2,
+            "two 150ms safe tools must overlap (D8); observed max concurrency {max_active}"
         );
         let hist = h.history.read().await;
         let ids: Vec<&str> = hist
@@ -2065,7 +2077,7 @@ mod tests {
             }],
         );
         let (perm, _rx) = PermissionEngine::new(Mode::Yolo, vec![]);
-        let tmpdir = std::env::temp_dir().join(format!("marfim-tmo-{}", std::process::id()));
+        let tmpdir = marfim_testkit::unique_dir("marfim-tmo");
         let _ = std::fs::create_dir_all(&tmpdir);
         let h = Harness {
             bus: bus.clone(),
@@ -2160,7 +2172,7 @@ mod tests {
             }],
         );
         let (perm, _rx) = PermissionEngine::new(Mode::Yolo, vec![]);
-        let tmpdir = std::env::temp_dir().join(format!("marfim-failover-{}", std::process::id()));
+        let tmpdir = marfim_testkit::unique_dir("marfim-failover");
         let _ = std::fs::create_dir_all(&tmpdir);
         let h = Harness {
             bus: bus.clone(),

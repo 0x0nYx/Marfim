@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn roundtrip_file() {
-        let p = std::env::temp_dir().join(format!("marfim-mem-{}.json", std::process::id()));
+        let p = marfim_testkit::unique_dir("marfim-mem").with_extension("json");
         let mut m = MemoryStore::default();
         m.remember("uses tabs not spaces", false);
         m.save(&p).unwrap();

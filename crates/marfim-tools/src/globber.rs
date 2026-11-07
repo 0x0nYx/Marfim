@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn walk_glob_finds_and_sorts() {
-        let root = std::env::temp_dir().join(format!("marfim-glob-{}", std::process::id()));
+        let root = marfim_testkit::unique_dir("marfim-glob");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("src/deep")).unwrap();
         std::fs::write(root.join("a.rs"), "1").unwrap();

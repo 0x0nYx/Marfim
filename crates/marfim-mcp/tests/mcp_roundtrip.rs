@@ -42,7 +42,7 @@ while IFS= read -r line; do
   esac
 done
 "#;
-    let tmp = std::env::temp_dir().join(format!("mcp-echo-{tag}-{}.sh", std::process::id()));
+    let tmp = marfim_testkit::unique_dir(&format!("mcp-echo-{tag}")).with_extension("sh");
     std::fs::write(&tmp, script).unwrap();
     #[cfg(unix)]
     {
@@ -92,7 +92,7 @@ async fn stale_id_server_fails_fast_and_honestly() {
     let script = r#"while IFS= read -r line; do
   echo "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2024-11-05\",\"serverInfo\":{\"name\":\"echo\"}}}"
 done"#;
-    let tmp = std::env::temp_dir().join(format!("mcp-stale-{}.sh", std::process::id()));
+    let tmp = marfim_testkit::unique_dir("mcp-stale").with_extension("sh");
     std::fs::write(&tmp, script).unwrap();
     #[cfg(unix)]
     {

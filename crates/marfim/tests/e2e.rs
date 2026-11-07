@@ -18,11 +18,7 @@ fn bin_path() -> std::path::PathBuf {
 
 /// Hermetic child environment: journals land in a temp MARFIM_HOME.
 fn isolated_child(args: &[&str]) -> std::process::Command {
-    let home = std::env::temp_dir().join(format!(
-        "marfim-e2e-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
+    let home = marfim_testkit::unique_dir("marfim-e2e");
     let _ = std::fs::create_dir_all(&home);
     let mut c = Command::new(bin_path());
     c.args(args).env("MARFIM_HOME", &home).current_dir("/tmp");
@@ -95,11 +91,7 @@ fn headless_json_contract() {
 #[test]
 fn headless_json_contract_via_config_file() {
     // D13: the provider can come from the layered config file
-    let home = std::env::temp_dir().join(format!(
-        "marfim-e2e-cfg-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
+    let home = marfim_testkit::unique_dir("marfim-e2e-cfg");
     std::fs::create_dir_all(home.join(".marfim")).unwrap();
     std::fs::write(
         home.join(".marfim").join("config.toml"),
@@ -122,11 +114,7 @@ fn headless_json_contract_via_config_file() {
 #[test]
 fn headless_without_provider_is_an_explicit_error_not_mock() {
     // D11: no silent mock — missing provider config is a hard error
-    let home = std::env::temp_dir().join(format!(
-        "marfim-e2e-noprov-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
+    let home = marfim_testkit::unique_dir("marfim-e2e-noprov");
     let _ = std::fs::create_dir_all(&home);
     let mut c = Command::new(bin_path());
     c.args(["-p", "hello"])
@@ -396,11 +384,7 @@ fn serve_healthz_on_loopback() {
 
 /// Hermetic MARFIM_HOME with a mock-provider config; returns (home, config dir).
 fn mock_config_home(tag: &str) -> std::path::PathBuf {
-    let home = std::env::temp_dir().join(format!(
-        "marfim-e2e-{tag}-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
+    let home = marfim_testkit::unique_dir(&format!("marfim-e2e-{tag}"));
     std::fs::create_dir_all(home.join(".marfim")).unwrap();
     std::fs::write(
         home.join(".marfim").join("config.toml"),
@@ -708,6 +692,11 @@ fn mcp_server_runs_all_tools_through_permission_path() {
     // `marfim mcp` serves the builtin catalog over stdio and routes EVERY
     // tools/call through the PermissionEngine (the old read-only refusal
     // is gone). stdin is the protocol, so Ask verdicts fail closed.
+    // The Read target must exist on EVERY platform (the old fixture was
+    // /etc/hostname — Linux-only, so macOS runners failed the "real
+    // execution" leg): a test-created file with a portable absolute path.
+    let read_target = marfim_testkit::unique_dir("mcp-perm-read").with_extension("txt");
+    std::fs::write(&read_target, "perm-path-body").unwrap();
     let home = mock_config_home("mcp-server");
     let mut child = Command::new(bin_path())
         .arg("mcp")
@@ -718,11 +707,16 @@ fn mcp_server_runs_all_tools_through_permission_path() {
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
-    let reqs = concat!(
+    let read_req = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"Read\",\"arguments\":{{\"path\":\"{}\"}}}}}}\n",
+        read_target.display()
+    );
+    let reqs = format!(
+        "{}{}{}{}",
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n",
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"Bash\",\"arguments\":{\"command\":\"echo perm-path\"}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"Read\",\"arguments\":{\"path\":\"/etc/hostname\"}}}\n",
+        read_req
     );
     stdin.write_all(reqs.as_bytes()).unwrap();
     drop(stdin);

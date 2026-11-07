@@ -13,3 +13,6 @@ serde_json.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 futures-util.workspace = true
+
+[dev-dependencies]
+marfim-testkit = { path = "../marfim-testkit" }

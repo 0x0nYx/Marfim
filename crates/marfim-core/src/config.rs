@@ -284,8 +284,8 @@ mod tests {
     // ---------------------------------------------------------- D13
     #[test]
     fn layered_config_cwd_overrides_home_and_trust_gate_blocks_cwd_layer() {
-        let home = std::env::temp_dir().join(format!("marfim-cfg-h-{}", std::process::id()));
-        let cwd = std::env::temp_dir().join(format!("marfim-cwd-{}", std::process::id()));
+        let home = marfim_testkit::unique_dir("marfim-cfg-h");
+        let cwd = marfim_testkit::unique_dir("marfim-cwd");
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&cwd);
         std::fs::create_dir_all(home.join(".marfim")).unwrap();
@@ -322,8 +322,8 @@ mod tests {
         // distilled: claude-code 2.1.318 config-integrity wave — a damaged
         // config must fail the start with a readable error naming the file,
         // never be silently replaced by defaults, and never be mutated.
-        let home = std::env::temp_dir().join(format!("marfim-cfg-bad-{}", std::process::id()));
-        let cwd = std::env::temp_dir().join(format!("marfim-cwd-bad-{}", std::process::id()));
+        let home = marfim_testkit::unique_dir("marfim-cfg-bad");
+        let cwd = marfim_testkit::unique_dir("marfim-cwd-bad");
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&cwd);
         std::fs::create_dir_all(home.join(".marfim")).unwrap();

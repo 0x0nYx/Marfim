@@ -41,7 +41,11 @@ jobs:
           ./target/release/marfim sessions || true
 
   # MSRV gate: the oldest toolchain the workspace declares must build and
-  # pass the suite. `+1.78` overrides rust-toolchain.toml explicitly.
+  # pass the suite. `+1.85``+1.89` overrides rust-toolchain.toml explicitly.
+  # 1.89 is the floor of the advisory-clean dependency tree: the
+  # quinn-proto advisory fixes (RUSTSEC-2026-*) floor at 1.85, and the
+  # current locked set (uuid 1.29, ratatui 0.30) floors at 1.89 —
+  # see CHANGELOG (MSRV 1.78 -> 1.89).
   msrv:
     runs-on: ubuntu-latest
     env:
@@ -49,11 +53,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: rustup toolchain install 1.78 --profile minimal --no-self-update
-      - name: Test on MSRV 1.78
-        run: cargo +1.78 test --all
-      - name: Build binary on MSRV 1.78
-        run: cargo +1.78 build -p marfim
+      - run: rustup toolchain install 1.89 --profile minimal --no-self-update
+      - name: Test on MSRV 1.89
+        run: cargo +1.89 test --all
+      - name: Build binary on MSRV 1.89
+        run: cargo +1.89 build -p marfim
 
   # Supply-chain policy (deny.toml): licenses, bans, RustSec advisories.
   deny:

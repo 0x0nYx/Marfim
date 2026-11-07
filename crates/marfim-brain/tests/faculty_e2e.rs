@@ -61,7 +61,7 @@ async fn harness(script: Vec<Step>) -> (Arc<Harness>, EventBus) {
         }],
     );
     let (perm, _rx) = PermissionEngine::new(Mode::Yolo, vec![]);
-    let dir = std::env::temp_dir().join(format!("marfim-faculty-e2e-{}", std::process::id()));
+    let dir = marfim_testkit::unique_dir("marfim-faculty-e2e");
     let _ = std::fs::create_dir_all(&dir);
     let journal = Journal::open(&dir.join("e2e.jsonl")).unwrap();
     let ctx = LoopCtx {
