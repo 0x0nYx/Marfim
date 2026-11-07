@@ -442,10 +442,19 @@ mod sandbox_policy_tests {
         std::fs::write(root.join("real.txt"), "x").unwrap();
         std::os::unix::fs::symlink("/etc/passwd", root.join("evil")).unwrap();
         // the write target is the symlink INSIDE the root, but its
-        // resolution lands outside → escape
-        match path_within_roots(&root.join("evil"), &[root]) {
+        // resolution lands outside → escape. The resolved path must be
+        // the symlink's true canonical target — /etc is /private/etc on
+        // macOS, so an exact canonicalize comparison is the portable
+        // (and stricter) form of "lands at /etc/passwd".
+        let true_target = std::fs::canonicalize("/etc/passwd").unwrap();
+        let root_ref = root.clone();
+        match path_within_roots(&root.join("evil"), &[root_ref]) {
             Containment::Escapes { resolved } => {
-                assert!(resolved.starts_with("/etc"), "{resolved:?}");
+                assert_eq!(resolved, true_target, "must resolve to the real target");
+                assert!(
+                    !resolved.starts_with(&root),
+                    "resolved target must sit outside the sandbox root"
+                );
             }
             other => panic!("expected escape, got {other:?}"),
         }
