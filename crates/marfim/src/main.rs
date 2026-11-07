@@ -9,8 +9,8 @@
 mod slash;
 mod tui;
 
-use marfim_app::{factory, settings};
 use marfim_app::settings::{Cli, Command, EffectiveSettings};
+use marfim_app::{factory, settings};
 
 use clap::Parser;
 use marfim_core::config::Config;

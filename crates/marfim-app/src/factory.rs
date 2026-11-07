@@ -510,13 +510,7 @@ pub fn spawn_fail_closed_denier(hosted: &Arc<marfim_core::session_host::HostedSe
     });
 }
 pub fn marfim_home() -> PathBuf {
-    std::env::var("MARFIM_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".marfim"))
-                .unwrap_or_else(|_| PathBuf::from("."))
-        })
+    marfim_core::platform::default_platform().config_dir()
 }
 
 /// D13: persisted trust store (~/.marfim/trust.toml). Unknown dirs default

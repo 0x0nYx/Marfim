@@ -6,29 +6,53 @@
 use std::process::Stdio;
 use tokio::process::Command;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Sandbox {
     pub network: bool,
     pub writable_roots: Vec<String>,
     unshare_available: bool,
+    /// POSIX shell resolved by the platform trait (W1.2) — `/bin/sh` on
+    /// desktop, `/system/bin/sh` on android.
+    shell: String,
+    /// Sandbox exec-helper binary (W1.2): our own executable on desktop;
+    /// None = unprobed/fail-closed (a rooted command REFUSES instead of
+    /// guessing a helper).
+    exec_helper: Option<std::path::PathBuf>,
+}
+
+impl Default for Sandbox {
+    fn default() -> Self {
+        let p = crate::platform::default_platform();
+        Self {
+            network: false,
+            writable_roots: vec![],
+            unshare_available: false,
+            shell: p.shell_path().to_string(),
+            exec_helper: p.exec_helper().ok(),
+        }
+    }
 }
 
 impl Sandbox {
     /// Probe sandbox features once at startup: `unshare` must not merely
     /// exist but actually succeed (containers often EPERM it).
     pub fn probe() -> Self {
-        let unshare_available = std::process::Command::new("unshare")
-            .arg("--net")
-            .arg("--")
-            .arg("/bin/true")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
         Self {
-            network: false,
-            writable_roots: vec![],
-            unshare_available,
+            unshare_available: crate::platform::default_platform().probe_unshare(),
+            ..Default::default()
         }
+    }
+
+    /// The platform-resolved shell path for `sh -c` execution.
+    pub fn shell(&self) -> &str {
+        &self.shell
+    }
+
+    /// Pin the exec-helper (W1.4 marfim-exec packaging; tests). The
+    /// helper is NEVER discovered by scanning — only probed or injected.
+    pub fn with_exec_helper(mut self, helper: std::path::PathBuf) -> Self {
+        self.exec_helper = Some(helper);
+        self
     }
 
     pub fn unshare_available(&self) -> bool {
@@ -53,8 +77,11 @@ impl Sandbox {
                     self.writable_roots
                 ));
             }
-            let self_exe = std::env::current_exe()
-                .map_err(|e| format!("cannot locate marfim for sandbox-exec: {e}"))?;
+            let self_exe = self.exec_helper.clone().ok_or_else(|| {
+                format!(
+                    "sandbox-exec helper unavailable on this platform — refusing to run `{argv0}` unsandboxed"
+                )
+            })?;
             let mut c = Command::new(self_exe);
             c.arg("sandbox-exec");
             for r in &self.writable_roots {

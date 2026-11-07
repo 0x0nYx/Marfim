@@ -28,14 +28,34 @@ struct HookAnswer {
     reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Hooks {
     specs: Vec<HookSpec>,
+    /// Platform-resolved shell (W1.2): hooks are `sh -c` command strings.
+    shell: String,
+}
+
+impl Default for Hooks {
+    fn default() -> Self {
+        Self {
+            specs: Vec::new(),
+            shell: crate::platform::default_platform().shell_path().to_string(),
+        }
+    }
 }
 
 impl Hooks {
     pub fn new(specs: Vec<HookSpec>) -> Self {
-        Self { specs }
+        Self {
+            specs,
+            shell: crate::platform::default_platform().shell_path().to_string(),
+        }
+    }
+
+    /// Pin the hook shell (platform injection; tests).
+    pub fn with_shell(mut self, shell: String) -> Self {
+        self.shell = shell;
+        self
     }
 
     pub fn specs_for(&self, event: HookEvent) -> Vec<&HookSpec> {
@@ -51,7 +71,7 @@ impl Hooks {
                 .unwrap_or(serde_json::Value::String(args_json.to_string()))
         });
         for spec in self.specs_for(HookEvent::PreToolUse) {
-            match run_hook(spec, &payload).await {
+            match run_hook(spec, &self.shell, &payload).await {
                 Ok(answer) => {
                     if answer
                         .decision
@@ -82,13 +102,17 @@ impl Hooks {
             "output": output
         });
         for spec in self.specs_for(HookEvent::PostToolUse) {
-            let _ = run_hook(spec, &payload).await;
+            let _ = run_hook(spec, &self.shell, &payload).await;
         }
     }
 }
 
-async fn run_hook(spec: &HookSpec, payload: &serde_json::Value) -> Result<HookAnswer, String> {
-    let mut cmd = Command::new("/bin/sh");
+async fn run_hook(
+    spec: &HookSpec,
+    shell: &str,
+    payload: &serde_json::Value,
+) -> Result<HookAnswer, String> {
+    let mut cmd = Command::new(shell);
     cmd.arg("-c").arg(&spec.command);
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::piped());

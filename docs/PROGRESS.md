@@ -17,8 +17,8 @@ an owner input is missing; the reason and the exact ask live in that file.
 | W0.1 | DONE | this commit | docs/PROGRESS.md + OWNER-INPUT.md created; ROADMAP rewritten from DISTILLATION; README/AGENTS count fixed to ledger-source; FEATURE-MATRIX dup paragraph removed, worktree row ✅, §0/§7 contradiction fixed, stale PARITY ref fixed; DISTILLATION dangling §M ref fixed | every "already held" DISTILLATION claim re-verified against code (retry-before-first-byte, deny-before-mode, headless fail-closed, trust store, worktree isolation) |
 | W0.2 | DONE | this commit | `git ls-remote --tags origin` → only v1.0.0; no `archive/*` tag or Node tree reachable | W13 BLOCKED (owner input: oracle tag); PORT-LEDGER carries the not-regenerable note |
 | W0.3 | DONE | this commit | scripts/gates.sh gains G11/G12/G13/G14 with honest SKIP when artifacts absent; G1–G10 unchanged | G11 protocol-fixture contract activates at W2.2; G12/G13 at W4; G14 at W4.1 |
-| W1.1 | DONE | this commit | cargo test --workspace 603 green; clippy -p marfim-app -p marfim -D warnings clean; bin main.rs 1596→1013 lines, lib extracted (settings + factory) | zero behavior change; bin keeps clap+tui+slash; reqwest/futures-util dead deps dropped from the bin |
-| W1.2 | TODO | — | — | core::platform trait |
+| W1.1 | DONE | 72b70ff | cargo test --workspace 603 green; clippy -p marfim-app -p marfim -D warnings clean; bin main.rs 1596→1013 lines, lib extracted (settings + factory) | zero behavior change; bin keeps clap+tui+slash; reqwest/futures-util dead deps dropped from the bin |
+| W1.2 | DONE | this commit | platform.rs (Desktop+Android impls, pure dir resolution, 4 tests); sandbox shell/exec_helper fields; hooks shell; bash tool; marfim_home; rustc --target aarch64-linux-android compiles the android cfg arms; 607 tests green | every hard-coded /bin/sh and current_exe() sandbox use replaced; NO HOME assumption on android (MARFIM_* env contract, W4.1 sets it) |
 | W1.3 | TODO | — | — | CredentialSource trait + precedence chain |
 | W1.4 | TODO | — | — | SandboxLevel android arms + marfim-exec bin |
 | W1.5 | TODO | — | — | GitBackend trait (CliGit + GixGit) |

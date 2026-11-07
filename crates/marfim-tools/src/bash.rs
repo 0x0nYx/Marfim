@@ -91,7 +91,7 @@ pub async fn run_bash(
         );
     }
 
-    let mut cmd: Command = match sandbox.command("/bin/sh") {
+    let mut cmd: Command = match sandbox.command(sandbox.shell()) {
         Ok(c) => c,
         Err(e) => return (e, true), // fail-closed refusal is a tool error
     };
