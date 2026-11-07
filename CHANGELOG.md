@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.0 — wires + repomap batch (2026-11-07)
+
+The last two v0.2 roadmap gaps closed with fixture-backed evidence.
+
+### Providers / wires
+- End-to-end SSE goldens for the two remaining wires: native Gemini
+  (`fixtures/wire/gemini-stream.json` — thought parts, functionCall
+  synthesis `fc-N`, tool-call-wins-over-finishReason, thought-token
+  usage folding) and OpenAI Responses
+  (`fixtures/wire/responses-stream.json` — reasoning deltas,
+  output_index-keyed item assembly, terminal-arguments-wins, cached
+  input details). Both replayed over a loopback canned server by
+  `tests/differential.rs` (now 14 tests, 4 new); G4 gate label updated.
+
+### Repo map
+- Symbol extractor precision wave (aider doctrine, still deterministic
+  and dependency-free): Rust modifier ladder (`pub async const unsafe
+  fn`, `pub(crate)`, `extern`) now lands on the keyword; commented
+  declarations (`// fn ghost()`) no longer become symbols; Python
+  `async def`; Go receiver methods (`func (s *Server) Start`) and
+  `type X struct|interface`; TypeScript `interface`/`type`/`export
+  const`/`export default class`. Five new regression tests
+  (marfim-tools: 85 green).
+- Personalized-PageRank ranking + token-budget binary search were
+  already live; tree-sitter grammars stay an honestly-open frontend
+  upgrade (ROADMAP).
+
+### Docs
+- ROADMAP v0.2 status block and FEATURE-MATRIX rows made truthful
+  (gemini/responses wires, repo map PageRank).
+
 ## 1.0.0 — distillation batch 2 (2026-11-07)
 
 Hermes v0.23.0 + Oh My Pi v18.18.0 QUEUED specs promoted to ADOPTED

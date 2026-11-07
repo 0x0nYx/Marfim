@@ -79,7 +79,9 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | Sandbox wrappers: bubblewrap / seatbelt / none | codex sandbox manager | ✅ |
 | webfetch (HTML→text) + websearch | claude code, ECC research-first | ✅ |
 | todo list persisted in session | claude code TodoWrite | ✅ |
-| Repo map (symbols, relevance-ranked, budget) | aider repomap (PageRank/tree-sitter = v0.2) | ◐ |
+| Native Gemini wire (systemInstruction, functionCall/Response parts, thought stream, usageMetadata thought-token folding) | Oh My Pi `google-shared.ts` | ✅ (SSE golden `fixtures/wire/gemini-stream.json`) |
+| OpenAI Responses wire (stateless input items, reasoning deltas, output-item assembly, terminal-args-wins) | Oh My Pi `openai-responses.ts`, opencode Responses API | ✅ (SSE golden `fixtures/wire/responses-stream.json`) |
+| Repo map (symbols, relevance-ranked, budget) | aider repomap (PageRank + budget binary search shipped; tree-sitter = future precision frontend) | ✅ (PageRank live) |
 | MCP stdio client; MCP tools appear natively (`mcp__srv__tool`) | claude code, goose MCP-first, omp | ✅ |
 | Summary-first bounded outputs with `[truncated]` markers | REA evidence records | ✅ |
 

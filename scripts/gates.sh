@@ -36,9 +36,9 @@ else
   bad 3 "loop tests failed"
 fi
 
-# G4: wire-golden differentials
+# G4: wire-golden differentials (anthropic, openai, gemini, responses)
 if cargo test -p marfim-core --test differential 2>/dev/null | grep -q "test result: ok"; then
-  ok 4 "anthropic/openai wire goldens replay"
+  ok 4 "anthropic/openai/gemini/responses wire goldens replay"
 else
   bad 4 "wire differential failed"
 fi

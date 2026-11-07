@@ -5,7 +5,9 @@
 //! sandbox flags + loopback-only binding).
 
 use marfim_core::providers::anthropic::Anthropic;
+use marfim_core::providers::gemini::Gemini;
 use marfim_core::providers::openai::OpenAiCompat;
+use marfim_core::providers::responses::OpenAiResponses;
 use marfim_core::providers::{ChatMessage, ChatRequest, Provider, ToolCall, Usage};
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -330,6 +332,219 @@ async fn openai_body_carries_max_completion_tokens_and_reasoning() {
         })
         .await;
     assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+// ------------------------------------------------- Gemini native wire
+
+#[tokio::test]
+async fn gemini_stream_golden_replays_thoughts_tools_and_usage() {
+    let fx = fixture("gemini-stream.json");
+    let sse: Vec<String> = fx["sse"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let (port, count) =
+        serve_canned(Arc::new(move |_m, _p, _i| (200, vec![], sse_body(&sse)))).await;
+    let provider = Gemini {
+        client: marfim_core::http_client(),
+        base_url: format!("http://127.0.0.1:{port}"),
+        api_key: "k".into(),
+        model: "gemini-test".into(),
+        max_retries: 0,
+    };
+    let step = provider
+        .chat_step(&ChatRequest {
+            messages: vec![ChatMessage::user("hi")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let golden = &fx["golden"];
+    assert_eq!(
+        step.stop.map(|s| s.as_str()),
+        Some(golden["stop"].as_str().unwrap()),
+        "tool-call presence must win over raw finishReason"
+    );
+    assert_eq!(step.text(), golden["text"].as_str().unwrap());
+    let u = &step.usage;
+    assert_eq!(
+        u.input_tokens,
+        golden["usage"]["input_tokens"].as_u64().unwrap()
+    );
+    assert_eq!(
+        u.output_tokens,
+        golden["usage"]["output_tokens"].as_u64().unwrap(),
+        "thought tokens fold into output (30 + 12)"
+    );
+    assert_eq!(
+        u.cache_read_tokens,
+        golden["usage"]["cache_read_tokens"].as_u64().unwrap()
+    );
+    let tcs = step.tool_calls();
+    assert_eq!(tcs.len(), 1);
+    assert_eq!(tcs[0].id, golden["tool_calls"][0]["id"].as_str().unwrap());
+    assert_eq!(
+        tcs[0].name,
+        golden["tool_calls"][0]["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        tcs[0].arguments_json,
+        golden["tool_calls"][0]["arguments_json"].as_str().unwrap()
+    );
+    // the wire rides x-goog-api-key, not Authorization (v1beta contract)
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn gemini_body_keeps_model_on_the_url_and_tools_in_declarations() {
+    let (port, _c) = serve_canned(Arc::new(|_m, _p, _i| {
+        (200, vec![], "data: {}\n\n".to_string())
+    }))
+    .await;
+    let provider = Gemini {
+        client: marfim_core::http_client(),
+        base_url: format!("http://127.0.0.1:{port}"),
+        api_key: "k".into(),
+        model: "gemini-test".into(),
+        max_retries: 0,
+    };
+    // a tool-result round trip must produce a user-turn functionResponse
+    // keyed by NAME (id→name map rebuilt from history)
+    let req = ChatRequest {
+        messages: vec![
+            ChatMessage::user("hi"),
+            ChatMessage {
+                role: "assistant".into(),
+                content: String::new(),
+                tool_calls: vec![ToolCall {
+                    id: "fc-0".into(),
+                    name: "Bash".into(),
+                    arguments_json: "{\"cmd\":\"ls\"}".into(),
+                }],
+                tool_call_id: None,
+                is_error: false,
+            },
+            ChatMessage::tool_result("fc-0", "out", false),
+        ],
+        system: Some("sys".into()),
+        ..Default::default()
+    };
+    let step = provider.chat_step(&req).await.unwrap();
+    assert!(step.blocks.is_empty(), "canned empty payload");
+}
+
+// ----------------------------------------------- OpenAI Responses wire
+
+#[tokio::test]
+async fn responses_stream_golden_replays_deltas_items_and_terminal_args() {
+    let fx = fixture("responses-stream.json");
+    let sse: Vec<String> = fx["sse"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let (port, _c) = serve_canned(Arc::new(move |_m, _p, _i| (200, vec![], sse_body(&sse)))).await;
+    let provider = OpenAiResponses {
+        client: marfim_core::http_client(),
+        base_url: format!("http://127.0.0.1:{port}"),
+        api_key: "k".into(),
+        model: "gpt-test".into(),
+        max_retries: 0,
+    };
+    let step = provider
+        .chat_step(&ChatRequest {
+            messages: vec![ChatMessage::user("hi")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let golden = &fx["golden"];
+    assert_eq!(
+        step.stop.map(|s| s.as_str()),
+        Some(golden["stop"].as_str().unwrap()),
+        "tool calls win over the terminal status"
+    );
+    assert_eq!(step.text(), golden["text"].as_str().unwrap());
+    let u = &step.usage;
+    assert_eq!(
+        u.input_tokens,
+        golden["usage"]["input_tokens"].as_u64().unwrap()
+    );
+    assert_eq!(
+        u.output_tokens,
+        golden["usage"]["output_tokens"].as_u64().unwrap()
+    );
+    assert_eq!(
+        u.cache_read_tokens,
+        golden["usage"]["cache_read_tokens"].as_u64().unwrap()
+    );
+    let tcs = step.tool_calls();
+    assert_eq!(tcs.len(), 1);
+    assert_eq!(tcs[0].id, golden["tool_calls"][0]["id"].as_str().unwrap());
+    assert_eq!(
+        tcs[0].name,
+        golden["tool_calls"][0]["name"].as_str().unwrap()
+    );
+    assert_eq!(
+        tcs[0].arguments_json,
+        golden["tool_calls"][0]["arguments_json"].as_str().unwrap(),
+        "terminal item arguments win over accumulated deltas"
+    );
+}
+
+#[tokio::test]
+async fn responses_body_is_stateless_with_flat_tools() {
+    let captured: Arc<std::sync::Mutex<String>> = Default::default();
+    let cap = captured.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                break;
+            };
+            let cap = cap.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = vec![0u8; 65536];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                *cap.lock().unwrap() = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                let body = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{}}}";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+    let provider = OpenAiResponses {
+        client: marfim_core::http_client(),
+        base_url: format!("http://127.0.0.1:{port}"),
+        api_key: "k".into(),
+        model: "gpt-test".into(),
+        max_retries: 0,
+    };
+    let _ = provider
+        .chat_step(&ChatRequest {
+            messages: vec![ChatMessage::user("hi")],
+            system: Some("sys".into()),
+            effort: Some(marfim_core::providers::effort::Effort::High),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_str(&captured.lock().unwrap()).unwrap();
+    assert_eq!(body["model"], "gpt-test");
+    assert_eq!(body["store"], false, "stateless by contract");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["instructions"], "sys");
+    assert_eq!(body["reasoning"]["effort"], "high");
+    assert!(body.get("prompt_cache_key").is_none());
 }
 
 // ---------------------------------------------------------- retry layer

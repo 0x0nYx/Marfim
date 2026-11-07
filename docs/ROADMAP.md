@@ -7,10 +7,17 @@ capabilities surfaced by the forensic analysis, each with its source doctrine.
 
 > **Status (v0.2.0):** model-role auto-routing SHIPPED (router with failover + budgets +
 > capabilities); MCP HTTP/SSE transport SHIPPED; external agents as worktree-isolated
-> backends SHIPPED; parallel subagents SHIPPED; verify-driven reflection SHIPPED.
-> Remaining below: tree-sitter repo map, CodeMode, micro-compaction refinements.
-- **Tree-sitter + personalized-PageRank repo map** (aider `repomap.py`): replace the
-  regex symbol extractor; keep the token-budget binary search.
+> backends SHIPPED; parallel subagents SHIPPED; verify-driven reflection SHIPPED;
+> personalized-PageRank repo map SHIPPED (file-level reference graph, token-budget
+> binary search, deterministic); micro-compaction SHIPPED (tool-result elision with
+> protected tail). Remaining below: tree-sitter symbol frontends (the extractor is
+> line-precise today: modifier-aware Rust, Go receivers, TS interface/type, comment
+> skipping; tree-sitter grammars would raise per-language precision further) and
+> CodeMode.
+- **Tree-sitter symbol frontends for the repo map**: the PageRank ranking and
+  token-budget binary search are live; tree-sitter grammars remain the planned
+  precision upgrade over the (already comment- and modifier-aware) line extractor
+  (aider `repomap.py`).
 - **CodeMode**: expose namespaced tool catalogs to the model as callable code executed
   in a restricted interpreter (opencode v2 `packages/codemode`) — collapses N tool
   schemas into one code surface.

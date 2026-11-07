@@ -25,17 +25,64 @@ pub fn lang_of(path: &Path) -> Option<&'static str> {
     })
 }
 
+/// Strip declaration modifiers (rs): `pub`, `pub(crate)`, `pub(super)`,
+/// `pub(in path)`, `async`, `const`, `unsafe`, `default`, `extern "..."`,
+/// `extern` — iteratively, so `pub async const unsafe fn f()` still lands
+/// on the keyword. Deterministic, no allocation beyond one trimmed copy.
+fn strip_rs_modifiers(mut s: &str) -> &str {
+    loop {
+        let t = s.trim_start();
+        if t.starts_with("pub(") {
+            // pub(crate) / pub(in path::to) — strip through the closing paren
+            if let Some(end) = t.find(')') {
+                s = &t[end + 1..];
+                continue;
+            }
+        }
+        let stripped = t
+            .strip_prefix("pub ")
+            .or_else(|| t.strip_prefix("async "))
+            .or_else(|| t.strip_prefix("const "))
+            .or_else(|| t.strip_prefix("unsafe "))
+            .or_else(|| t.strip_prefix("default "))
+            .or_else(|| t.strip_prefix("extern "))
+            .or_else(|| t.strip_prefix("extern"));
+        match stripped {
+            Some(rest) if !rest.is_empty() => s = rest,
+            _ => return s.trim_start(),
+        }
+    }
+}
+
+/// Comment prefix per language — a declaration inside a comment must not
+/// produce a symbol (the old extractor matched `// fn x()` as a def).
+fn comment_prefix(lang: &str) -> &'static [&'static str] {
+    match lang {
+        "py" | "rb" => &["#"],
+        "rs" | "go" | "java" | "c" => &["//"],
+        "js" => &["//", "/*", "*"],
+        _ => &[],
+    }
+}
+
 /// Extract symbols from one source file with per-language patterns.
 pub fn extract(path: &Path, text: &str) -> Vec<Symbol> {
     let Some(lang) = lang_of(path) else {
         return vec![];
     };
+    let comments = comment_prefix(lang);
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
         let t = line.trim();
+        if t.is_empty() || comments.iter().any(|p| t.starts_with(p)) {
+            continue;
+        }
         let sym = match lang {
             "py" => {
-                if let Some(n) = strip(t, "def ").or_else(|| strip(t, "class ")) {
+                if let Some(n) = strip(t, "def ")
+                    .or_else(|| strip(t, "async def "))
+                    .or_else(|| strip(t, "class "))
+                {
                     let name = n
                         .split('(')
                         .next()
@@ -54,7 +101,7 @@ pub fn extract(path: &Path, text: &str) -> Vec<Symbol> {
                 }
             }
             "rs" => {
-                let t2 = t.strip_prefix("pub ").unwrap_or(t);
+                let t2 = strip_rs_modifiers(t);
                 for kw in ["fn ", "struct ", "enum ", "trait ", "impl ", "mod "] {
                     if let Some(n) = strip(t2, kw) {
                         let name = n
@@ -87,19 +134,68 @@ pub fn extract(path: &Path, text: &str) -> Vec<Symbol> {
                 }
                 None
             }
-            "go" => strip(t, "func ").map(|n| {
-                let name = n.split('(').next().unwrap_or(n);
-                (name.trim().to_string(), "fn")
-            }),
+            "go" => {
+                // receiver methods (`func (r *T) Name(...)`) previously fell
+                // through the '(' split to an empty name and were dropped
+                if let Some(n) = strip(t, "func ") {
+                    let raw = if let Some(rest) = n.strip_prefix('(') {
+                        // receiver: `func (s *Server) Start(...)` — the name
+                        // sits between the receiver's ')' and the next '('
+                        match rest.find(')') {
+                            Some(end) => rest[end + 1..].split('(').next().unwrap_or("").trim(),
+                            None => "",
+                        }
+                    } else {
+                        n.split('(').next().unwrap_or(n)
+                    };
+                    let name = raw.split('[').next().unwrap_or(raw).trim();
+                    if !name.is_empty()
+                        && name
+                            .chars()
+                            .next()
+                            .map(|c| c.is_alphabetic() || c == '_')
+                            .unwrap_or(false)
+                    {
+                        out.push(Symbol {
+                            name: name.to_string(),
+                            kind: "fn",
+                            line: i + 1,
+                        });
+                    }
+                }
+                // `type X struct` / `type X interface` are real symbols
+                if let Some(n) = strip(t, "type ") {
+                    let name = n.split_whitespace().next().unwrap_or("");
+                    if !name.is_empty()
+                        && name
+                            .chars()
+                            .next()
+                            .map(|c| c.is_alphabetic() || c == '_')
+                            .unwrap_or(false)
+                    {
+                        out.push(Symbol {
+                            name: name.to_string(),
+                            kind: "class",
+                            line: i + 1,
+                        });
+                    }
+                }
+                None
+            }
             "js" => {
+                // strip an optional export / export default prefix first
+                let t2 = strip(t, "export default ")
+                    .or_else(|| strip(t, "export "))
+                    .unwrap_or(t);
                 for pat in [
+                    "async function ",
                     "function ",
                     "class ",
+                    "interface ",
+                    "type ",
                     "const ",
-                    "export function ",
-                    "export class ",
                 ] {
-                    if let Some(n) = strip(t, pat) {
+                    if let Some(n) = strip(t2, pat) {
                         let name = n
                             .split(|c: char| c == '(' || c == '=' || c == '{' || c.is_whitespace())
                             .next()
@@ -111,9 +207,16 @@ pub fn extract(path: &Path, text: &str) -> Vec<Symbol> {
                                 .map(|c| c.is_alphabetic() || c == '_' || c == '$')
                                 .unwrap_or(false)
                         {
+                            let kind = if pat.contains("class") || pat == "interface " {
+                                "class"
+                            } else if pat == "type " {
+                                "type"
+                            } else {
+                                "fn"
+                            };
                             out.push(Symbol {
                                 name: name.to_string(),
-                                kind: if pat.contains("class") { "class" } else { "fn" },
+                                kind,
                                 line: i + 1,
                             });
                         }
@@ -338,6 +441,72 @@ mod tests {
     #[test]
     fn unknown_language_is_empty() {
         assert!(extract(Path::new("a.txt"), "def f(): pass").is_empty());
+    }
+
+    #[test]
+    fn modifier_prefixed_rust_declarations_are_extracted() {
+        let src = "pub async fn worker() {}\n\
+                   pub(crate) fn helper() {}\n\
+                   pub(super) const fn make() -> u8 { 0 }\n\
+                   pub unsafe trait Raw { }\n\
+                   async fn tail() {}\n\
+                   pub(crate) struct Inner { x: u8 }\n";
+        let syms = extract(Path::new("src/a.rs"), src);
+        let names: Vec<&str> = syms.iter().map(|s| s.name.as_str()).collect();
+        for expected in ["worker", "helper", "make", "Raw", "tail", "Inner"] {
+            assert!(names.contains(&expected), "{expected} missing: {names:?}");
+        }
+    }
+
+    #[test]
+    fn commented_declarations_produce_no_symbols() {
+        let rs = extract(
+            Path::new("a.rs"),
+            "// fn ghost() {}\n/// struct AlsoGhost {}\nfn real() {}\n",
+        );
+        let names: Vec<&str> = rs.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["real"],
+            "commented defs must not become symbols"
+        );
+        let py = extract(Path::new("b.py"), "# def ghost(): pass\ndef real(): pass\n");
+        assert_eq!(py.len(), 1);
+        assert_eq!(py[0].name, "real");
+    }
+
+    #[test]
+    fn python_async_defs_and_go_receivers_are_extracted() {
+        let py = extract(Path::new("a.py"), "async def fetch(x):\n    return x\n");
+        assert!(py.iter().any(|s| s.name == "fetch"));
+
+        let go = extract(
+            Path::new("svc.go"),
+            "func (s *Server) Start(ctx context.Context) error { return nil }\n\
+             func Plain() {}\n\
+             type Config struct { A int }\n\
+             type Store interface { Get() }\n",
+        );
+        let names: Vec<&str> = go.iter().map(|s| s.name.as_str()).collect();
+        for expected in ["Start", "Plain", "Config", "Store"] {
+            assert!(names.contains(&expected), "{expected} missing: {names:?}");
+        }
+    }
+
+    #[test]
+    fn ts_interfaces_and_export_const_are_extracted() {
+        let ts = extract(
+            Path::new("types.ts"),
+            "export interface Options { a: number }\n\
+             export type Alias = string;\n\
+             export const LIMIT = 3;\n\
+             export async function run(): Promise<void> {}\n\
+             export default class Main {}\n",
+        );
+        let names: Vec<&str> = ts.iter().map(|s| s.name.as_str()).collect();
+        for expected in ["Options", "Alias", "LIMIT", "run", "Main"] {
+            assert!(names.contains(&expected), "{expected} missing: {names:?}");
+        }
     }
 
     #[test]

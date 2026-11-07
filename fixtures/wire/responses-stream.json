@@ -1,0 +1,32 @@
+{
+  "comment": "OpenAI Responses SSE goldens: reasoning deltas, output_item assembly keyed by output_index, terminal arguments win over deltas (docs/DISTILLATION.md §R2, OMP openai-responses.ts)",
+  "sse": [
+    "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"think\"}",
+    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hi\"}",
+    "data: {\"type\":\"response.output_item.added\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"call_id\":\"call9\",\"name\":\"Bash\"}}",
+    "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":2,\"delta\":\"{\\\"cmd\\\":\"}",
+    "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":2,\"delta\":\"\\\"ls\\\"}\"}",
+    "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"call_id\":\"call9\",\"name\":\"Bash\",\"arguments\":\"{\\\"cmd\\\": \\\"ls -la\\\"}\"}}",
+    "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":40,\"input_tokens_details\":{\"cached_tokens\":60}}}}"
+  ],
+  "golden": {
+    "stop": "tool_use",
+    "stop_note": "tool calls win over the terminal status so the harness executes the batch",
+    "usage": {
+      "input_tokens": 100,
+      "output_tokens": 40,
+      "cache_read_tokens": 60,
+      "cache_creation_tokens": 0
+    },
+    "tool_calls": [
+      {
+        "id": "call9",
+        "name": "Bash",
+        "arguments_json": "{\"cmd\": \"ls -la\"}",
+        "arguments_note": "the terminal output_item.done arguments COMPLETE and win over the accumulated deltas (OMP final-parse-unconditional rule)"
+      }
+    ],
+    "text": "Hi",
+    "thinking": "think"
+  }
+}
