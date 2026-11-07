@@ -386,10 +386,11 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
             );
             let mut router = Router::new(CostBook::default(), false);
             if let Ok(preset) = settings::resolve_preset(&provider, &config) {
-                if let Ok(entries) = build_chain_from_preset(&preset, &model) {
+                let creds = marfim_core::credentials::CredentialChain::standard(&config);
+                if let Ok(entries) = build_chain_from_preset(&preset, &model, &creds) {
                     router.set_chain(Role::Primary, entries);
                     let small_model = preset.default_model.clone();
-                    if let Ok(small) = build_chain_from_preset(&preset, &small_model) {
+                    if let Ok(small) = build_chain_from_preset(&preset, &small_model, &creds) {
                         router.set_chain(Role::Small, small);
                     }
                 }
@@ -478,10 +479,11 @@ impl marfim_tools::subagent::SubagentSpawner for ProductionSubagents {
 pub fn build_chain_from_preset(
     preset: &settings::Preset,
     model: &str,
+    creds: &marfim_core::credentials::CredentialChain,
 ) -> Result<Vec<marfim_core::router::ModelEntry>, String> {
     Ok(vec![marfim_core::router::ModelEntry {
         model: model.to_string(),
-        provider: settings::build_provider(preset, model)?,
+        provider: settings::build_provider_with(preset, model, creds)?,
         priced: true,
     }])
 }

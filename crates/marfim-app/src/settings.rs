@@ -338,19 +338,32 @@ pub fn parse_mock_script(json: &str) -> Vec<marfim_core::providers::MockAction> 
         .collect()
 }
 
-/// Build a real provider from a preset. D11: the mock wire only exists via
-/// the explicit `mock` name — nothing falls back to it silently.
-pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>, String> {
+/// The credential seam (W1.3): every api_key read goes through the
+/// chain. Empty `api_key_env` presets (e.g. ollama/mock) resolve to ""
+/// regardless of the chain — no credential is invented.
+fn api_key_for(preset: &Preset, chain: &marfim_core::credentials::CredentialChain) -> String {
+    if preset.api_key_env.is_empty() {
+        String::new()
+    } else {
+        chain.resolve(&preset.api_key_env)
+    }
+}
+
+/// Build a real provider from a preset through an explicit credential
+/// chain (W1.3). D11: the mock wire only exists via the explicit `mock`
+/// name — nothing falls back to it silently.
+pub fn build_provider_with(
+    preset: &Preset,
+    model: &str,
+    chain: &marfim_core::credentials::CredentialChain,
+) -> Result<Arc<dyn Provider>, String> {
+    let api_key = api_key_for(preset, chain);
     match preset.wire.as_str() {
         "anthropic" => Ok(Arc::new(marfim_core::providers::Anthropic {
             client: marfim_core::http_client(),
             base_url: std::env::var("ANTHROPIC_BASE_URL")
                 .unwrap_or_else(|_| preset.base_url.clone()),
-            api_key: if preset.api_key_env.is_empty() {
-                String::new()
-            } else {
-                std::env::var(&preset.api_key_env).unwrap_or_default()
-            },
+            api_key,
             model: model.to_string(),
             max_retries: 3,
         })),
@@ -364,11 +377,7 @@ pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>,
             Ok(Arc::new(marfim_core::providers::OpenAiCompat {
                 client: marfim_core::http_client(),
                 base_url: base,
-                api_key: if preset.api_key_env.is_empty() {
-                    String::new()
-                } else {
-                    std::env::var(&preset.api_key_env).unwrap_or_default()
-                },
+                api_key,
                 model: model.to_string(),
                 max_retries: 3,
             }))
@@ -383,11 +392,7 @@ pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>,
             Ok(Arc::new(marfim_core::providers::OpenAiResponses {
                 client: marfim_core::http_client(),
                 base_url: base,
-                api_key: if preset.api_key_env.is_empty() {
-                    String::new()
-                } else {
-                    std::env::var(&preset.api_key_env).unwrap_or_default()
-                },
+                api_key,
                 model: model.to_string(),
                 max_retries: 3,
             }))
@@ -403,11 +408,7 @@ pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>,
             Ok(Arc::new(marfim_core::providers::Gemini {
                 client: marfim_core::http_client(),
                 base_url: base,
-                api_key: if preset.api_key_env.is_empty() {
-                    String::new()
-                } else {
-                    std::env::var(&preset.api_key_env).unwrap_or_default()
-                },
+                api_key,
                 model: model.to_string(),
                 max_retries: 3,
             }))
@@ -427,6 +428,15 @@ pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>,
             "provider wire `{other}` is not wired in this build (known wires: anthropic, openai, openai-responses, gemini, mock)"
         )),
     }
+}
+
+/// Pre-W1.3 signature: environment-only credentials.
+pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>, String> {
+    build_provider_with(
+        preset,
+        model,
+        &marfim_core::credentials::CredentialChain::env_only(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -790,10 +800,13 @@ pub fn build_primary_chain(
     settings: &EffectiveSettings,
     config: &Config,
 ) -> Result<Vec<ModelEntry>, String> {
+    // W1.3: env -> config -> memory pool (identical to env-only when the
+    // config has no `credentials` table and the pool is empty).
+    let creds = marfim_core::credentials::CredentialChain::standard(config);
     let preset = resolve_preset(&settings.provider_name, config)?;
     let mut chain = vec![ModelEntry {
         model: settings.model.clone(),
-        provider: build_provider(&preset, &settings.model)?,
+        provider: build_provider_with(&preset, &settings.model, &creds)?,
         priced: true, // pricedness enforced by the CostBook at usage time
     }];
     for (prov, model) in &settings.failover {
@@ -805,7 +818,7 @@ pub fn build_primary_chain(
         };
         chain.push(ModelEntry {
             model: m.clone(),
-            provider: build_provider(&p, m)?,
+            provider: build_provider_with(&p, m, &creds)?,
             priced: true,
         });
     }
@@ -816,10 +829,11 @@ pub fn build_small_chain(
     settings: &EffectiveSettings,
     config: &Config,
 ) -> Result<Vec<ModelEntry>, String> {
+    let creds = marfim_core::credentials::CredentialChain::standard(config);
     let preset = resolve_preset(&settings.provider_name, config)?;
     Ok(vec![ModelEntry {
         model: settings.small_model.clone(),
-        provider: build_provider(&preset, &settings.small_model)?,
+        provider: build_provider_with(&preset, &settings.small_model, &creds)?,
         priced: true,
     }])
 }
@@ -859,6 +873,7 @@ mod tests {
         "model",
         "provider",
         "providers",
+        "credentials", // W1.3: CredentialChain::standard reads [credentials]
         "smallModel",
         "architectModel",
         "reviewModel",
@@ -907,6 +922,34 @@ mod tests {
                 "flag `{id}` is parsed but never consumed"
             );
         }
+    }
+
+    // W1.3: the credential seam — empty api_key_env presets stay empty,
+    // named presets resolve through the chain.
+    #[test]
+    fn api_key_seam_honors_chain_and_empty_env() {
+        struct Fixed(&'static str, &'static str);
+        impl marfim_core::credentials::CredentialSource for Fixed {
+            fn resolve(&self, name: &str) -> Option<String> {
+                if name == self.0 {
+                    Some(self.1.to_string())
+                } else {
+                    None
+                }
+            }
+            fn name(&self) -> &'static str {
+                "fixed"
+            }
+        }
+        let mut p = builtin_presets()
+            .remove("anthropic")
+            .unwrap_or_else(|| panic!("anthropic preset"));
+        let chain = marfim_core::credentials::CredentialChain::empty()
+            .with_source(std::sync::Arc::new(Fixed("ANTHROPIC_API_KEY", "sk-test")));
+        assert_eq!(api_key_for(&p, &chain), "sk-test");
+        // empty api_key_env (e.g. mock/ollama) stays empty — no invention
+        p.api_key_env = String::new();
+        assert_eq!(api_key_for(&p, &chain), "");
     }
 
     #[test]

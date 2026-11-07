@@ -37,6 +37,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "thinkingBudget",
     "effort",
     "accountEmail",
+    "credentials",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
