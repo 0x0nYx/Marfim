@@ -13,11 +13,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod anthropic;
+pub mod effort;
+pub mod gemini;
 pub mod openai;
+pub mod responses;
 pub mod validate;
 
 pub use anthropic::Anthropic;
+pub use effort::Effort;
+pub use gemini::Gemini;
 pub use openai::OpenAiCompat;
+pub use responses::OpenAiResponses;
 pub use validate::{validate_anthropic_body, validate_openai_body};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -180,6 +186,10 @@ pub struct ChatRequest {
     pub cache_breakpoints: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// Canonical reasoning-effort ladder (distilled: docs/DISTILLATION.md
+    /// §R1). Each wire emits its own dialect from this one value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
 }
 
 /// Single retry layer (INV-06): the ONLY place in the codebase that

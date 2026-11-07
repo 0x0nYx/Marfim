@@ -114,7 +114,10 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
     if let Some(t) = req.temperature {
         body["temperature"] = serde_json::json!(t);
     }
-    if let Some(tb) = req.thinking_budget {
+    if let Some(e) = req.effort {
+        // Canonical ladder → chat-completions dialect (distillation §R1).
+        body["reasoning_effort"] = serde_json::json!(super::effort::openai_reasoning_effort(e));
+    } else if let Some(tb) = req.thinking_budget {
         body["reasoning_effort"] = serde_json::json!(reasoning_effort(tb));
     }
     if !req.tools.is_empty() {

@@ -55,6 +55,23 @@ pub struct Router {
     pub bandit: bool,
     stats: std::collections::BTreeMap<(Role, String), BanditStats>,
     rounds: std::collections::BTreeMap<Role, u64>,
+    /// Consecutive failure count per (role, model) — feeds the cooldown
+    /// ladder in `mark_failure` (distillation §F1: Hermes' main-chain
+    /// cooldown `min(60s * 2^n, 14400s)`).
+    fail_counts: std::collections::BTreeMap<(Role, String), u32>,
+}
+
+/// Cooldown ladder for repeated provider failures (distilled from
+/// Hermes `fallback_cooldown.py`: base 60s doubling per consecutive
+/// failure, capped at 4h; a provider-declared Retry-After is honored
+/// when it is longer). Pure and deterministic.
+pub const COOLDOWN_BASE_MS: u64 = 60_000;
+pub const COOLDOWN_CAP_MS: u64 = 14_400_000;
+
+pub fn cooldown_ms(consecutive_failures: u32) -> u64 {
+    COOLDOWN_BASE_MS
+        .saturating_mul(1u64 << consecutive_failures.min(20))
+        .min(COOLDOWN_CAP_MS)
 }
 
 /// Observed outcomes for one (role, model) under bandit routing.
@@ -89,6 +106,7 @@ impl Router {
             bandit: false,
             stats: Default::default(),
             rounds: Default::default(),
+            fail_counts: Default::default(),
         }
     }
 
@@ -167,6 +185,38 @@ impl Router {
             (role, model.to_string()),
             std::time::Instant::now() + std::time::Duration::from_millis(backoff_ms),
         );
+    }
+
+    /// Record one failed attempt through the cooldown ladder (distillation
+    /// §F1): consecutive failures double the cooldown 60s → 120s → … capped
+    /// at 4h. A provider-declared Retry-After longer than the ladder value
+    /// wins. Observable via `cooldown_of`.
+    pub fn mark_failure(&mut self, role: Role, model: &str, retry_after_ms: Option<u64>) {
+        let key = (role, model.to_string());
+        let n = self.fail_counts.entry(key.clone()).or_insert(0);
+        *n = n.saturating_add(1);
+        let ladder = cooldown_ms(*n);
+        let wait = retry_after_ms.unwrap_or(0).max(ladder);
+        self.unavailable_until.insert(
+            key,
+            std::time::Instant::now() + std::time::Duration::from_millis(wait),
+        );
+    }
+
+    /// Record a successful attempt: the failure ladder resets AND any
+    /// stale availability window is cleared — a success is direct proof
+    /// the provider is back, so a recovered model must never stay blocked.
+    pub fn mark_success(&mut self, role: Role, model: &str) {
+        self.fail_counts.remove(&(role, model.to_string()));
+        self.unavailable_until.remove(&(role, model.to_string()));
+    }
+
+    /// Current consecutive-failure count (observability).
+    pub fn failures_of(&self, role: Role, model: &str) -> u32 {
+        *self
+            .fail_counts
+            .get(&(role, model.to_string()))
+            .unwrap_or(&0)
     }
 
     pub fn is_available(&self, role: Role, model: &str) -> bool {
@@ -319,6 +369,62 @@ mod tests {
         };
         let c = cb.cost_usd("gpt-5-mini", &u).unwrap();
         assert!((c - (10_000.0 * 0.25 + 2_000.0 * 2.0) / 1e6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cooldown_ladder_doubles_and_caps() {
+        assert_eq!(cooldown_ms(0), 60_000);
+        assert_eq!(cooldown_ms(1), 120_000);
+        assert_eq!(cooldown_ms(2), 240_000);
+        assert_eq!(cooldown_ms(7), 7_680_000);
+        assert_eq!(
+            cooldown_ms(8),
+            COOLDOWN_CAP_MS,
+            "60s*2^8 exceeds the 4h cap"
+        );
+        assert_eq!(cooldown_ms(9), COOLDOWN_CAP_MS);
+        assert_eq!(cooldown_ms(50), COOLDOWN_CAP_MS);
+    }
+
+    #[test]
+    fn failure_ladder_escalates_and_resets_on_success() {
+        let mut r = Router::new(CostBook::default(), false);
+        r.set_chain(Role::Primary, vec![entry("m", true)]);
+        assert_eq!(r.failures_of(Role::Primary, "m"), 0);
+        r.mark_failure(Role::Primary, "m", None);
+        assert_eq!(r.failures_of(Role::Primary, "m"), 1);
+        r.mark_failure(Role::Primary, "m", None);
+        assert_eq!(r.failures_of(Role::Primary, "m"), 2);
+        assert!(!r.is_available(Role::Primary, "m"), "cooldown arm\u{ed}");
+        r.mark_success(Role::Primary, "m");
+        assert_eq!(
+            r.failures_of(Role::Primary, "m"),
+            0,
+            "success resets ladder"
+        );
+        assert!(
+            r.is_available(Role::Primary, "m"),
+            "success also clears the window"
+        );
+    }
+
+    #[test]
+    fn provider_retry_after_wins_over_ladder_when_longer() {
+        let mut r = Router::new(CostBook::default(), false);
+        r.set_chain(Role::Primary, vec![entry("m", true)]);
+        // Ladder for 1 failure is 120s; provider says wait 5s — ladder wins.
+        r.mark_failure(Role::Primary, "m", Some(5_000));
+        assert!(!r.is_available(Role::Primary, "m"));
+        // Provider says wait 6h — that beats the 4h cap.
+        r.mark_success(Role::Primary, "m");
+        r.mark_failure(Role::Primary, "m", Some(21_600_000));
+        let until = r
+            .unavailable_until
+            .get(&(Role::Primary, "m".into()))
+            .copied()
+            .unwrap_or_else(std::time::Instant::now);
+        let wait = until.duration_since(std::time::Instant::now()).as_millis() as u64;
+        assert!(wait > COOLDOWN_CAP_MS, "declared reset_at honored: {wait}");
     }
 
     fn bandit_entry(model: &str, priced: bool) -> ModelEntry {

@@ -35,6 +35,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "maxTokens",
     "temperature",
     "thinkingBudget",
+    "effort",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

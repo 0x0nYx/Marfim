@@ -18,7 +18,7 @@
 
 use crate::events::{Event, EventBus};
 use crate::journal::{Journal, JournalRecord};
-use crate::providers::{backoff_ms, ChatMessage, ChatRequest, StreamEvent, ToolCall, Usage};
+use crate::providers::{ChatMessage, ChatRequest, StreamEvent, ToolCall, Usage};
 use crate::router::{ModelEntry, Role, Router};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -131,13 +131,16 @@ impl StopReason {
 }
 
 /// Sampling overrides applied to EVERY primary provider request (config
-/// truth: `maxTokens`/`temperature`/`thinkingBudget` from settings reach
-/// the wire instead of dying in an unused struct field).
+/// truth: `maxTokens`/`temperature`/`thinkingBudget`/`effort` from
+/// settings reach the wire instead of dying in an unused struct field).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Sampling {
     pub max_completion_tokens: Option<u64>,
     pub temperature: Option<f64>,
     pub thinking_budget: Option<u64>,
+    /// Canonical effort ladder (distillation §R1) — each wire emits its
+    /// own dialect from this one value.
+    pub effort: Option<crate::providers::effort::Effort>,
 }
 
 pub struct Harness {
@@ -157,6 +160,10 @@ pub struct Harness {
     pub compact_threshold_tokens: u64,
     /// Sampling overrides for provider requests (config truth).
     pub sampling: Sampling,
+    /// Catalog context window for the primary model, when known — feeds
+    /// the distilled compaction trigger math (§C1). `None` keeps the
+    /// plain configured threshold.
+    pub context_window: Option<u64>,
     /// Monotonic turn counter (TurnStarted/TurnEnded carry the real turn).
     pub turn_counter: AtomicU64,
     /// Tool calls denied by the permission engine this session (D12 exit 2).
@@ -266,6 +273,7 @@ impl Harness {
             cancel: CancelToken::default(),
             compact_threshold_tokens,
             sampling: Sampling::default(),
+            context_window: None,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             verify_armed: AtomicBool::new(false),
@@ -545,6 +553,7 @@ impl Harness {
                 max_completion_tokens: self.sampling.max_completion_tokens,
                 temperature: self.sampling.temperature,
                 thinking_budget: self.sampling.thinking_budget,
+                effort: self.sampling.effort,
             };
 
             // P4 pre_model hook (observational)
@@ -617,6 +626,10 @@ impl Harness {
                             true,
                             step_t0.elapsed().as_secs_f64() * 1000.0,
                         );
+                        self.router
+                            .write()
+                            .await
+                            .mark_success(Role::Primary, &e.model);
                         entry = Some(e);
                         step = Some(s);
                         break;
@@ -628,11 +641,15 @@ impl Harness {
                             false,
                             step_t0.elapsed().as_secs_f64() * 1000.0,
                         );
-                        self.router.write().await.mark_unavailable(
-                            Role::Primary,
-                            &e.model,
-                            backoff_ms(attempt as u32),
-                        );
+                        // Distillation §F1: cooldown ladder — 60s doubling
+                        // per consecutive failure, capped at 4h (provider
+                        // Retry-After would win if it were longer, but the
+                        // transport layer already consumed the header into
+                        // its own retry loop; the ladder covers the rest).
+                        self.router
+                            .write()
+                            .await
+                            .mark_failure(Role::Primary, &e.model, None);
                         if attempt + 1 >= chain_len.max(1) {
                             return Err(err);
                         }
@@ -1021,13 +1038,27 @@ impl Harness {
         last_step_input_tokens: u64,
     ) -> std::result::Result<bool, crate::CoreError> {
         // P4 compact_threshold actuation (clamped at turn start to
-        // [0.5x, 1.5x] of the configured value).
-        let threshold = self
+        // [0.5x, 1.5x] of the configured value). Distillation §C1: when
+        // the catalog knows the primary model's context window, the
+        // Hermes trigger math raises the configured threshold to an
+        // honest floor — `(ctx − max_out) × pct` with a 64k floor capped
+        // at 85% and a 75% floor on small (<512k) windows. The actuation
+        // override still wins absolutely; the math only ever RAISES the
+        // plain configured value.
+        let configured = self
             .turn_overrides
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .compact_threshold
             .unwrap_or(self.compact_threshold_tokens);
+        let threshold = match self.context_window {
+            Some(w) => configured.max(crate::compact::trigger_tokens(
+                w,
+                self.sampling.max_completion_tokens.unwrap_or(8192),
+                crate::compact::DEFAULT_TRIGGER_PCT,
+            )),
+            None => configured,
+        };
         if last_step_input_tokens <= threshold {
             return Ok(false);
         }
@@ -1274,6 +1305,7 @@ mod tests {
             cancel: CancelToken::default(),
             compact_threshold_tokens: u64::MAX,
             sampling: Sampling::default(),
+            context_window: None,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -1427,6 +1459,7 @@ mod tests {
             cancel: CancelToken::default(),
             compact_threshold_tokens: u64::MAX,
             sampling: Sampling::default(),
+            context_window: None,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -1875,6 +1908,7 @@ mod tests {
             cancel: CancelToken::default(),
             compact_threshold_tokens: u64::MAX,
             sampling: Sampling::default(),
+            context_window: None,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -1967,6 +2001,7 @@ mod tests {
             cancel: CancelToken::default(),
             compact_threshold_tokens: u64::MAX,
             sampling: Sampling::default(),
+            context_window: None,
             turn_counter: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),

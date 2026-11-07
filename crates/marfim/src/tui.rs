@@ -253,6 +253,9 @@ pub struct TuiModel {
     pub total_lines: usize,
     pub input: String,
     pub usage: UsageTotals,
+    /// Catalog context window for the primary model, when known — powers
+    /// the header `ctx` gauge (distillation §H1, OMP `context_pct`).
+    pub context_window: Option<u64>,
     pub snapshot: Option<SessionSnapshot>,
     pub why: VecDeque<WhyEntry>,
     pub modal: Option<ApprovalModal>,
@@ -281,6 +284,7 @@ impl TuiModel {
             total_lines: 0,
             input: String::new(),
             usage: UsageTotals::default(),
+            context_window: None,
             snapshot: None,
             why: VecDeque::new(),
             modal: None,
@@ -861,7 +865,7 @@ fn state_span(model: &TuiModel) -> (&'static str, Style) {
 fn render_header(f: &mut Frame<'_>, model: &TuiModel, area: Rect) {
     let (state, st) = state_span(model);
     let pal = model.palette;
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             format!(" marfim v{}", marfim_core::VERSION),
             pal.accent(true),
@@ -874,7 +878,33 @@ fn render_header(f: &mut Frame<'_>, model: &TuiModel, area: Rect) {
         Span::raw(format!("turn {}", model.turn)),
         Span::styled(" | ", pal.dim()),
         Span::styled(state, st),
-    ]);
+    ];
+    // Distillation §H1: live usage segments (OMP status-line segments
+    // `token_total` / `cost` / `context_pct` — shown only once observed,
+    // never invented).
+    let u = &model.usage;
+    if u.input > 0 || u.output > 0 {
+        spans.push(Span::styled(" | ", pal.dim()));
+        let mut tok = format!("tok {}/{}", u.input, u.output);
+        if u.cache_read > 0 {
+            tok.push_str(&format!(" (cache {})", u.cache_read));
+        }
+        spans.push(Span::raw(tok));
+        if u.cost > 0.0 {
+            spans.push(Span::styled(" | ", pal.dim()));
+            spans.push(Span::raw(format!("${:.4}", u.cost)));
+        }
+    }
+    if let Some(w) = model.context_window {
+        let used = u.input + u.cache_read + u.cache_creation;
+        if let Some(pct) = used.checked_mul(100).and_then(|v| v.checked_div(w)) {
+            if pct > 0 {
+                spans.push(Span::styled(" | ", pal.dim()));
+                spans.push(Span::raw(format!("ctx {pct}%")));
+            }
+        }
+    }
+    let line = Line::from(spans);
     f.render_widget(Paragraph::new(line), area);
 }
 
@@ -1304,6 +1334,10 @@ pub async fn run(
 
     let palette = Palette::detect(&settings.theme);
     let mut model = TuiModel::new(session_id, settings.model.clone(), palette);
+    // Distillation §H1: header ctx gauge needs the catalog window.
+    model.context_window = marfim_core::catalog::catalog_provider_for(&settings.provider_name)
+        .and_then(|pid| marfim_core::catalog::lookup_fuzzy(pid, &settings.model))
+        .and_then(|m| m.context_tokens);
     model.snapshot_wanted = true;
 
     if let Err(e) = enable_raw_mode() {

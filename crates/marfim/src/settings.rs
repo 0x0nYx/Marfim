@@ -165,11 +165,23 @@ pub fn builtin_presets() -> std::collections::BTreeMap<&'static str, Preset> {
     m.insert(
         "gemini",
         Preset {
-            // Google's OpenAI-compatible endpoint (generative language API)
-            wire: "openai".into(),
-            base_url: "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+            // Native generative-language wire (distillation §R3): the
+            // SSE endpoint is `{base}/models/{model}:streamGenerate
+            // Content?alt=sse`, auth via `x-goog-api-key`.
+            wire: "gemini".into(),
+            base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
             api_key_env: "GEMINI_API_KEY".into(),
             default_model: "gemini-2.5-pro".into(),
+        },
+    );
+    m.insert(
+        "openai-responses",
+        Preset {
+            // Native Responses wire (distillation §R2).
+            wire: "openai-responses".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            api_key_env: "OPENAI_API_KEY".into(),
+            default_model: "gpt-5".into(),
         },
     );
     m.insert(
@@ -361,6 +373,45 @@ pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>,
                 max_retries: 3,
             }))
         }
+        "openai-responses" => {
+            let base = if preset.base_url.is_empty() {
+                std::env::var("OPENAI_BASE_URL")
+                    .unwrap_or_else(|_| "https://api.openai.com/v1".into())
+            } else {
+                preset.base_url.clone()
+            };
+            Ok(Arc::new(marfim_core::providers::OpenAiResponses {
+                client: marfim_core::http_client(),
+                base_url: base,
+                api_key: if preset.api_key_env.is_empty() {
+                    String::new()
+                } else {
+                    std::env::var(&preset.api_key_env).unwrap_or_default()
+                },
+                model: model.to_string(),
+                max_retries: 3,
+            }))
+        }
+        "gemini" => {
+            let base = if preset.base_url.is_empty() {
+                std::env::var("GEMINI_BASE_URL").unwrap_or_else(|_| {
+                    "https://generativelanguage.googleapis.com/v1beta".into()
+                })
+            } else {
+                preset.base_url.clone()
+            };
+            Ok(Arc::new(marfim_core::providers::Gemini {
+                client: marfim_core::http_client(),
+                base_url: base,
+                api_key: if preset.api_key_env.is_empty() {
+                    String::new()
+                } else {
+                    std::env::var(&preset.api_key_env).unwrap_or_default()
+                },
+                model: model.to_string(),
+                max_retries: 3,
+            }))
+        }
         "mock" => {
             let script = std::env::var("MARFIM_MOCK_SCRIPT").ok()
                 .map(|s| parse_mock_script(&s))
@@ -373,7 +424,7 @@ pub fn build_provider(preset: &Preset, model: &str) -> Result<Arc<dyn Provider>,
             }))
         }
         other => Err(format!(
-            "provider wire `{other}` is not wired in this build (known wires: anthropic, openai, mock)"
+            "provider wire `{other}` is not wired in this build (known wires: anthropic, openai, openai-responses, gemini, mock)"
         )),
     }
 }
@@ -396,6 +447,8 @@ pub struct EffectiveSettings {
     pub max_tokens: Option<u64>,
     pub temperature: Option<f64>,
     pub thinking_budget: Option<u64>,
+    /// Canonical reasoning-effort ladder (distillation §R1).
+    pub effort: Option<marfim_core::providers::effort::Effort>,
     pub compact_threshold_tokens: u64,
     pub stream: bool,
     // Consumed by the TUI palette (`Palette::detect`) and /theme.
@@ -597,6 +650,19 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
     if cli.max_mode.is_some() && thinking_budget.is_none() {
         thinking_budget = Some(16_384); // --max-mode consumes as max effort
     }
+    // Distillation §R1: canonical effort ladder. Unknown strings fail
+    // closed with a named error instead of silently degrading.
+    let effort = match config.get("effort") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => {
+            let s = v.as_str().unwrap_or("");
+            Some(marfim_core::providers::effort::Effort::parse(s).ok_or_else(|| {
+                format!(
+                    "config `effort`: unknown level `{s}` (known: minimal, low, medium, high, xhigh, max)"
+                )
+            })?)
+        }
+    };
     let compact_threshold_tokens = config
         .get("autoCompactThreshold")
         .and_then(|v| v.as_u64())
@@ -683,6 +749,7 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         max_tokens,
         temperature,
         thinking_budget,
+        effort,
         compact_threshold_tokens,
         stream,
         theme,
@@ -799,6 +866,7 @@ mod tests {
         "maxTokens",
         "temperature",
         "thinkingBudget",
+        "effort",
     ];
 
     use clap::CommandFactory;

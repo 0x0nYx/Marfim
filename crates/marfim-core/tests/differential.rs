@@ -192,7 +192,10 @@ async fn anthropic_request_body_carries_cache_breakpoints_and_thinking() {
         .await
         .unwrap();
     let body: Value = serde_json::from_str(&captured.lock().unwrap()).unwrap();
-    assert_eq!(body["max_tokens"], 1234);
+    // Distillation §R1 (Hermes rule): thinking mode requires
+    // max_tokens >= budget + 4096, so the 1234 cap is raised to 8192.
+    assert_eq!(body["max_tokens"], 8192);
+    assert_eq!(body["temperature"], 1.0, "thinking pins temperature");
     assert_eq!(body["thinking"]["budget_tokens"], 4096);
     // cache_control lands on the last tool and the system block
     let tools = body["tools"].as_array().unwrap();

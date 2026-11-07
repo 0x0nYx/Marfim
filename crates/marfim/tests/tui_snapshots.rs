@@ -29,6 +29,7 @@ pub mod settings {
     pub struct EffectiveSettings {
         pub theme: String,
         pub model: String,
+        pub provider_name: String,
         pub cwd: std::path::PathBuf,
     }
     #[derive(Clone)]

@@ -77,14 +77,31 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
         "messages": msgs,
         "stream": true
     });
+    // Reasoning effort (distillation §R1): an explicit thinking budget
+    // wins; the canonical ladder converts through the Hermes budget table.
+    // Anthropic requires temperature 1 and max_tokens >= budget + 4096
+    // whenever thinking is enabled — enforce both here so the request is
+    // well-formed by construction instead of failing on the wire.
+    let thinking_budget = req
+        .thinking_budget
+        .or_else(|| req.effort.map(super::effort::anthropic_budget_tokens));
+    if let Some(tb) = thinking_budget {
+        body["thinking"] = serde_json::json!({"type": "enabled", "budget_tokens": tb});
+        let floor = super::effort::anthropic_min_max_tokens(tb);
+        if body["max_tokens"].as_u64().unwrap_or(0) < floor {
+            body["max_tokens"] = serde_json::json!(floor);
+        }
+        body["temperature"] = serde_json::json!(1.0);
+    }
     if !system_val.is_null() {
         body["system"] = system_val;
     }
     if let Some(t) = req.temperature {
-        body["temperature"] = serde_json::json!(t);
-    }
-    if let Some(tb) = req.thinking_budget {
-        body["thinking"] = serde_json::json!({"type": "enabled", "budget_tokens": tb});
+        // Thinking pins temperature to 1 on the Anthropic wire; a user
+        // temperature is honored only when thinking is off.
+        if thinking_budget.is_none() {
+            body["temperature"] = serde_json::json!(t);
+        }
     }
     if !req.tools.is_empty() {
         let mut tools: Vec<serde_json::Value> = req

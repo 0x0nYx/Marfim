@@ -606,7 +606,14 @@ async fn build_session(
         max_completion_tokens: settings.max_tokens,
         temperature: settings.temperature,
         thinking_budget: settings.thinking_budget,
+        effort: settings.effort,
     };
+    // Distillation §C1: the compaction trigger math needs the primary
+    // model's context window from the offline catalog (best-effort —
+    // unknown models keep the plain configured threshold).
+    harness.context_window = marfim_core::catalog::catalog_provider_for(&settings.provider_name)
+        .and_then(|pid| marfim_core::catalog::lookup_fuzzy(pid, &settings.model))
+        .and_then(|m| m.context_tokens);
     let harness = Arc::new(harness);
     // P2 resume semantics: a resumed session rebuilds its conversation
     // history from the journal (user/assistant turns + compaction

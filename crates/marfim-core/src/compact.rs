@@ -123,3 +123,103 @@ mod tests {
         assert_eq!(dump(&a), dump(&b), "same input, same output");
     }
 }
+
+// ---------------------------------------------------------------------
+// Distillation §C1: compaction trigger math (Hermes `context_compressor
+// .py::_compute_threshold_tokens`). The trigger is derived from the REAL
+// context budget, not an arbitrary fixed count:
+//   effective = context_window − max_output_tokens
+//   trigger   = effective × pct, floored at 64k tokens — but the floor
+//               itself is capped at 85% of the effective window when it
+//               binds, and small (<512k) windows get a raise-only 75%
+//               floor. The result never exceeds the effective window.
+// Pure and deterministic; unit-tested below.
+
+/// Default trigger percentage (Hermes `compression.threshold=0.50`).
+pub const DEFAULT_TRIGGER_PCT: f64 = 0.50;
+/// Absolute floor for the trigger in tokens (Hermes
+/// `MINIMUM_CONTEXT_LENGTH = 64_000`).
+pub const MIN_TRIGGER_TOKENS: u64 = 64_000;
+/// Windows below this size get the raise-only 75% floor (Hermes
+/// `_SMALL_CTX_WINDOW_LIMIT = 512_000`).
+pub const SMALL_WINDOW_LIMIT: u64 = 512_000;
+/// Cap ratio that binds when the 64k floor would overreach (Hermes
+/// `_MIN_CTX_TRIGGER_RATIO = 0.85`).
+pub const FLOOR_CAP_RATIO: f64 = 0.85;
+/// Raise-only floor ratio on small windows (Hermes rule).
+pub const SMALL_WINDOW_FLOOR_RATIO: f64 = 0.75;
+
+pub fn trigger_tokens(context_window: u64, max_output_tokens: u64, pct: f64) -> u64 {
+    let effective = context_window.saturating_sub(max_output_tokens).max(1);
+    let pct = pct.clamp(0.05, 1.0);
+    let base = (effective as f64 * pct) as u64;
+    let floor = ((effective as f64 * FLOOR_CAP_RATIO) as u64).min(MIN_TRIGGER_TOKENS);
+    let mut t = base.max(floor.min(effective));
+    if effective < SMALL_WINDOW_LIMIT {
+        let small_floor = (effective as f64 * SMALL_WINDOW_FLOOR_RATIO) as u64;
+        t = t.max(small_floor.min(effective));
+    }
+    t.max(1).min(effective)
+}
+
+#[cfg(test)]
+mod trigger_tests {
+    use super::*;
+
+    // All expectations hand-derived from the formula:
+    //   eff = (ctx − out).max(1); base = eff×pct;
+    //   floor = min(0.85×eff, 64k) capped at eff; t = max(base, floor);
+    //   if eff < 512k: t = max(t, 0.75×eff); return t.max(1).min(eff).
+
+    #[test]
+    fn moderate_window_small_window_floor_applies() {
+        // 200k window, 8k out → eff 192k: 50% = 96k, 64k floor below it,
+        // then the <512k raise-only 75% floor lifts the trigger to 144k
+        // (compaction fires with plenty of tail budget on a 200k model).
+        assert_eq!(trigger_tokens(200_000, 8_000, DEFAULT_TRIGGER_PCT), 144_000);
+    }
+
+    #[test]
+    fn floor_is_capped_at_85pct_of_effective() {
+        // 32k window, 8k out → eff 24k: 50% = 12k; 64k floor would
+        // overreach → capped at 85% = 20,400; small-window 75% floor
+        // (18k) does not raise it further.
+        assert_eq!(trigger_tokens(32_000, 8_000, DEFAULT_TRIGGER_PCT), 20_400);
+    }
+
+    #[test]
+    fn small_window_75pct_floor_can_raise_over_the_capped_floor() {
+        // 100k window, 8k out → eff 92k: 50% = 46k; capped floor = 64k;
+        // small-window 75% = 69k raises the trigger.
+        assert_eq!(trigger_tokens(100_000, 8_000, DEFAULT_TRIGGER_PCT), 69_000);
+    }
+
+    #[test]
+    fn huge_window_uses_percentage_then_floors_at_64k() {
+        // 1M window, 8k out → eff 992k (≥512k, no small-window rule):
+        // 50% = 496k wins.
+        assert_eq!(
+            trigger_tokens(1_000_000, 8_000, DEFAULT_TRIGGER_PCT),
+            496_000
+        );
+        // Tiny pct: the (uncapped) 64k floor binds.
+        assert_eq!(trigger_tokens(1_000_000, 8_000, 0.05), 64_000);
+    }
+
+    #[test]
+    fn trigger_never_exceeds_effective_window() {
+        // eff = 1k: base 500, floor min(850, 64k) = 850, small floor 750
+        // → 850.
+        assert_eq!(trigger_tokens(9_000, 8_000, DEFAULT_TRIGGER_PCT), 850);
+        // eff = 2k: base 1000, floor 1700 → 1700.
+        assert_eq!(trigger_tokens(10_000, 8_000, DEFAULT_TRIGGER_PCT), 1_700);
+    }
+
+    #[test]
+    fn zero_output_and_degenerate_inputs_are_safe() {
+        assert_eq!(trigger_tokens(0, 0, DEFAULT_TRIGGER_PCT), 1);
+        // 200k window, no output cap → eff 200k: 50% = 100k, small-window
+        // floor 150k → 150k.
+        assert_eq!(trigger_tokens(200_000, 0, DEFAULT_TRIGGER_PCT), 150_000);
+    }
+}
