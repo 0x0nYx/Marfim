@@ -273,10 +273,11 @@ pub async fn serve_route_handlers(
             GatewayGitOp::Diff,
         )),
         git_log: Some(gateway_git_handler(settings.cwd.clone(), GatewayGitOp::Log)),
-        mcp_list: Some(gateway_mcp_handler(host)),
-        // W3.2 wires the real Terminal tool here; until then the route
-        // answers 501 honestly (never a fake success).
-        terminals: None,
+        mcp_list: Some(gateway_mcp_handler(host.clone())),
+        // W3.2: terminal routes dispatch through the REAL Terminal tool
+        // (hooks → permission → sandbox argv wrap → dispatch) — the HTTP
+        // surface never bypasses the permission engine.
+        terminals: Some(gateway_tool_handler(host, cwd_str, "Terminal")),
     };
     (handlers, redacted_config_view(config, settings))
 }
@@ -373,6 +374,7 @@ pub async fn build_session(
         plan_mode: Arc::new(Default::default()),
         background: Arc::new(Default::default()),
         monitors: Arc::new(Default::default()),
+        terminals: Arc::new(Default::default()),
         last_repomap: Arc::new(Default::default()),
         subagent: subagents.clone(),
         bash_default_timeout_ms: settings.bash_default_timeout_ms,

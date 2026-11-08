@@ -381,6 +381,26 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
         crate::misc_tools::monitor_kill
     );
     tool!(
+        "Terminal",
+        "Interactive PTY session: spawn a process on a real terminal (vt100 screen model); actions spawn|write|drain|screen|resize|close|list — REPLs and curses apps behave; output is bounded.",
+        TC::Execute,
+        false,
+        false,
+        10_000,
+        serde_json::json!({"type":"object","required":["action"],"properties":{
+            "action":{"type":"string","enum":["spawn","write","drain","screen","resize","close","list"]},
+            "command":{"type":"string","description":"spawn: program to exec (argv — no shell parsing)"},
+            "args":{"type":"array","items":{"type":"string"}},
+            "cwd":{"type":"string"},
+            "rows":{"type":"integer"},
+            "cols":{"type":"integer"},
+            "env":{"type":"object","additionalProperties":{"type":"string"}},
+            "id":{"type":"integer","description":"session handle from spawn"},
+            "text":{"type":"string","description":"write: raw bytes to the child's stdin"}
+        }}),
+        crate::terminal::terminal
+    );
+    tool!(
         "BinInfo",
         "Inspect a binary file (magic, entropy).",
         TC::ReadOnly,
@@ -568,6 +588,21 @@ impl ToolHost for HostTools {
                     is_error: err,
                 }
             }
+            ("Terminal", _) => {
+                // W3.2: spawn is sandbox-wrapped (the same fail-closed
+                // wrapper shape as Bash), so the Terminal arm owns the
+                // full dispatch — everything else is server state.
+                let ctx = self.state.clone();
+                let cwd = if session.cwd.is_empty() {
+                    self.state.cwd.to_string_lossy().to_string()
+                } else {
+                    session.cwd.clone()
+                };
+                let mut ctx2 = ctx.clone();
+                ctx2.cwd = std::path::PathBuf::from(cwd);
+                let sandbox = self.sandbox.clone();
+                crate::terminal::terminal_exec(&ctx2, &sandbox, args)
+            }
             ("WebFetch", _) => {
                 let url = args["url"].as_str().unwrap_or("").to_string();
                 let raw = args["raw"].as_bool().unwrap_or(false);
@@ -700,6 +735,7 @@ mod tests {
             plan_mode: Arc::new(Default::default()),
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
+            terminals: Arc::new(marfim_term::TermServer::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
@@ -905,6 +941,7 @@ mod tests {
             plan_mode: Arc::new(Default::default()),
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
+            terminals: Arc::new(marfim_term::TermServer::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,

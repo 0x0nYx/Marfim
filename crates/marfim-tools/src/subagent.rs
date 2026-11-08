@@ -62,6 +62,9 @@ pub fn blocked_tools(agent: &str) -> Vec<&'static str> {
         "SessionSearch",
         "Monitor",
         "MonitorKill",
+        // W3.2: a terminal session outlives the child (long-lived process
+        // surface) and recursion-closes like Task — parents own terminals.
+        "Terminal",
     ]
 }
 

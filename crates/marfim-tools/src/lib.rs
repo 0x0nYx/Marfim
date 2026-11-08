@@ -14,6 +14,7 @@ pub mod patch;
 pub mod registry;
 pub mod repomap;
 pub mod subagent;
+pub mod terminal;
 pub mod todo;
 pub mod tools_host;
 pub mod web;

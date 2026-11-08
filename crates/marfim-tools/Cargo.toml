@@ -9,6 +9,7 @@ description = "Marfim tool registry and built-in tools"
 [dependencies]
 marfim-core = { path = "../marfim-core" }
 marfim-mcp = { path = "../marfim-mcp" }
+marfim-term = { path = "../marfim-term" }
 tokio.workspace = true
 reqwest.workspace = true
 serde.workspace = true

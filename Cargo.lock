@@ -2606,6 +2606,7 @@ dependencies = [
  "async-trait",
  "marfim-core",
  "marfim-mcp",
+ "marfim-term",
  "marfim-testkit",
  "regex",
  "reqwest",

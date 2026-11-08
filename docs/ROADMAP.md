@@ -5,17 +5,19 @@ row below carries its spec source. Shipped items are NOT listed here — they
 live in docs/FEATURE-MATRIX.md and docs/PROGRESS.md. Work-package IDs refer
 to the progress ledger.
 
-## v0.2 — embeddability + protocol (W1/W2, critical path)
+## v0.2 — embeddability + protocol (W1/W2/W3, critical path)
 
 - **marfim-app lib extraction, platform trait, CredentialSource,
   android sandbox arms, GitBackend (gix)** — the embeddability substrate
   (W1.1–W1.5).
 - **Protocol v1**: complete the gateway surface (sessions, steer/cancel/
-  undo/rewind/fork, config with redaction, fs/git/MCP routes), SSE envelope
-  with seq + Last-Event-ID ring + heartbeat, docs/PROTOCOL.md, byte-checked
-  fixtures, unix-socket + optional TLS (W2.1–W2.3).
+  undo/rewind/fork, config with redaction, fs/git/MCP/terminal routes),
+  SSE envelope with seq + Last-Event-ID ring + heartbeat,
+  docs/PROTOCOL.md, byte-checked fixtures, unix-socket + optional TLS
+  (W2.1–W2.3).
 - **Terminal**: PTY + Rust emulator (vt100 first, alacritty_terminal
-  fallback) behind marfim-term; `Terminal` tool; monitor migration (W3).
+  fallback) behind marfim-term; `Terminal` tool; monitor migration (W3,
+  SHIPPED — see PROGRESS.md).
 
 ## v0.3 — mobile (W4/W14)
 

@@ -205,6 +205,9 @@ impl TermSession {
         let mut st = self.state.lock().unwrap_or_else(|p| p.into_inner());
         st.parser.process(bytes);
         st.total_bytes += bytes.len() as u64;
+        // Monotonic activity counter: monitors (W3.2) poll this to detect
+        // "the terminal said something" without draining.
+        self.seq.fetch_add(1, Ordering::Relaxed);
         if st.pending.len() + bytes.len() > MAX_PENDING {
             // Drop the OLDEST half, keep the newest — the marker lands in
             // the next drain, honestly.

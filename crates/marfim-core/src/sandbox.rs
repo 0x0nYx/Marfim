@@ -121,6 +121,14 @@ impl Sandbox {
         self
     }
 
+    /// W3.2 (Terminal tool): toggle network isolation at the argv-wrap
+    /// layer (`unshare --net` rides or doesn't). Mirrors the `network`
+    /// field for out-of-crate callers — the struct keeps private state.
+    pub fn with_network(mut self, network: bool) -> Self {
+        self.network = network;
+        self
+    }
+
     pub fn unshare_available(&self) -> bool {
         self.unshare_available
     }
@@ -188,6 +196,53 @@ impl Sandbox {
         {
             // tokio re-exposes process_group on unix; children die as a group.
             cmd.process_group(0);
+        }
+    }
+
+    /// W3.2: the SAME wrapper logic as [`Self::command`], but as an argv
+    /// pair for spawners that own their stdio (PTY sessions: the pty is
+    /// the child's stdin/stdout/stderr, so the tokio-Command shape does
+    /// not apply). Fail-closed identical to `command()`: a requested but
+    /// unenforceable filesystem sandbox is an error, never a plain spawn.
+    /// Env/process-group containment stays the spawner's job here (the
+    /// TermSpec allowlist mirrors `sanitize_env`; portable-pty owns the
+    /// session), which the Terminal tool's docs state honestly.
+    pub fn wrap_argv(
+        &self,
+        program: &str,
+        args: &[String],
+    ) -> Result<(String, Vec<String>), String> {
+        if matches!(self.level, SandboxLevel::AppUid | SandboxLevel::None) {
+            return Ok((program.to_string(), args.to_vec()));
+        }
+        let fs_rooted = !self.writable_roots.is_empty();
+        if fs_rooted {
+            if !self.fs_sandbox_available() {
+                return Err(format!(
+                    "filesystem sandbox requested (writable_roots={:?}) but this platform cannot enforce it — refusing to run `{program}` unsandboxed",
+                    self.writable_roots
+                ));
+            }
+            let self_exe = self.exec_helper.clone().ok_or_else(|| {
+                format!(
+                    "sandbox-exec helper unavailable on this platform — refusing to run `{program}` unsandboxed"
+                )
+            })?;
+            let mut wrapped = vec!["sandbox-exec".to_string()];
+            for r in &self.writable_roots {
+                wrapped.push("--root".to_string());
+                wrapped.push(r.clone());
+            }
+            wrapped.push("--".to_string());
+            wrapped.push(program.to_string());
+            wrapped.extend(args.iter().cloned());
+            Ok((self_exe.to_string_lossy().to_string(), wrapped))
+        } else if self.unshare_available && !self.network {
+            let mut wrapped = vec!["--net".to_string(), "--".to_string(), program.to_string()];
+            wrapped.extend(args.iter().cloned());
+            Ok(("unshare".to_string(), wrapped))
+        } else {
+            Ok((program.to_string(), args.to_vec()))
         }
     }
 

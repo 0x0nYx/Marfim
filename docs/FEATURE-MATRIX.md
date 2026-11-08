@@ -80,6 +80,8 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | Repo map (symbols, relevance-ranked, budget) | aider repomap (PageRank + budget binary search shipped; tree-sitter = future precision frontend) | ✅ (PageRank live) |
 | MCP stdio client; MCP tools appear natively (`mcp__srv__tool`) | claude code, goose MCP-first, omp | ✅ |
 | Summary-first bounded outputs with `[truncated]` markers | REA evidence records | ✅ |
+| Terminal: durable PTY sessions + vt100 screen model (`marfim-term`), `Terminal` tool (spawn/write/drain/screen/resize/close/list), sandbox argv wrap, bounded ring + session cap | opencode PTY daemon, codex unified exec, hermes terminal backends | ✅ (W3; gateway `/v1/terminals` routes dispatch through the tool host) |
+| Monitors watch files AND terminal output (poll-based, no background threads) | hermes monitor tools (migration) | ✅ (W3.2 `MonitorSource::{File,Terminal}`) |
 
 ## 4. Permissions & safety
 

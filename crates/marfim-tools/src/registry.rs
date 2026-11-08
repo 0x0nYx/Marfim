@@ -68,6 +68,10 @@ pub struct ToolCtx {
     pub plan_mode: std::sync::Arc<std::sync::Mutex<bool>>,
     pub background: std::sync::Arc<crate::bash::BackgroundShells>,
     pub monitors: std::sync::Arc<crate::monitor::Monitors>,
+    /// W3.2: PTY terminal sessions (the Terminal tool). Bounded, honest;
+    /// children of subagents get their own EMPTY server plus a whole-tool
+    /// deny — long-lived process surfaces are a parent's responsibility.
+    pub terminals: std::sync::Arc<marfim_term::TermServer>,
     pub last_repomap: std::sync::Arc<std::sync::Mutex<String>>,
     /// D16: real subagent spawner (UnwiredSubagents by default).
     pub subagent: std::sync::Arc<dyn crate::subagent::SubagentSpawner>,
@@ -91,6 +95,7 @@ impl Default for ToolCtx {
             plan_mode: Arc::new(Default::default()),
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
+            terminals: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,

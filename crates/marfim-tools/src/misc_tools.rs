@@ -70,15 +70,29 @@ pub fn notebook_edit(_ctx: &ToolCtx, args: &Value) -> ToolOutput {
 
 // ------------------------------------------------------------------ Monitor
 
+/// W3.2 migrated Monitor: `path` watches a file (mtime, original
+/// semantics); `terminal` watches a terminal session's output (fires when
+/// the session produced bytes). One monitor watches exactly one source.
 pub fn monitor(ctx: &ToolCtx, args: &Value) -> ToolOutput {
-    let Some(path) = args["path"].as_str() else {
-        return ToolOutput::err("missing `path`");
-    };
-    let full = crate::fs::resolve(&ctx.cwd, path);
-    let id = ctx.monitors.start(full.to_string_lossy().as_ref());
-    ToolOutput::ok(format!(
-        "monitor {id} watching {path} (poll its baseline mtime)"
-    ))
+    if let Some(path) = args["path"].as_str() {
+        let full = crate::fs::resolve(&ctx.cwd, path);
+        let id = ctx.monitors.start(full.to_string_lossy().as_ref());
+        return ToolOutput::ok(format!(
+            "monitor {id} watching {path} (poll its baseline mtime)"
+        ));
+    }
+    if let Some(term_id) = args["terminal"].as_u64() {
+        if ctx.terminals.get(term_id).is_none() {
+            return ToolOutput::err(format!("no terminal {term_id}"));
+        }
+        let id = ctx
+            .monitors
+            .start_source(crate::monitor::MonitorSource::Terminal(term_id));
+        return ToolOutput::ok(format!(
+            "monitor {id} watching terminal {term_id} (fires on new output)"
+        ));
+    }
+    ToolOutput::err("missing `path` (file watch) or `terminal` (terminal output watch)")
 }
 
 pub fn monitor_kill(ctx: &ToolCtx, args: &Value) -> ToolOutput {
@@ -378,6 +392,7 @@ mod tests {
             plan_mode: Arc::new(Default::default()),
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
+            terminals: Arc::new(marfim_term::TermServer::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
@@ -758,6 +773,7 @@ mod tests_extra {
             plan_mode: Arc::new(Default::default()),
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
+            terminals: Arc::new(marfim_term::TermServer::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,

@@ -214,6 +214,7 @@ mod tests {
             plan_mode: Arc::new(Default::default()),
             background: Arc::new(BackgroundShells::default()),
             monitors: Arc::new(Default::default()),
+            terminals: Arc::new(marfim_term::TermServer::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
