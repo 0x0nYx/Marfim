@@ -375,6 +375,7 @@ pub async fn build_session(
         background: Arc::new(Default::default()),
         monitors: Arc::new(Default::default()),
         terminals: Arc::new(Default::default()),
+        dircache: Arc::new(Default::default()),
         last_repomap: Arc::new(Default::default()),
         subagent: subagents.clone(),
         bash_default_timeout_ms: settings.bash_default_timeout_ms,

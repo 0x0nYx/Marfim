@@ -198,6 +198,14 @@ pub struct Harness {
     /// §W whether the previous turn ended Aborted (drives the interrupt
     /// placeholder healing at the next turn start).
     last_turn_aborted: AtomicBool,
+    /// W5.5 tool_monitor (goose): the last call's identity (name+args
+    /// hash) and its consecutive repeat count within THIS turn. The cap
+    /// refuses the third identical call — a model stuck in a loop gets an
+    /// honest, actionable refusal instead of burning budget.
+    last_call: std::sync::Mutex<(Option<u64>, u32)>,
+    /// W5.5 per-turn tool budget: total tool calls in the current turn
+    /// (reset at TurnStarted; the cap refuses further dispatch).
+    turn_tool_calls: AtomicU64,
 }
 
 /// Turn-scoped faculty overrides. Every field is optional and validated:
@@ -217,6 +225,26 @@ pub fn prompt_cache_key(session_id: &str) -> String {
     let mut k = format!("pc_{session_id}");
     k.truncate(64);
     k
+}
+
+/// W5.5 (goose tool_monitor doctrine): the per-turn tool-call budget and
+/// the identical-call cap. A tool call repeated VERBATIM this many times
+/// in one turn is a loop — the next identical call is refused with the
+/// remedy in the message. Denials do NOT count toward the streak (the
+/// denial circuit breaker owns that path; the two guards stay
+/// orthogonal — a denied call is the breaker's business, not a loop).
+pub const MAX_TOOL_CALLS_PER_TURN: u64 = 200;
+pub const MAX_IDENTICAL_CALLS: u32 = 3;
+
+/// FNV-1a over the call identity (tool name + canonical args JSON) — a
+/// loop-detection fingerprint, not a security primitive.
+fn call_fingerprint(tool: &str, args: &Value) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::hash::DefaultHasher::new();
+    h.write(tool.as_bytes());
+    h.write(&[0]);
+    h.write(args.to_string().as_bytes());
+    h.finish()
 }
 
 /// §W interrupt placeholder healing (distilled: Hermes structural
@@ -316,6 +344,8 @@ impl Harness {
             sampling: Sampling::default(),
             context_window: None,
             turn_counter: AtomicU64::new(0),
+            last_call: std::sync::Mutex::new((None, 0)),
+            turn_tool_calls: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error,
@@ -353,6 +383,10 @@ impl Harness {
     pub async fn run_turn(&self, user_text: &str) -> StopReason {
         let turn = self.turn_counter.fetch_add(1, Ordering::SeqCst) + 1;
         self.bus.publish(Event::TurnStarted { turn });
+        // W5.5 tool_monitor reset: every turn starts with a clean budget
+        // and a clean repeat tracker.
+        self.turn_tool_calls.store(0, Ordering::SeqCst);
+        *self.last_call.lock().unwrap_or_else(|p| p.into_inner()) = (None, 0);
 
         // P4 turn-start actuations: collect from the faculties, validate
         // and clamp each, journal + apply what survived. An actuation that
@@ -959,6 +993,36 @@ impl Harness {
     /// enforced per-call timeout (D8).
     async fn exec_one(&self, tc: &ToolCall) -> (String, bool) {
         let args = tc.parse_args().unwrap_or(Value::Null);
+        // W5.5 per-turn budget: a turn that has spent its tool calls is
+        // done — the refusal names the budget and the remedy.
+        let calls_this_turn = self.turn_tool_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if calls_this_turn > MAX_TOOL_CALLS_PER_TURN {
+            self.executed_tools.fetch_add(1, Ordering::SeqCst);
+            return (
+                format!(
+                    "tool budget for this turn exhausted ({MAX_TOOL_CALLS_PER_TURN} calls) — finish with what you have or end the turn; the next turn gets a fresh budget",
+                ),
+                true,
+            );
+        }
+        // W5.5 identical-call cap (goose tool_monitor): a call repeated
+        // VERBATIM MAX_IDENTICAL_CALLS times (and actually RUN, not
+        // permission-denied — the breaker owns denials) is a loop; the
+        // next identical call is refused pre-dispatch.
+        let fp = call_fingerprint(&tc.name, &args);
+        {
+            let last = self.last_call.lock().unwrap_or_else(|p| p.into_inner());
+            if last.0 == Some(fp) && last.1 >= MAX_IDENTICAL_CALLS {
+                self.executed_tools.fetch_add(1, Ordering::SeqCst);
+                return (
+                    format!(
+                        "identical call refused: `{}` ran with byte-identical arguments {} times this turn — change the arguments or take a different approach (loop guard)",
+                        tc.name, last.1
+                    ),
+                    true,
+                );
+            }
+        }
         // P4 permission_tighten actuation: a faculty-tightened tool is
         // denied for this turn (deny>ask>allow — this only ADDS denies;
         // the PermissionEngine remains the sole authority for everything
@@ -1010,13 +1074,30 @@ impl Harness {
                 _ = cancel.cancelled() => ("cancelled by user".to_string(), true),
             }
         };
-        match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), attempt).await {
-            Ok(pair) => pair,
-            Err(_) => (
-                format!("tool `{}` timed out after {timeout_ms}ms", tc.name),
-                true,
-            ),
+        let result =
+            match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), attempt).await
+            {
+                Ok(pair) => pair,
+                Err(_) => (
+                    format!("tool `{}` timed out after {timeout_ms}ms", tc.name),
+                    true,
+                ),
+            };
+        // W5.5 post-result streak bookkeeping: denials RESET the streak
+        // (the denial circuit breaker owns that path); everything else
+        // extends it when the fingerprint repeats.
+        {
+            let denied = result.1 && result.0.starts_with("permission denied");
+            let mut last = self.last_call.lock().unwrap_or_else(|p| p.into_inner());
+            if denied {
+                *last = (Some(fp), 0);
+            } else if last.0 == Some(fp) {
+                last.1 += 1;
+            } else {
+                *last = (Some(fp), 1);
+            }
         }
+        result
     }
 
     /// Execute a batch (D8): Execute-class/unsafe tools run sequentially in
@@ -1494,6 +1575,8 @@ mod tests {
             sampling: Sampling::default(),
             context_window: None,
             turn_counter: AtomicU64::new(0),
+            last_call: std::sync::Mutex::new((None, 0)),
+            turn_tool_calls: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -1640,6 +1723,8 @@ mod tests {
             sampling: Sampling::default(),
             context_window: None,
             turn_counter: AtomicU64::new(0),
+            last_call: std::sync::Mutex::new((None, 0)),
+            turn_tool_calls: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -1970,6 +2055,57 @@ mod tests {
     }
 
     // ------------------------------------------------------ D8: cancel
+    // W5.5: the 4th byte-identical call in one turn is refused (the
+    // guard allows MAX_IDENTICAL_CALLS runs, then breaks the loop).
+    #[tokio::test]
+    async fn w55_identical_call_cap_refuses_after_three_verbatim_runs() {
+        let tools = Arc::new(ScriptedTools::new());
+        let same = serde_json::json!({"path": "a"});
+        let script = vec![
+            MockProvider::tool_call("c1", "Read", same.clone()),
+            MockProvider::tool_call("c2", "Read", same.clone()),
+            MockProvider::tool_call("c3", "Read", same.clone()),
+            MockProvider::tool_call("c4", "Read", same.clone()),
+            MockProvider::text("done"),
+        ];
+        let (h, _bus) = harness(script, tools.clone());
+        let stop = h.run_turn("loop test").await;
+        assert!(
+            matches!(stop, StopReason::EndTurn),
+            "the turn still ends: {stop:?}"
+        );
+        let executed = tools.executed.lock().unwrap();
+        let read_calls = executed.iter().filter(|(t, _)| t == "Read").count();
+        assert_eq!(
+            read_calls, 3,
+            "three verbatim Reads ran; the 4th was refused: {executed:?}"
+        );
+    }
+
+    // W5.5 orthogonality: permission DENIALS never trip the loop guard —
+    // the denial circuit breaker owns that path (the breaker test's four
+    // denied Reads stay four engine denials).
+    #[tokio::test]
+    async fn w55_denied_calls_do_not_count_as_loops() {
+        let tools = Arc::new(ScriptedTools::new());
+        tools.deny_tools.lock().unwrap().push("Read".to_string());
+        let same = serde_json::json!({"path": "a"});
+        let script = vec![
+            MockProvider::tool_call("d1", "Read", same.clone()),
+            MockProvider::tool_call("d2", "Read", same.clone()),
+            MockProvider::tool_call("d3", "Read", same.clone()),
+            MockProvider::tool_call("d4", "Read", same.clone()),
+            MockProvider::text("gave up"),
+        ];
+        let (h, _bus) = harness(script, tools.clone());
+        let _ = h.run_turn("all denied").await;
+        assert_eq!(
+            h.denied_tools.load(Ordering::SeqCst),
+            4,
+            "all four reached the engine as denials (never loop-refused)"
+        );
+    }
+
     #[tokio::test]
     async fn d8_cancel_token_aborts_turn_and_tools() {
         let tools = Arc::new(ScriptedTools::new());
@@ -2094,6 +2230,8 @@ mod tests {
             sampling: Sampling::default(),
             context_window: None,
             turn_counter: AtomicU64::new(0),
+            last_call: std::sync::Mutex::new((None, 0)),
+            turn_tool_calls: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -2189,6 +2327,8 @@ mod tests {
             sampling: Sampling::default(),
             context_window: None,
             turn_counter: AtomicU64::new(0),
+            last_call: std::sync::Mutex::new((None, 0)),
+            turn_tool_calls: AtomicU64::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),

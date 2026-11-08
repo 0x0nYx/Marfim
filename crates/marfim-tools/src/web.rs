@@ -112,7 +112,7 @@ pub async fn guarded_fetch(url: &str, max_bytes: usize) -> Result<String, String
         "[status {status}] [content-type {ct}] [{} bytes]\n\n",
         body.len()
     );
-    Ok(head + &text)
+    Ok(head + text.as_str())
 }
 
 /// Strip HTML tags down to readable text (script/style bodies removed).

@@ -29,6 +29,8 @@ clap = { version = "4", features = ["derive"] }
 thiserror = "2"
 futures-util = "0.3"
 regex = "1"
+# W5.9 CodeMode: the restricted interpreter behind the opt-in Code tool.
+rhai = "1.27"
 async-trait = "0.1"
 toml = "0.8"
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }

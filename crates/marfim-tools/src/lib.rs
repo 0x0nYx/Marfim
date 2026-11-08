@@ -4,6 +4,8 @@
 #![forbid(unsafe_code)]
 
 pub mod bash;
+pub mod bounding;
+pub mod code_mode;
 pub mod compute;
 pub mod edit_ladder;
 pub mod fs;
@@ -17,6 +19,7 @@ pub mod subagent;
 pub mod terminal;
 pub mod todo;
 pub mod tools_host;
+pub mod walkcache;
 pub mod web;
 
 pub use registry::{ToolCtx, ToolDef, ToolOutput, ToolRegistry};

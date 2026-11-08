@@ -90,6 +90,9 @@ pub struct WorktreeGuard {
     repo: Option<std::path::PathBuf>,
     /// true = copy isolation (Drop removes the copy directory).
     copied: bool,
+    /// W5.8: which isolation rung actually ran ("worktree" | "reflink" |
+    /// "rcopy") — surfaces in the task provenance, never guessed.
+    pub backend: String,
 }
 
 /// Bounded recursive copy for non-git isolation (W1.5). `.git` is
@@ -98,37 +101,9 @@ pub struct WorktreeGuard {
 pub const ISOLATION_COPY_FILE_CAP: usize = 50_000;
 
 pub fn copy_tree_bounded(src: &std::path::Path, dst: &std::path::Path) -> Result<usize, String> {
-    fn walk(src: &std::path::Path, dst: &std::path::Path, count: &mut usize) -> Result<(), String> {
-        for entry in
-            std::fs::read_dir(src).map_err(|e| format!("copy read {}: {e}", src.display()))?
-        {
-            let entry = entry.map_err(|e| format!("copy entry: {e}"))?;
-            let name = entry.file_name();
-            if name == ".git" {
-                continue; // history stays behind; the snapshot is the tree
-            }
-            let from = entry.path();
-            let to = dst.join(&name);
-            if from.is_dir() {
-                std::fs::create_dir_all(&to).map_err(|e| format!("mkdir {to:?}: {e}"))?;
-                walk(&from, &to, count)?;
-            } else {
-                *count += 1;
-                if *count > ISOLATION_COPY_FILE_CAP {
-                    return Err(format!(
-                        "copy isolation refused: workspace exceeds {ISOLATION_COPY_FILE_CAP} files"
-                    ));
-                }
-                std::fs::copy(&from, &to)
-                    .map_err(|e| format!("copy {} → {}: {e}", from.display(), to.display()))?;
-            }
-        }
-        Ok(())
-    }
-    let mut count = 0;
-    std::fs::create_dir_all(dst).map_err(|e| format!("mkdir {dst:?}: {e}"))?;
-    walk(src, dst, &mut count)?;
-    Ok(count)
+    // W5.8: the walk/cap now lives in core::iso (the ladder's last rung);
+    // this entry point stays for compatibility and tests.
+    marfim_core::iso::copy_bounded(src, dst)
 }
 
 fn isolated_base(kind: &str) -> std::path::PathBuf {
@@ -154,14 +129,19 @@ impl WorktreeGuard {
                 path: base,
                 repo: Some(cwd.to_path_buf()),
                 copied: false,
+                backend: "worktree".to_string(),
             })
         } else {
             let base = isolated_base("copy");
-            copy_tree_bounded(cwd, &base)?;
+            // W5.8: the CoW ladder — reflink when the FS offers it, bounded
+            // rcopy otherwise. The backend used is recorded on the guard so
+            // the caller can say what actually happened.
+            let (backend, _n) = marfim_core::iso::isolate_tree(cwd, &base)?;
             Ok(Self {
                 path: base,
                 repo: None,
                 copied: true,
+                backend: backend.name().to_string(),
             })
         }
     }

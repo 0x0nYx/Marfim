@@ -72,6 +72,8 @@ pub struct ToolCtx {
     /// children of subagents get their own EMPTY server plus a whole-tool
     /// deny — long-lived process surfaces are a parent's responsibility.
     pub terminals: std::sync::Arc<marfim_term::TermServer>,
+    /// W5.7: stamp-based directory listing cache (LS rides it).
+    pub dircache: std::sync::Arc<crate::walkcache::DirCache>,
     pub last_repomap: std::sync::Arc<std::sync::Mutex<String>>,
     /// D16: real subagent spawner (UnwiredSubagents by default).
     pub subagent: std::sync::Arc<dyn crate::subagent::SubagentSpawner>,
@@ -96,6 +98,7 @@ impl Default for ToolCtx {
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
             terminals: Arc::new(Default::default()),
+            dircache: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,

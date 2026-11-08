@@ -470,6 +470,16 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
         serde_json::json!({"type":"object","required":["entry"],"properties":{"entry":{"type":"string"}}}),
         crate::misc_tools::js_module_graph
     );
+    tool!(
+        "Code",
+        "CodeMode (opt-in): compose tool calls in a restricted rhai script — `tool_call(name, json_args)` plans calls, the script result composes arguments; every planned call executes through the normal permission path. Bounded: ops, calls, size.",
+        TC::None_,
+        false,
+        true,
+        30_000,
+        serde_json::json!({"type":"object","required":["code"],"properties":{"code":{"type":"string"}}}),
+        crate::code_mode::code
+    );
 }
 
 /// §A provenance annotation: appends the allowlist-entry note to a
@@ -482,9 +492,29 @@ fn with_provenance(output: String, note: &Option<String>) -> String {
     }
 }
 
-#[async_trait::async_trait]
-impl ToolHost for HostTools {
-    async fn execute(&self, tool: &str, args: &Value, session: &LoopCtx) -> (String, bool) {
+impl HostTools {
+    /// The full dispatch, boxed: `depth > 0` marks an INNER call
+    /// (CodeMode plan execution) — hooks/permissions/dispatch all still
+    /// run; the only difference is that nested `Code` is refused (no
+    /// recursive plans). Boxing is REQUIRED here, not style: the Code
+    /// arm re-enters this fn, so the future type must be cut by a dyn.
+    pub fn execute_inner<'s>(
+        &'s self,
+        tool: &'s str,
+        args: &'s Value,
+        session: &'s LoopCtx,
+        depth: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = (String, bool)> + Send + 's>> {
+        Box::pin(self.execute_inner_boxed(tool, args, session, depth))
+    }
+
+    async fn execute_inner_boxed(
+        &self,
+        tool: &str,
+        args: &Value,
+        session: &LoopCtx,
+        depth: u32,
+    ) -> (String, bool) {
         let args_json = args.to_string();
 
         // 1. PreToolUse hooks — fail closed (INV-09)
@@ -603,6 +633,31 @@ impl ToolHost for HostTools {
                 let sandbox = self.sandbox.clone();
                 crate::terminal::terminal_exec(&ctx2, &sandbox, args)
             }
+            ("Code", _) if depth > 0 => {
+                // nested Code is not a thing: a plan cannot plan
+                ToolOutput::err("nested Code refused: a CodeMode plan cannot plan")
+            }
+            ("Code", _) => {
+                // W5.9: evaluate the script (restricted rhai), then run the
+                // planned calls through the FULL inner path — hooks,
+                // permission engine, sandbox, bounding. One level deep.
+                let ctx2 = self.state.clone();
+                let session2 = session.clone();
+                let this = self;
+                crate::code_mode::code_exec(
+                    &ctx2,
+                    &move |name: String, a: Value| {
+                        let session2 = session2.clone();
+                        Box::pin(async move {
+                            let (out, err) =
+                                this.execute_inner(&name, &a, &session2, depth + 1).await;
+                            (out, err)
+                        })
+                    },
+                    args,
+                )
+                .await
+            }
             ("WebFetch", _) => {
                 let url = args["url"].as_str().unwrap_or("").to_string();
                 let raw = args["raw"].as_bool().unwrap_or(false);
@@ -626,12 +681,60 @@ impl ToolHost for HostTools {
                     Err(e) => ToolOutput::err(format!("tool task join failed: {e}")),
                 }
             }
-            (_, None) => ToolOutput::err(format!("unknown tool: {tool}")),
+            (_, None) => {
+                // W5.5: mangled tool-name recovery — try to map the name to
+                // a real tool; a recovered dispatch notes the fix verbatim
+                // so the model learns the canonical name.
+                let known = self.registry.names();
+                match crate::bounding::recover_mangled_tool_name(tool, &known) {
+                    Some(real) => {
+                        let def = self.registry.get(&real);
+                        let out = match def {
+                            Some(def) => {
+                                let ctx = self.state.clone();
+                                let args = args.clone();
+                                let run = def.run.clone();
+                                match tokio::task::spawn_blocking(move || run(&ctx, &args)).await {
+                                    Ok(out) => out,
+                                    Err(e) => {
+                                        ToolOutput::err(format!("tool task join failed: {e}"))
+                                    }
+                                }
+                            }
+                            None => ToolOutput::err(format!("unknown tool: {real}")),
+                        };
+                        ToolOutput {
+                            output: format!(
+                                "[tool name recovered: `{tool}` → `{real}` — use `{real}` verbatim next time]\n{}",
+                                out.output
+                            ),
+                            is_error: out.is_error,
+                        }
+                    }
+                    None => ToolOutput::err(format!("unknown tool: {tool}")),
+                }
+            }
         };
 
-        // 4. PostToolUse hooks (best-effort)
+        // 4. W5.4: generic output bounding — every tool result is capped;
+        // over-cap results spill verbatim to a backing file and the model
+        // gets head+tail + the path. PostToolUse sees the BOUNDED view.
+        let bounded = crate::bounding::bound(&self.state.cwd, tool, &out.output);
+        let out = ToolOutput {
+            output: bounded,
+            is_error: out.is_error,
+        };
+
+        // 5. PostToolUse hooks (best-effort)
         self.hooks.post_tool_use(tool, &out.output).await;
         (with_provenance(out.output, &provenance_note), out.is_error)
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolHost for HostTools {
+    async fn execute(&self, tool: &str, args: &Value, session: &LoopCtx) -> (String, bool) {
+        self.execute_inner(tool, args, session, 0).await
     }
 
     fn schemas(&self) -> Vec<Value> {
@@ -736,6 +839,7 @@ mod tests {
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
             terminals: Arc::new(marfim_term::TermServer::default()),
+            dircache: Arc::new(crate::walkcache::DirCache::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
@@ -942,6 +1046,7 @@ mod tests {
             background: Arc::new(Default::default()),
             monitors: Arc::new(Default::default()),
             terminals: Arc::new(marfim_term::TermServer::default()),
+            dircache: Arc::new(crate::walkcache::DirCache::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
