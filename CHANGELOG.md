@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.0 — W2.3: three transports — unix socket, TLS (rustls), plain TCP (2026-11-08)
+
+- **unix socket** (`marfim serve --unix <path>`): the full protocol over
+  a `0600` unix socket. A stale SOCKET is reused; a non-socket file at
+  the path is NEVER removed (explicit error). The bearer token stays
+  mandatory — defense in depth on top of filesystem permissions. Proven
+  by unit tests (permissions, refusal, stale reuse, 401/200) and a CLI
+  e2e against the real binary.
+- **optional TLS** (`--tls-cert <pem> --tls-key <pem>`): rustls 0.23
+  with the ring provider (no aws-lc-sys C build), TLS 1.3 + 1.2, ALPN
+  `h2`/`http/1.1`. Boot fails closed on any PEM problem (missing file,
+  empty chain, bad key). A REAL TLS 1.3 handshake e2e (self-signed cert
+  via `openssl req`, client via `openssl s_client`) proves HTTPS serving
+  end to end — skipped honestly when the openssl CLI is absent.
+  Handshake failures kill only their own connection. Release binary
+  11.1 MB with TLS compiled in (< 25 MB budget).
+- Flag registration hygiene: `--unix`/`--tls-cert`/`--tls-key` are in
+  `CONSUMED_FLAGS` (the parsed-but-unread test stays absolute).
+- W2 phase ends: 642 tests green, clippy -D warnings clean, gates
+  10 PASS / 0 FAIL / 3 SKIP, docs/PROTOCOL.md documents all transports.
+
 ## 1.0.0 — W2.2: protocol contract — PROTOCOL.md, byte-checked fixtures, Dart tests (2026-11-08)
 
 - **docs/PROTOCOL.md**: the prose contract — security posture (bearer

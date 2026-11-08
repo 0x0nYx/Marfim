@@ -689,14 +689,62 @@ async fn serve_cmd(cli: &Cli, config: &Config) -> i32 {
         config_view,
     );
     let server = marfim_gateway::serve::Server::new(state);
+    // W2.3: three transports — unix socket, TLS over TCP, plain TCP.
+    // TLS flags are all-or-nothing (fail closed at boot).
+    let tls = match (&cli.tls_cert, &cli.tls_key) {
+        (None, None) => None,
+        (Some(c), Some(k)) => match marfim_gateway::serve::tls_acceptor_from_pem_files(c, k) {
+            Ok(a) => Some(a),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 1;
+            }
+        },
+        _ => {
+            eprintln!("error: --tls-cert and --tls-key must be given together");
+            return 1;
+        }
+    };
+    if cli.unix.is_some() && tls.is_some() {
+        eprintln!("error: TLS applies to TCP; drop --tls-* or --unix");
+        return 1;
+    }
+    if let Some(path) = cli.unix.clone() {
+        #[cfg(unix)]
+        match marfim_gateway::serve::Server::bind_unix(&path) {
+            Ok(listener) => {
+                eprintln!("marfim serve on unix:{path} (0600, token still required)");
+                let _ = server.serve_unix(listener).await;
+                return 0;
+            }
+            Err(e) => {
+                eprintln!("bind failed: {e}");
+                return 1;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            eprintln!("error: --unix is not supported on this platform");
+            return 1;
+        }
+    }
     match marfim_gateway::serve::Server::bind(&cli.host, cli.port).await {
         Ok(listener) => {
             let bound = listener
                 .local_addr()
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| format!("{}:{}", cli.host, cli.port));
-            eprintln!("marfim serve on {bound}");
-            let _ = server.serve(listener).await;
+            match tls {
+                Some(acceptor) => {
+                    eprintln!("marfim serve on https://{bound}");
+                    let _ = server.serve_tls(listener, acceptor).await;
+                }
+                None => {
+                    eprintln!("marfim serve on {bound}");
+                    let _ = server.serve(listener).await;
+                }
+            }
             0
         }
         Err(e) => {

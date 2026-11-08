@@ -66,7 +66,10 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
+
+#[cfg(unix)]
+use tokio::net::UnixListener;
 
 /// A route behavior injected by the embedding surface (marfim-app):
 /// request body → future of the JSON response or an error string. The
@@ -383,6 +386,30 @@ impl Server {
         TcpListener::bind((host, port)).await
     }
 
+    /// W2.3: bind a unix socket. A stale SOCKET at the path is removed;
+    /// any non-socket file fails the bind (never deleted). The socket is
+    /// chmod 0600 (owner-only) after bind — the bearer token stays
+    /// mandatory on top, defense in depth.
+    #[cfg(unix)]
+    pub fn bind_unix(path: &str) -> std::io::Result<UnixListener> {
+        use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+        match std::fs::metadata(path) {
+            Ok(m) if m.file_type().is_socket() => {
+                std::fs::remove_file(path)?;
+            }
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!("{path} exists and is not a socket; refusing to remove it"),
+                ));
+            }
+            Err(_) => {}
+        }
+        let listener = UnixListener::bind(path)?;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        Ok(listener)
+    }
+
     pub async fn serve(self, listener: TcpListener) -> std::io::Result<()> {
         loop {
             let (stream, _) = listener.accept().await?;
@@ -394,9 +421,76 @@ impl Server {
             });
         }
     }
+
+    /// W2.3: serve over a unix socket (same protocol, same token gate).
+    #[cfg(unix)]
+    pub async fn serve_unix(self, listener: UnixListener) -> std::io::Result<()> {
+        loop {
+            let (stream, _) = listener.accept().await?;
+            let state = self.state.clone();
+            tokio::spawn(async move {
+                let _ = serve_connection(stream, state).await;
+            });
+        }
+    }
+
+    /// W2.3: serve TLS over TCP. A failed handshake kills only its own
+    /// connection; the listener keeps serving (fail-visible in the
+    /// connection task, never process-fatal).
+    pub async fn serve_tls(
+        self,
+        listener: TcpListener,
+        acceptor: tokio_rustls::TlsAcceptor,
+    ) -> std::io::Result<()> {
+        loop {
+            let (stream, _) = listener.accept().await?;
+            let state = self.state.clone();
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                if let Ok(tls) = acceptor.accept(stream).await {
+                    let _ = serve_connection(tls, state).await;
+                }
+                // handshake garbage / bad SNI / dead peer: contained
+            });
+        }
+    }
 }
 
-async fn serve_connection(stream: TcpStream, state: Arc<ServeState>) {
+/// W2.3: build a TLS acceptor from PEM cert chain + private key files
+/// (fail-closed: any parse problem is a boot error, never a warning).
+pub fn tls_acceptor_from_pem_files(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<tokio_rustls::TlsAcceptor, String> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    let cert_file =
+        std::fs::File::open(cert_path).map_err(|e| format!("tls cert {cert_path}: {e}"))?;
+    let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut std::io::BufReader::new(cert_file))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("tls cert parse {cert_path}: {e}"))?;
+    if certs.is_empty() {
+        return Err(format!("tls cert {cert_path}: no certificates found"));
+    }
+    let key_file = std::fs::File::open(key_path).map_err(|e| format!("tls key {key_path}: {e}"))?;
+    let key: PrivateKeyDer = rustls_pemfile::private_key(&mut std::io::BufReader::new(key_file))
+        .map_err(|e| format!("tls key parse {key_path}: {e}"))?
+        .ok_or_else(|| format!("tls key {key_path}: no private key found"))?;
+    let mut cfg = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+    .map_err(|e| format!("tls protocol versions: {e}"))?
+    .with_no_client_auth()
+    .with_single_cert(certs, key)
+    .map_err(|e| format!("tls single cert: {e}"))?;
+    cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(tokio_rustls::TlsAcceptor::from(Arc::new(cfg)))
+}
+
+async fn serve_connection<I>(io: I, state: Arc<ServeState>)
+where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let svc = Svc {
         state: state.clone(),
     };
@@ -405,7 +499,7 @@ async fn serve_connection(stream: TcpStream, state: Arc<ServeState>) {
         .timer(TokioTimer::new())
         .header_read_timeout(state.options.header_timeout)
         .max_buf_size(state.options.max_header_buf)
-        .serve_connection_with_upgrades(TokioIo::new(stream), svc)
+        .serve_connection_with_upgrades(TokioIo::new(io), svc)
         .await;
 }
 
@@ -1246,6 +1340,7 @@ async fn events_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpStream;
 
     fn state_with(token: &str) -> Arc<ServeState> {
         let host = Arc::new(SessionHost::new(Arc::new(|_req| {

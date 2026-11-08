@@ -75,6 +75,20 @@ pub struct Cli {
     #[arg(long = "token")]
     pub token: Option<String>,
 
+    /// W2.3: bind a unix socket at this path instead of TCP (serve).
+    /// The bearer token stays mandatory; the socket is chmod 0600.
+    #[arg(long = "unix")]
+    pub unix: Option<String>,
+
+    /// W2.3: TLS certificate chain (PEM) for serve over TCP; requires
+    /// --tls-key. Omit for plain HTTP.
+    #[arg(long = "tls-cert")]
+    pub tls_cert: Option<String>,
+
+    /// W2.3: TLS private key (PEM); requires --tls-cert.
+    #[arg(long = "tls-key")]
+    pub tls_key: Option<String>,
+
     #[arg(long = "max-mode")]
     pub max_mode: Option<String>,
 
@@ -882,6 +896,9 @@ mod tests {
         "port",
         "host",
         "token",
+        "unix",
+        "tls_cert",
+        "tls_key",
         "max_mode",
         "vars",
         "days",

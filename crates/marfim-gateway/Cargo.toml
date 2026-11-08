@@ -17,6 +17,11 @@ futures-util.workspace = true
 hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1.10", default-features = false, features = ["server-auto", "tokio"] }
 http-body-util = "0.1"
+# W2.3: OPTIONAL TLS — rustls with the ring provider (no aws-lc-sys C
+# build); TLS engages only when --tls-cert/--tls-key are supplied.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-pemfile = "2"
 
 [dev-dependencies]
 marfim-testkit = { path = "../marfim-testkit" }

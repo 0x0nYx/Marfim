@@ -13,6 +13,14 @@ Dart contract tests (mobile/Flutter client side) live in
 
 ## Transport and security posture (fail-closed)
 
+**Transports (W2.3)**: `marfim serve` speaks the same protocol over
+three listeners — plain TCP (`--host/--port`), TLS over TCP
+(`--tls-cert <pem> --tls-key <pem>`, rustls, TLS 1.3/1.2, ALPN
+`h2`/`http/1.1`; boot fails closed on any PEM problem), and a unix
+socket (`--unix <path>`, chmod 0600, stale socket reused, a non-socket
+file at the path is never removed). TLS does not apply to unix sockets.
+The bearer token is mandatory on every transport.
+
 - **Bearer token mandatory** on every route, including `/healthz`:
   `Authorization: Bearer <token>`. `--token <t>` or an auto-generated
   token printed once at startup. Compared in constant time.

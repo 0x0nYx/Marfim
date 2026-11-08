@@ -382,6 +382,70 @@ fn serve_healthz_on_loopback() {
     let _ = child.wait();
 }
 
+#[cfg(unix)]
+#[test]
+fn serve_unix_socket_healthz() {
+    // W2.3: `marfim serve --unix <path>` — same protocol over a unix
+    // socket: token mandatory (401 without), 200 with, 0600 permissions.
+    let dir = marfim_testkit::unique_dir("marfim-e2e-unix-serve");
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("m.sock");
+    let mut child = Command::new(bin_path())
+        .args([
+            "--unix",
+            sock.to_str().unwrap(),
+            "--token",
+            "e2e-token",
+            "serve",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    let talk = |req: &str| -> String {
+        let mut s = UnixStream::connect(&sock).expect("socket connectable");
+        s.write_all(req.as_bytes()).unwrap();
+        let mut buf = vec![0u8; 2048];
+        let n = s.read(&mut buf).unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    };
+    let mut unauth = String::new();
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if sock.exists() && UnixStream::connect(&sock).is_ok() {
+            unauth = talk("GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            if !unauth.is_empty() {
+                break;
+            }
+        }
+    }
+    assert!(
+        unauth.starts_with("HTTP/1.1 401"),
+        "token gate holds on the unix socket: {unauth}"
+    );
+    let mut authed = String::new();
+    for _ in 0..50 {
+        if UnixStream::connect(&sock).is_ok() {
+            authed = talk(
+                "GET /healthz HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer e2e-token\r\nConnection: close\r\n\r\n",
+            );
+            if authed.contains("\"ok\":true") {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(authed.contains("\"ok\":true"), "{authed}");
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "socket must be owner-only");
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Hermetic MARFIM_HOME with a mock-provider config; returns (home, config dir).
 fn mock_config_home(tag: &str) -> std::path::PathBuf {
     let home = marfim_testkit::unique_dir(&format!("marfim-e2e-{tag}"));
