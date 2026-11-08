@@ -5,9 +5,9 @@ Statuses: TODO / WIP / DONE / BLOCKED. Each row's commit is the commit that
 landed the work (the in-flight row says `this commit` and is back-filled by
 the next ledger update).
 
-**Live test count: 687** (`cargo test --workspace`, 0 failed — measured at
-the W5 batch commit; every committed change re-lands it green). Historical
-counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665) were
+**Live test count: 712** (`cargo test --workspace`, 0 failed — measured at
+the W6+W12 batch commit; every committed change re-lands it green). Historical
+counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687) were
 true at their commits.
 
 Owner inputs required: see docs/OWNER-INPUT.md. A row is BLOCKED only when
@@ -37,6 +37,12 @@ an owner input is missing; the reason and the exact ask live in that file.
 | W5.8 | DONE | this commit | `core::iso` CoW ladder: reflink probe (`cp --reflink=always` on a throwaway temp file — the ioctl rides userspace cp, forbid(unsafe_code) holds) → bounded rcopy (50k file cap, .git skipped); non-git subagent isolation rides the ladder and WorktreeGuard records the backend actually used ("worktree"/"reflink"/"rcopy"); 2 tests | honest backend naming; mixed-mount fallback falls through to rcopy |
 | W5.9 | DONE | this commit | CodeMode (rhai 1.27, clean-room): deferred `Code` tool — restricted interpreter (op cap 20k, 16-call plan cap, 16KiB script cap, string/array/depth caps, NO fs/network/process); plan-then-execute: `tool_call(name, json)` requests run through the FULL inner host path (hooks → permission → sandbox → bounding) via the boxed `execute_inner(depth)` recursion (nested Code refused); failing call stops the plan fail-visible; engine (Rc internals, not Send) scoped out of the await phase; 4 tests | opt-in surface (deferred, ToolSearch-discoverable); a batching/composition surface, never a permission bypass; release 14.1MB < 25MB |
 | W5 phase end | — | this commit | fmt ✓, clippy -D warnings ✓, 687 green, gates 10 PASS / 0 FAIL / 3 SKIP, release 14.1MB <25MB | W5.3 (tree-sitter feature) and W5.6 (tool-declared approval tiers) remain TODO — not landed in this sweep, honestly carried |
+| W6.1 | DONE | this commit | crates/marfim-state (rusqlite bundled, forbid(unsafe_code) holds): wal.rs (wal→delete fallback matrix, never-live-downgrade structural, 64MiB journal_size_limit, synchronous=FULL, require_wal fails closed — in-memory honestly falls back), write.rs (BEGIN IMMEDIATE core, 3-tier patience 10/50/200ms, one mid-tx commit retry, PASSIVE checkpoint every 50 writes, rollback-clean failures), schema.rs (user_version-stamped forward-only migrations; a NEWER database refuses to open); 5 tests over a real file db | FTS5 ships with the bundled build; projections beyond the inbox/session tree are additive migrations |
+| W6.2 | DONE | this commit | durable inbox: store-first items survive a reopen (crash-recovery proven against a real sqlite file); leases with TTL 300s + dead-holder reclaim (wait notices, not silent steals); settle-once receipts (execution_id unique, payload-digest agreement enforced — a digest mismatch REFUSES, a replayed execution_id returns the stored receipt); ready queue = pending + expired-lease only; 5 integration tests | opencode v2 session spec + Hermes worker receipts doctrine |
+| W6.3 | DONE | this commit | core::sessiontree — UUIDv7 (RFC 9562 shape-validated: version/variant bits pinned by test), SessionTree with fork(parent) refusing unknown parents, leaf() as the time-ordered tip, path_to_root with cycle guard, children(); 3 tests | journal provenance records remain the durable form; the tree is the pure index over them |
+| W6.4 | DONE | this commit | core::trajectory — trajectory_compress_to: head/first-of-role/last-4 protection, tool-pair snap during drops, a fixpoint pair-repair pass (budget loses to integrity), bounded honest summary naming what was removed; Hermes constants (target 15250 / summary 750); 4 tests | pure + deterministic; the loop integration point is compact.rs (next wave) |
+| W12 | DONE | this commit | core::rea — EvidenceRecord (confidence full>partial>indirect, derived digests, bounded hot view of 512), ObligationLedger (reconstruct/verify; verify demands ≥partial, reconstruct demands a shown thing — a weak claim REFUSES), UnknownsLedger (record_unknown → verify_unknown_resolution), gate() names EVERY blocker; the tool host auto-records EVERY dispatched tool result (success=full, error=indirect) so evidence exists whether or not the model cites it; `Rea` tool (deferred, 7 actions) drives the ledger; 9 tests (5 core + 3 tool + digest) | REA bridge: the gate is callable from any surface; slash wiring is additive |
+| W12 phase end | — | this commit | fmt ✓, clippy ✓, 712 green, gates 10/0/3 | evidence pipeline complete |
 | W4.1 | TODO | — | — | marfim-ffi C ABI (G14 activates) |
 | W4.2 | TODO | — | — | apps/flutter android project + gradle cargo-ndk |
 | W4.3 | TODO | — | — | Flutter app modules + docs/DESIGN.md |
@@ -44,10 +50,6 @@ an owner input is missing; the reason and the exact ask live in that file.
 | W4.5 | BLOCKED | — | — | alpha gate needs: emulator run (CI), signing secrets (owner), live API key (owner) — see OWNER-INPUT.md; ships when W4.1–W4.4 land and CI runs |
 | W5.3 | TODO | — | — | tree-sitter frontends (feature treesitter) |
 | W5.6 | PARTIAL | this commit | the per-turn pure plan mechanics live via CodeMode plan-then-execute + the W5.5 per-turn budget; tool-declared approval tiers remain | remaining: tool-spec-declared approval tiers (codex/omp) |
-| W6.1 | TODO | — | — | marfim-state (feature sqlite): WAL policy, write core, schema, projections, FTS5 |
-| W6.2 | TODO | — | — | durable inbox sessions + receipts + leases |
-| W6.3 | TODO | — | — | session tree (parentId, leaf, UUIDv7) |
-| W6.4 | TODO | — | — | trajectory compressor |
 | W7.1 | TODO | — | — | model capability registry TOML + adaptive thinking + thought signatures |
 | W7.2 | TODO | — | — | cache-TTL plumbing (retention, TTL-reject ladder, cachedContent, warming) |
 | W7.3 | TODO | — | — | aux failover ladder + health TTLs |
@@ -62,7 +64,6 @@ an owner input is missing; the reason and the exact ask live in that file.
 | W10.1 | TODO | — | — | memory caps + review fork + curator + instincts + vault |
 | W10.2 | TODO | — | — | mandates, effect queue/outbox, source plugins, cron, delegation ledger |
 | W11 | TODO | — | — | surfaces: LSP diagnostics, DAP, ACP completion, TUI upgrades, recipes, testkit cassettes, MCP pinning/backgrounding, wire breadth |
-| W12 | TODO | — | — | evidence records, obligation ledger, unknowns ledger, REA bridge |
 | W13 | BLOCKED | — | — | oracle (~40k LOC LLM-coupled intelligence) not reachable: no archive tag on origin (see W0.2); BLOCKED on owner input ORACLE_TAG |
 | W14 | TODO | — | — | embedded shell (ShellBackend trait, in-process interpreter, obash-style differential suite) |
 | FORMER-REJECTS | TODO | — | — | every DISTILLATION REJECTED row ships as a default-off flag per the mission adoption forms (list maintained in DISTILLATION.md FORMER-REJECTS section) |

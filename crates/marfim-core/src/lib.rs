@@ -25,13 +25,16 @@ pub mod permissions;
 pub mod platform;
 pub mod privacy;
 pub mod providers;
+pub mod rea;
 pub mod router;
 pub mod sandbox;
 pub mod session;
 pub mod session_host;
 pub mod sessionsearch;
+pub mod sessiontree;
 pub mod shellparse;
 pub mod skills;
+pub mod trajectory;
 pub mod trust;
 pub mod usage;
 

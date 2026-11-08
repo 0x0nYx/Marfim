@@ -13,6 +13,7 @@ pub mod globber;
 pub mod misc_tools;
 pub mod monitor;
 pub mod patch;
+pub mod rea_tool;
 pub mod registry;
 pub mod repomap;
 pub mod subagent;

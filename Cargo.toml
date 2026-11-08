@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/marfim-testkit",
     "crates/marfim-core",
+    "crates/marfim-state",
     "crates/marfim-term",
     "crates/marfim-tools",
     "crates/marfim-mcp",
@@ -31,6 +32,9 @@ futures-util = "0.3"
 regex = "1"
 # W5.9 CodeMode: the restricted interpreter behind the opt-in Code tool.
 rhai = "1.27"
+# W6: durable state (marfim-state): bundled sqlite (FTS5 rides the
+# bundled build) behind the WAL-policy write core.
+rusqlite = { version = "0.37", features = ["bundled"] }
 async-trait = "0.1"
 toml = "0.8"
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }

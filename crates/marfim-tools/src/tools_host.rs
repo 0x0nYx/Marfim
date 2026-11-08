@@ -471,6 +471,24 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
         crate::misc_tools::js_module_graph
     );
     tool!(
+        "Rea",
+        "Evidence pipeline: record evidence, add/satisfy obligations, track unknowns, run the definition-of-done gate (actions record|obligate|satisfy|unknown|resolve|gate|page).",
+        TC::ReadOnly,
+        true,
+        true,
+        5_000,
+        serde_json::json!({"type":"object","required":["action"],"properties":{
+            "action":{"type":"string","enum":["record","obligate","satisfy","unknown","resolve","gate","page"]},
+            "tool":{"type":"string"},"args":{"type":"string"},"output":{"type":"string"},
+            "confidence":{"type":"string","enum":["full","partial","indirect"]},"coverage":{"type":"string"},
+            "turn":{"type":"integer"},"kind":{"type":"string","enum":["reconstruct","verify"]},
+            "description":{"type":"string"},"obligation_id":{"type":"integer"},
+            "evidence_id":{"type":"integer"},"unknown_id":{"type":"integer"},
+            "question":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}
+        }}),
+        crate::rea_tool::rea
+    );
+    tool!(
         "Code",
         "CodeMode (opt-in): compose tool calls in a restricted rhai script — `tool_call(name, json_args)` plans calls, the script result composes arguments; every planned call executes through the normal permission path. Bounded: ops, calls, size.",
         TC::None_,
@@ -725,6 +743,25 @@ impl HostTools {
             is_error: out.is_error,
         };
 
+        // 4b. W12: EVERY tool result becomes a canonical evidence record
+        // (success = full confidence, error = indirect) — the evidence
+        // exists whether or not the model cites it.
+        {
+            let mut rea = self.state.rea.lock().unwrap_or_else(|p| p.into_inner());
+            let _ = rea.record(
+                tool,
+                &args_json,
+                &out.output,
+                if out.is_error {
+                    marfim_core::rea::Confidence::Indirect
+                } else {
+                    marfim_core::rea::Confidence::Full
+                },
+                tool,
+                0,
+            );
+        }
+
         // 5. PostToolUse hooks (best-effort)
         self.hooks.post_tool_use(tool, &out.output).await;
         (with_provenance(out.output, &provenance_note), out.is_error)
@@ -840,6 +877,7 @@ mod tests {
             monitors: Arc::new(Default::default()),
             terminals: Arc::new(marfim_term::TermServer::default()),
             dircache: Arc::new(crate::walkcache::DirCache::default()),
+            rea: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
@@ -1047,6 +1085,7 @@ mod tests {
             monitors: Arc::new(Default::default()),
             terminals: Arc::new(marfim_term::TermServer::default()),
             dircache: Arc::new(crate::walkcache::DirCache::default()),
+            rea: Arc::new(Default::default()),
             last_repomap: Arc::new(Default::default()),
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
