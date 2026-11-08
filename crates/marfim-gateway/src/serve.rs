@@ -78,8 +78,8 @@ use tokio::net::UnixListener;
 pub type Handler =
     Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> + Send + Sync>;
 
-/// fs/git/mcp route behaviors. `None` = not wired by this embedding →
-/// the route answers 501 instead of pretending.
+/// fs/git/mcp/terminal route behaviors. `None` = not wired by this
+/// embedding → the route answers 501 instead of pretending.
 #[derive(Clone, Default)]
 pub struct RouteHandlers {
     pub fs_read: Option<Handler>,
@@ -89,6 +89,12 @@ pub struct RouteHandlers {
     pub git_diff: Option<Handler>,
     pub git_log: Option<Handler>,
     pub mcp_list: Option<Handler>,
+    /// W3.1 terminal routes: ONE handler owning every action — the body
+    /// carries `action` (list|spawn|write|resize|screen|close) plus the
+    /// per-action fields. Wired by the embedding through the REAL tool
+    /// host (the Terminal tool), so a terminal can never bypass the
+    /// permission engine.
+    pub terminals: Option<Handler>,
 }
 
 /// Tool catalog entry served by /v1/tools (built by the CLI layer from
@@ -913,6 +919,28 @@ async fn handle(req: Request<Incoming>, state: Arc<ServeState>) -> Response<Resp
         (Method::GET, "/v1/mcp") => {
             inject_handler(state.handlers.mcp_list.clone(), serde_json::json!({})).await
         }
+        // -- W3.1: terminal surface (PTY sessions behind the Terminal tool)
+        (Method::GET, "/v1/terminals") => {
+            inject_handler(
+                state.handlers.terminals.clone(),
+                serde_json::json!({"action": "list"}),
+            )
+            .await
+        }
+        (Method::POST, "/v1/terminals") => {
+            let mut body = body_json.unwrap_or_default();
+            body["action"] = serde_json::json!("spawn");
+            inject_handler(state.handlers.terminals.clone(), body).await
+        }
+        (Method::POST, r) if r.starts_with("/v1/terminals/") => {
+            terminal_route(state.handlers.terminals.clone(), r, body_json).await
+        }
+        (Method::GET, r) if r.starts_with("/v1/terminals/") => {
+            terminal_route(state.handlers.terminals.clone(), r, None).await
+        }
+        (Method::DELETE, r) if r.starts_with("/v1/terminals/") => {
+            terminal_route(state.handlers.terminals.clone(), r, None).await
+        }
         (Method::POST, _) | (Method::GET, _) | (Method::DELETE, _) => json_resp(
             StatusCode::NOT_FOUND,
             serde_json::json!({"error": "not found"}),
@@ -935,6 +963,55 @@ async fn inject_handler(h: Option<Handler>, args: Value) -> Response<RespBody> {
     match h(args).await {
         Ok(v) => json_resp(StatusCode::OK, v),
         Err(e) => json_resp(StatusCode::BAD_REQUEST, serde_json::json!({"error": e})),
+    }
+}
+
+/// `/v1/terminals/:id/{input|resize|screen}` (and bare
+/// `/v1/terminals/:id` for DELETE=close). The route parses ONLY the
+/// address; every policy decision stays in the injected handler (the
+/// Terminal tool behind the permission engine).
+async fn terminal_route(
+    h: Option<Handler>,
+    route: &str,
+    body: Option<Value>,
+) -> Response<RespBody> {
+    let rest = route.trim_start_matches("/v1/terminals/");
+    let mut args = body.unwrap_or_default();
+    match rest.rsplit_once('/') {
+        // /:id/input | /:id/resize | /:id/screen
+        Some((id, action)) if matches!(action, "input" | "resize" | "screen") => {
+            let canonical = match action {
+                "input" => "write",
+                other => other,
+            };
+            args["action"] = serde_json::json!(canonical);
+            match id.parse::<u64>() {
+                Ok(id) => args["id"] = serde_json::json!(id),
+                Err(_) => {
+                    return json_resp(
+                        StatusCode::BAD_REQUEST,
+                        serde_json::json!({"error": "terminal id must be an integer"}),
+                    );
+                }
+            }
+            inject_handler(h, args).await
+        }
+        // DELETE /v1/terminals/:id — the whole rest is the id.
+        None => match rest.parse::<u64>() {
+            Ok(id) => {
+                args["action"] = serde_json::json!("close");
+                args["id"] = serde_json::json!(id);
+                inject_handler(h, args).await
+            }
+            Err(_) => json_resp(
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({"error": "terminal id must be an integer"}),
+            ),
+        },
+        _ => json_resp(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({"error": "not found"}),
+        ),
     }
 }
 
@@ -1879,6 +1956,114 @@ mod tests {
         assert!(
             body.contains("provider") && body.contains("model"),
             "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_routes_auth_unwired_and_shape() {
+        // Unwired embedding → 501 on every terminal route (never a fake
+        // success), auth still enforced first.
+        let port = start(state_with("tk")).await;
+        let (code, _) = get(port, "/v1/terminals", Some("tk"), "127.0.0.1").await;
+        assert_eq!(code, 501);
+        let (code, _) = get(port, "/v1/terminals", None, "127.0.0.1").await;
+        assert_eq!(code, 401, "token is mandatory on terminal routes too");
+        let (code, _) = post_json(
+            port,
+            "/v1/terminals",
+            &serde_json::json!({"command": "sh"}),
+            "tk",
+        )
+        .await;
+        assert_eq!(code, 501);
+        let code = delete(port, "/v1/terminals/1", "tk").await;
+        assert_eq!(code, 501);
+        let (code, _) = get(port, "/v1/terminals/1/screen", Some("tk"), "127.0.0.1").await;
+        assert_eq!(code, 501);
+    }
+
+    #[tokio::test]
+    async fn terminal_routes_parse_addresses_and_forward() {
+        // A fake handler records the action/id the route parsed, so the
+        // address grammar is pinned without spawning a real PTY here.
+        type Seen = Arc<Mutex<Vec<(String, Option<u64>)>>>;
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        let host = Arc::new(SessionHost::new(Arc::new(|_req| {
+            Box::pin(async { Err("no factory".to_string()) })
+        })));
+        let handlers = RouteHandlers {
+            terminals: Some(Arc::new(move |args| {
+                let rec = rec.clone();
+                Box::pin(async move {
+                    let action = args["action"].as_str().unwrap_or("").to_string();
+                    let id = args["id"].as_u64();
+                    rec.lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .push((action.clone(), id));
+                    Ok(serde_json::json!({"ok": true, "action": action}))
+                })
+            })),
+            ..Default::default()
+        };
+        let state = ServeState::new(
+            host,
+            "tk2".to_string(),
+            Arc::new(vec![]),
+            vec!["127.0.0.1".into(), "localhost".into()],
+            ServeOptions::default(),
+            handlers,
+            serde_json::json!({"provider": "p"}),
+        );
+        let port = start(state).await;
+        let (code, _) = get(port, "/v1/terminals", Some("tk2"), "127.0.0.1").await;
+        assert_eq!(code, 200, "list route");
+        let (code, _) = post_json(
+            port,
+            "/v1/terminals",
+            &serde_json::json!({"command": "sh", "args": ["-c", "ls"]}),
+            "tk2",
+        )
+        .await;
+        assert_eq!(code, 200, "spawn route");
+        let (code, _) = post_json(
+            port,
+            "/v1/terminals/3/input",
+            &serde_json::json!({"text": "q"}),
+            "tk2",
+        )
+        .await;
+        assert_eq!(code, 200, "input route");
+        let (code, _) = post_json(
+            port,
+            "/v1/terminals/3/resize",
+            &serde_json::json!({"rows": 30, "cols": 100}),
+            "tk2",
+        )
+        .await;
+        assert_eq!(code, 200, "resize route");
+        let (code, _) = get(port, "/v1/terminals/3/screen", Some("tk2"), "127.0.0.1").await;
+        assert_eq!(code, 200, "screen route");
+        let code = delete(port, "/v1/terminals/3", "tk2").await;
+        assert_eq!(code, 200, "close route");
+        // non-integer id → 400 before any handler runs
+        let (code, _) = get(port, "/v1/terminals/nope/screen", Some("tk2"), "127.0.0.1").await;
+        assert_eq!(code, 400);
+        let (code, _) = get(port, "/v1/terminals/1/nope", Some("tk2"), "127.0.0.1").await;
+        assert_eq!(code, 404, "unknown terminal action is not found");
+        let actions: Vec<(String, Option<u64>)> =
+            seen.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(
+            actions,
+            vec![
+                ("list".to_string(), None),
+                ("spawn".to_string(), None),
+                ("write".to_string(), Some(3)),
+                ("resize".to_string(), Some(3)),
+                ("screen".to_string(), Some(3)),
+                ("close".to_string(), Some(3)),
+            ],
+            "route grammar: action + parsed id reach the handler"
         );
     }
 }

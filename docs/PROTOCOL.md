@@ -111,10 +111,28 @@ All routes require the bearer token.
 | POST | `/v1/git/diff` | read-only HEAD↔worktree diff |
 | POST | `/v1/git/log` | `{limit?}` (≤200) commit listing |
 | GET | `/v1/mcp` | connected MCP servers + registered tool names |
+| POST | `/v1/terminals` | spawn a PTY session `{command, args?, cwd?, rows?, cols?}` → `{id}` |
+| GET | `/v1/terminals` | session list (id/command/alive/exit/bytes/age) |
+| POST | `/v1/terminals/:id/input` | `{text}` → raw stdin bytes (no shell parsing) |
+| POST | `/v1/terminals/:id/resize` | `{rows, cols}` → SIGWINCH + grid resize |
+| GET | `/v1/terminals/:id/screen` | plain-text screen snapshot + alive/exit/cursor |
+| DELETE | `/v1/terminals/:id` | kill + close the session |
 
 Unknown route → `404 {"error":"not found"}`; known path with wrong
 method → `405`. Session command errors: missing session `404`, missing
 or empty text/turns `400`, refused rewind/undo `409`, actor gone `500`.
+
+### Terminal surface (W3.1)
+
+Terminals are **injected like fs/git/mcp**: the embedding wires the
+`terminals` handler through the REAL Terminal tool, so every spawn/write
+flows hooks → permission engine → sandbox → dispatch and an unwired
+gateway answers `501` honestly. Sessions are bounded (16 per surface,
+cap errors name the remedy), each carries its own PTY (the child sees a
+tty, `isatty()` true) and a vt100 grid; output bytes land in a bounded
+ring (64 KiB, drop-oldest with an explicit `[marfim-term: older output
+dropped (ring cap)]` marker in the drained text); exited sessions keep
+their final screen readable for 60s, then are reaped lazily.
 
 ## Config redaction
 

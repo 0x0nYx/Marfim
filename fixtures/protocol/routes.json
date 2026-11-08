@@ -321,6 +321,98 @@
       },
       "status": 202
     },
+    "terminals_close": {
+      "error_status": 400,
+      "method": "DELETE",
+      "path": "/v1/terminals/{id}",
+      "request": null,
+      "response": {
+        "closed": 1
+      },
+      "status": 200
+    },
+    "terminals_input": {
+      "error_status": 400,
+      "method": "POST",
+      "note": "raw bytes to the child's stdin — no shell parsing",
+      "path": "/v1/terminals/{id}/input",
+      "request": {
+        "text": "q"
+      },
+      "response": {
+        "written": 1
+      },
+      "status": 200
+    },
+    "terminals_list": {
+      "method": "GET",
+      "path": "/v1/terminals",
+      "request": null,
+      "response": {
+        "terminals": [
+          {
+            "age_secs": 7,
+            "alive": true,
+            "command": "sh -c watchmaker --progress",
+            "exit_code": null,
+            "id": 1,
+            "pending_bytes": 0,
+            "total_bytes": 4096
+          }
+        ]
+      },
+      "status": 200
+    },
+    "terminals_resize": {
+      "error_status": 400,
+      "method": "POST",
+      "path": "/v1/terminals/{id}/resize",
+      "request": {
+        "cols": 100,
+        "rows": 30
+      },
+      "response": {
+        "ok": true
+      },
+      "status": 200
+    },
+    "terminals_screen": {
+      "error_status": 400,
+      "method": "GET",
+      "path": "/v1/terminals/{id}/screen",
+      "request": null,
+      "response": {
+        "alive": true,
+        "cursor": [
+          23,
+          8
+        ],
+        "exit_code": null,
+        "id": 1,
+        "text": "build ok\n"
+      },
+      "status": 200
+    },
+    "terminals_spawn": {
+      "error_status": 400,
+      "method": "POST",
+      "note": "spawns a PTY session; id is the terminal handle for every other terminal route",
+      "path": "/v1/terminals",
+      "request": {
+        "args": [
+          "-c",
+          "watchmaker --progress"
+        ],
+        "cols": 80,
+        "command": "sh",
+        "cwd": "/workspace",
+        "rows": 24
+      },
+      "response": {
+        "id": 1
+      },
+      "status": 200
+    },
     "undo": {
       "error_status": 409,
       "method": "POST",

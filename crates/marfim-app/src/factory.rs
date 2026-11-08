@@ -274,6 +274,9 @@ pub async fn serve_route_handlers(
         )),
         git_log: Some(gateway_git_handler(settings.cwd.clone(), GatewayGitOp::Log)),
         mcp_list: Some(gateway_mcp_handler(host)),
+        // W3.2 wires the real Terminal tool here; until then the route
+        // answers 501 honestly (never a fake success).
+        terminals: None,
     };
     (handlers, redacted_config_view(config, settings))
 }

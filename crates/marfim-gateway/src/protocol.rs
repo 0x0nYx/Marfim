@@ -408,6 +408,71 @@ fn routes() -> BTreeMap<String, Value> {
             "response": {"servers": ["fs"], "tools": ["mcp__fs__read_file"]},
         }),
     );
+    // -- W3.1: terminal surface. Six routes, one injected handler; the
+    // embedding wires them through the REAL Terminal tool (hooks →
+    // permission → sandbox → dispatch), so an unwired gateway answers 501
+    // and a wired one can never bypass the permission engine.
+    r.insert(
+        "terminals_spawn".to_string(),
+        json!({
+            "method": "POST", "path": "/v1/terminals",
+            "request": {"command": "sh", "args": ["-c", "watchmaker --progress"], "cwd": "/workspace", "rows": 24, "cols": 80},
+            "status": 200,
+            "response": {"id": 1},
+            "error_status": 400,
+            "note": "spawns a PTY session; id is the terminal handle for every other terminal route",
+        }),
+    );
+    r.insert(
+        "terminals_list".to_string(),
+        json!({
+            "method": "GET", "path": "/v1/terminals",
+            "request": null,
+            "status": 200,
+            "response": {"terminals": [{"id": 1, "command": "sh -c watchmaker --progress", "alive": true, "exit_code": null, "total_bytes": 4096, "pending_bytes": 0, "age_secs": 7}]},
+        }),
+    );
+    r.insert(
+        "terminals_input".to_string(),
+        json!({
+            "method": "POST", "path": "/v1/terminals/{id}/input",
+            "request": {"text": "q"},
+            "status": 200,
+            "response": {"written": 1},
+            "error_status": 400,
+            "note": "raw bytes to the child's stdin — no shell parsing",
+        }),
+    );
+    r.insert(
+        "terminals_resize".to_string(),
+        json!({
+            "method": "POST", "path": "/v1/terminals/{id}/resize",
+            "request": {"rows": 30, "cols": 100},
+            "status": 200,
+            "response": {"ok": true},
+            "error_status": 400,
+        }),
+    );
+    r.insert(
+        "terminals_screen".to_string(),
+        json!({
+            "method": "GET", "path": "/v1/terminals/{id}/screen",
+            "request": null,
+            "status": 200,
+            "response": {"id": 1, "alive": true, "exit_code": null, "text": "build ok\n", "cursor": [23, 8]},
+            "error_status": 400,
+        }),
+    );
+    r.insert(
+        "terminals_close".to_string(),
+        json!({
+            "method": "DELETE", "path": "/v1/terminals/{id}",
+            "request": null,
+            "status": 200,
+            "response": {"closed": 1},
+            "error_status": 400,
+        }),
+    );
     r
 }
 

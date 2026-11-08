@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/marfim-testkit",
     "crates/marfim-core",
+    "crates/marfim-term",
     "crates/marfim-tools",
     "crates/marfim-mcp",
     "crates/marfim-gateway",
@@ -38,6 +39,10 @@ bytes = "1"
 getrandom = "0.3"
 ratatui = "0.30"
 crossterm = "0.29"
+# W3.1: PTY (portable-pty: ConPTY/Unix pty behind a safe API — our crates
+# stay forbid(unsafe_code)) and the vt100 screen-model emulator.
+portable-pty = "0.9"
+vt100 = "0.18"
 
 [profile.release]
 strip = true
