@@ -1,0 +1,9 @@
+{
+  "ping": ": ping\n\n",
+  "prompt_data_frame": "id: 1\ndata: {\"event\":\"assistant_message\",\"text\":\"hi\",\"type\":\"assistant_message\"}\n\n",
+  "prompt_terminal_frame": "id: 2\ndata: {\"event\":\"turn_end\",\"stop_reason\":\"end_turn\"}\n\n",
+  "ring_data_frame": "id: 7\ndata: {\"event\":\"assistant_message\",\"text\":\"hi\",\"type\":\"assistant_message\"}\n\n",
+  "ring_lag_marker": "data: {\"event\":\"lagged\",\"dropped\":3}\n\n",
+  "ring_resume_replay": "id: 8\ndata: {\"event\":\"assistant_message\",\"text\":\"hi\",\"type\":\"assistant_message\"}\n\nid: 9\ndata: {\"event\":\"ring_lagged\",\"dropped\":1}\n\n",
+  "ring_terminal_frame": "data: {\"event\":\"stream_deadline\"}\n\n"
+}

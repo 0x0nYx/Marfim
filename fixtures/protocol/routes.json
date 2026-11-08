@@ -1,0 +1,339 @@
+{
+  "auth": "Authorization: Bearer <token> on EVERY route; token is mandatory (generated and printed once when not supplied)",
+  "protocol": "1",
+  "routes": {
+    "approvals": {
+      "method": "GET",
+      "path": "/v1/approvals",
+      "request": null,
+      "response": {
+        "approvals": [
+          {
+            "id": "a1",
+            "summary": "echo hi",
+            "tool": "Bash"
+          }
+        ]
+      },
+      "status": 200
+    },
+    "cancel": {
+      "method": "POST",
+      "note": "cooperative; replies once the turn has unwound",
+      "path": "/v1/sessions/:id/cancel",
+      "request": null,
+      "response": {
+        "cancelled": true
+      },
+      "status": 200
+    },
+    "close_session": {
+      "method": "DELETE",
+      "note": "in-flight turn is cancelled first",
+      "path": "/v1/sessions/:id",
+      "request": null,
+      "response": {
+        "closed": "s1762531200000"
+      },
+      "status": 200
+    },
+    "config": {
+      "method": "GET",
+      "note": "credential material is structurally absent (redacted at the app layer)",
+      "path": "/v1/config",
+      "request": null,
+      "response": {
+        "bash_default_timeout_ms": 120000,
+        "budgeted": false,
+        "compact_threshold_tokens": 160000,
+        "cwd": "/workspace",
+        "mcp_servers": [],
+        "model": "claude-sonnet-4-5",
+        "permission_mode": "Default",
+        "provider": "anthropic",
+        "routing": "chain",
+        "sandbox_level": "Enforced",
+        "secrets": "redacted",
+        "small_model": "claude-haiku-4-5"
+      },
+      "status": 200
+    },
+    "create_session": {
+      "method": "POST",
+      "note": "resume names (or empty = latest) a journal to reopen",
+      "path": "/v1/sessions",
+      "request": {
+        "resume": null,
+        "title": "refactor"
+      },
+      "response": {
+        "cancelled": false,
+        "denied_tools": 1,
+        "executed_tools": 7,
+        "history_len": 9,
+        "journal_bytes": 4096,
+        "pending_approvals": 1,
+        "pending_steers": 0,
+        "session_id": "s1762531200000",
+        "turn": 3,
+        "turn_running": false
+      },
+      "status": 201
+    },
+    "events": {
+      "method": "GET",
+      "note": "the default session's ring; pings-only until a session exists",
+      "path": "/v1/events",
+      "request": null,
+      "response": "text/event-stream",
+      "status": 200
+    },
+    "fork": {
+      "method": "POST",
+      "note": "journal copy carries a Fork provenance record",
+      "path": "/v1/sessions/:id/fork",
+      "request": null,
+      "response": {
+        "fork_path": "/home/u/.marfim/sessions/s1762531209999.jsonl",
+        "fork_session": "s1762531209999"
+      },
+      "status": 201
+    },
+    "fs_list": {
+      "error_status": 400,
+      "method": "POST",
+      "path": "/v1/fs/list",
+      "request": {
+        "path": "src"
+      },
+      "response": {
+        "output": "main.rs\nlib.rs\n",
+        "tool": "LS"
+      },
+      "status": 200
+    },
+    "fs_read": {
+      "error_status": 400,
+      "method": "POST",
+      "note": "runs through the REAL tool host: hooks -> permission -> sandbox -> dispatch",
+      "path": "/v1/fs/read",
+      "request": {
+        "limit": null,
+        "offset": null,
+        "path": "src/main.rs"
+      },
+      "response": {
+        "output": "     1\tpub fn main() {\n     2\t}\n",
+        "tool": "Read"
+      },
+      "status": 200
+    },
+    "fs_write": {
+      "error_status": 400,
+      "method": "POST",
+      "note": "mutations flow through the PermissionEngine; unattended asks are denied (D14)",
+      "path": "/v1/fs/write",
+      "request": {
+        "content": "hello",
+        "path": "notes/a.txt"
+      },
+      "response": {
+        "output": "wrote notes/a.txt (5 bytes)",
+        "tool": "Write"
+      },
+      "status": 200
+    },
+    "get_session": {
+      "method": "GET",
+      "path": "/v1/sessions/:id",
+      "request": null,
+      "response": {
+        "cancelled": false,
+        "denied_tools": 1,
+        "executed_tools": 7,
+        "history_len": 9,
+        "journal_bytes": 4096,
+        "pending_approvals": 1,
+        "pending_steers": 0,
+        "session_id": "s1762531200000",
+        "turn": 3,
+        "turn_running": false
+      },
+      "status": 200
+    },
+    "git_diff": {
+      "error_status": 400,
+      "method": "POST",
+      "path": "/v1/git/diff",
+      "request": {},
+      "response": {
+        "backend": "cli",
+        "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n"
+      },
+      "status": 200
+    },
+    "git_log": {
+      "error_status": 400,
+      "method": "POST",
+      "path": "/v1/git/log",
+      "request": {
+        "limit": 20
+      },
+      "response": {
+        "backend": "cli",
+        "commits": [
+          {
+            "id": "79392fe",
+            "summary": "W2.1: gateway protocol routes"
+          }
+        ]
+      },
+      "status": 200
+    },
+    "git_status": {
+      "error_status": 400,
+      "method": "GET",
+      "note": "read-only; 400 outside a repository",
+      "path": "/v1/git/status",
+      "request": null,
+      "response": {
+        "backend": "cli",
+        "dirty": true,
+        "modified": [
+          "src/main.rs"
+        ]
+      },
+      "status": 200
+    },
+    "healthz": {
+      "method": "GET",
+      "note": "liveness; still behind the bearer token",
+      "path": "/healthz",
+      "request": null,
+      "response": {
+        "ok": true,
+        "uptime_ms": 120000,
+        "version": "1.0.0"
+      },
+      "status": 200
+    },
+    "list_sessions": {
+      "method": "GET",
+      "path": "/v1/sessions",
+      "request": null,
+      "response": {
+        "sessions": [
+          {
+            "cancelled": false,
+            "denied_tools": 1,
+            "executed_tools": 7,
+            "history_len": 9,
+            "journal_bytes": 4096,
+            "pending_approvals": 1,
+            "pending_steers": 0,
+            "session_id": "s1762531200000",
+            "turn": 3,
+            "turn_running": false
+          }
+        ]
+      },
+      "status": 200
+    },
+    "mcp": {
+      "method": "GET",
+      "path": "/v1/mcp",
+      "request": null,
+      "response": {
+        "servers": [
+          "fs"
+        ],
+        "tools": [
+          "mcp__fs__read_file"
+        ]
+      },
+      "status": 200
+    },
+    "prompt": {
+      "method": "POST",
+      "note": "one SSE stream per turn; frames id-stamped by a per-stream counter; terminal frame {\"event\":\"turn_end\",\"stop_reason\":\"...\"}; session_id omitted = default session",
+      "path": "/v1/prompt",
+      "request": {
+        "prompt": "run the tests",
+        "session_id": null
+      },
+      "response": "text/event-stream",
+      "status": 200
+    },
+    "prompt_scoped": {
+      "method": "POST",
+      "path": "/v1/sessions/:id/prompt",
+      "request": {
+        "prompt": "run the tests"
+      },
+      "response": "text/event-stream",
+      "status": 200
+    },
+    "resolve_approval": {
+      "error_status": 404,
+      "method": "POST",
+      "path": "/v1/approvals/:id",
+      "request": {
+        "decision": "allow|allow_once|allow_always|deny"
+      },
+      "response": {
+        "decision": "allow",
+        "resolved": "a1"
+      },
+      "status": 200
+    },
+    "rewind": {
+      "error_status": 409,
+      "method": "POST",
+      "path": "/v1/sessions/:id/rewind",
+      "request": {
+        "turns": 2
+      },
+      "response": {
+        "dropped_bytes": 1024,
+        "dropped_records": 8,
+        "history_len": 3,
+        "journal_bytes": 1024
+      },
+      "status": 200
+    },
+    "session_events": {
+      "method": "GET",
+      "note": "ring-backed: Last-Event-ID (header or ?lastEventId=) replays exactly the missed seqs",
+      "path": "/v1/sessions/:id/events",
+      "request": null,
+      "response": "text/event-stream",
+      "status": 200
+    },
+    "steer": {
+      "method": "POST",
+      "note": "drains only after a full tool-result batch (INV-02); no-op when idle",
+      "path": "/v1/sessions/:id/steer",
+      "request": {
+        "text": "stop, use rg instead"
+      },
+      "response": {
+        "queued": true
+      },
+      "status": 202
+    },
+    "undo": {
+      "error_status": 409,
+      "method": "POST",
+      "note": "409 when there is nothing to undo",
+      "path": "/v1/sessions/:id/undo",
+      "request": null,
+      "response": {
+        "dropped_bytes": 512,
+        "dropped_records": 4,
+        "history_len": 5,
+        "journal_bytes": 2048
+      },
+      "status": 200
+    }
+  }
+}

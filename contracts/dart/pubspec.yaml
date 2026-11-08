@@ -1,0 +1,11 @@
+name: marfim_protocol_contracts
+description: >-
+  Dart contract tests for the Marfim gateway protocol v1. They consume the
+  SAME canonical fixtures the Rust gate G11 enforces
+  (fixtures/protocol/*.json), so the mobile client and the server cannot
+  drift apart.
+publish_to: none
+environment:
+  sdk: ^3.5.0
+dev_dependencies:
+  test: ^1.25.0

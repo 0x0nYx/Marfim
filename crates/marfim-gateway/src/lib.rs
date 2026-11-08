@@ -5,4 +5,5 @@
 
 pub mod acp;
 pub mod lsp;
+pub mod protocol;
 pub mod serve;

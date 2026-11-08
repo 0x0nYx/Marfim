@@ -461,7 +461,8 @@ where
 }
 
 fn sse_data(seq: u64, line: &str) -> Frame<Bytes> {
-    Frame::data(Bytes::from(format!("id: {seq}\ndata: {line}\n\n")))
+    // single source of the frame bytes: the protocol contract module
+    Frame::data(Bytes::from(crate::protocol::sse_data_frame(seq, line)))
 }
 
 fn sse_text(s: &str) -> Frame<Bytes> {
