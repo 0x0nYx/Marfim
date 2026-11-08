@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.0.0 — W2.1: protocol routes + SSE envelope (2026-11-08)
+
+### Gateway surface (Protocol v1, first half — W2.2 finishes the contract)
+- **Session command routes** on `marfim serve`: `POST /v1/sessions`
+  (create), `DELETE /v1/sessions/:id` (close), and `POST
+  /v1/sessions/:id/{steer,cancel,undo,rewind,fork,prompt}` + `GET
+  /v1/sessions/:id/events`. Every command flows through the actor's REAL
+  command channel — the HTTP surface never touches harness internals
+  (steer 202 queued, cancel/undo/rewind/fork bounded by a 10s reply
+  timeout, unknown action 404, missing session 404).
+- **SSE envelope**: every data frame on every stream carries `id: <seq>`.
+  Per-session `EventRing` (cap 4096) — a single pump task per hosted
+  session subscribes to the bus, assigns the session's monotonic seqs,
+  retains the replay window and broadcasts to live subscribers, so replay
+  and live delivery share one sequence space. `Last-Event-ID` (header or
+  `?lastEventId=`) replays exactly the missed entries; a bus lag becomes
+  an explicit `ring_lagged` marker (no silent gaps, no duplicates — the
+  resuming client's seq space is contiguous).
+- **Injected route behavior** (`RouteHandlers`): fs/git/mcp routes are
+  wired by the embedding surface, never fabricated by the transport. The
+  gateway answers 501 for an unwired route (honest, fail-closed) instead
+  of pretending. `marfim serve` wires: fs read/list/write through the
+  FULL tool-host path (hooks → permission → sandbox → dispatch), git
+  status/diff/log through the real read-only GitBackend on a blocking
+  thread, mcp listing of actually connected servers. The route
+  permission engine runs asks through the D14 fail-closed denier — an
+  unattended surface can never hang on an approval.
+- **GET /v1/config**: redacted config view (provider/model/routing/
+  sandbox/mcp names). Credential material is structurally absent —
+  redaction happens at the app layer, the gateway never holds secrets.
+- Prompt streams keep their turn-scoped semantics (per-stream seqs;
+  resume belongs to the ring-backed `/v1/events`).
+
+### Tests
+- 631 workspace tests green (was 627): session lifecycle + Last-Event-ID
+  replay against a REAL hosted actor, session command routes, ring
+  seq/cap/replay unit battery, injected-handler 200/400/501 matrix, and
+  the serve e2e now proves fs/list end-to-end + the `id:` envelope on a
+  real turn. clippy -D warnings clean; gates 9 PASS / 0 FAIL / 4 SKIP
+  (G11-G14 await their activating packages).
+
 ## 1.0.0 — CI-green: MSRV 1.89, supply-chain clean, race-free tests (2026-11-07)
 
 ### Supply chain (cargo audit + cargo deny now exit 0, zero ignores)

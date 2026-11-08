@@ -659,8 +659,20 @@ async fn serve_cmd(cli: &Cli, config: &Config) -> i32 {
         eprintln!("marfim serve: generated API token (shown ONCE, not stored): {token}");
     }
 
-    let host = factory::make_host(config, settings, cli.clone(), cwd);
+    let host = factory::make_host(config, settings.clone(), cli.clone(), cwd.clone());
     let tools = factory::serve_tool_catalog();
+    // W2.1: fs/git/mcp route behavior + redacted config view are wired by
+    // the app layer; without settings the routes answer 501 (honest).
+    let (handlers, config_view) = match &settings {
+        Some(s) => factory::serve_route_handlers(config, s).await,
+        None => (
+            marfim_gateway::serve::RouteHandlers::default(),
+            serde_json::json!({
+                "error": "settings unavailable; fs/git/mcp routes not wired",
+                "secrets": "redacted"
+            }),
+        ),
+    };
     let allowed_hosts = vec![
         cli.host.clone(),
         "127.0.0.1".into(),
@@ -673,6 +685,8 @@ async fn serve_cmd(cli: &Cli, config: &Config) -> i32 {
         Arc::new(tools),
         allowed_hosts,
         marfim_gateway::serve::ServeOptions::default(),
+        handlers,
+        config_view,
     );
     let server = marfim_gateway::serve::Server::new(state);
     match marfim_gateway::serve::Server::bind(&cli.host, cli.port).await {

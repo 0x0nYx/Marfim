@@ -114,6 +114,193 @@ pub fn serve_tool_catalog() -> Vec<marfim_gateway::serve::ToolInfo> {
         })
         .collect()
 }
+
+/// W2.1 fs route behavior: run the named tool through the REAL host path
+/// (hooks → permission → sandbox → dispatch) — the gateway surface never
+/// bypasses the permission engine. Tool errors become handler errors
+/// (HTTP 400); success wraps the verbatim tool output.
+fn gateway_tool_handler(
+    host: Arc<HostTools>,
+    cwd: String,
+    tool: &'static str,
+) -> marfim_gateway::serve::Handler {
+    Arc::new(move |args| {
+        let host = host.clone();
+        let cwd = cwd.clone();
+        Box::pin(async move {
+            let ctx = marfim_core::loop_::LoopCtx {
+                session_id: "gateway".into(),
+                cwd,
+                cancel: marfim_core::loop_::CancelToken::default(),
+            };
+            let (out, is_err) =
+                marfim_core::loop_::ToolHost::execute(host.as_ref(), tool, &args, &ctx).await;
+            if is_err {
+                Err(out)
+            } else {
+                Ok(serde_json::json!({"tool": tool, "output": out}))
+            }
+        })
+    })
+}
+
+/// W2.1 git route behavior: the real GitBackend's READ-ONLY operations
+/// (status/diff/log) against the session cwd, on a blocking thread.
+fn gateway_git_handler(cwd: PathBuf, op: GatewayGitOp) -> marfim_gateway::serve::Handler {
+    Arc::new(move |args| {
+        let cwd = cwd.clone();
+        Box::pin(async move {
+            let limit = args["limit"].as_u64().unwrap_or(20).min(200) as usize;
+            let res = tokio::task::spawn_blocking(move || {
+                let be = marfim_core::git::default_backend();
+                if !be.is_repo(&cwd) {
+                    return Err("not a git repository".to_string());
+                }
+                match op {
+                    GatewayGitOp::Status => {
+                        let s = be.status(&cwd)?;
+                        Ok(serde_json::json!({
+                            "backend": be.name(),
+                            "dirty": s.dirty,
+                            "modified": s.modified,
+                        }))
+                    }
+                    GatewayGitOp::Diff => {
+                        let d = be.diff(&cwd)?;
+                        Ok(serde_json::json!({"backend": be.name(), "diff": d}))
+                    }
+                    GatewayGitOp::Log => {
+                        let commits: Vec<serde_json::Value> = be
+                            .log(&cwd, limit)?
+                            .into_iter()
+                            .map(|c| serde_json::json!({"id": c.id, "summary": c.summary}))
+                            .collect();
+                        Ok(serde_json::json!({"backend": be.name(), "commits": commits}))
+                    }
+                }
+            })
+            .await
+            .map_err(|e| format!("git task: {e}"))??;
+            Ok(res)
+        })
+    })
+}
+
+#[derive(Clone, Copy)]
+enum GatewayGitOp {
+    Status,
+    Diff,
+    Log,
+}
+
+/// W2.1 mcp route behavior: actually connected servers + their
+/// registered tool names (schema-bearing registry entries).
+fn gateway_mcp_handler(host: Arc<HostTools>) -> marfim_gateway::serve::Handler {
+    Arc::new(move |_args| {
+        let host = host.clone();
+        Box::pin(async move {
+            let servers: Vec<String> = {
+                let map = host.mcp.lock().unwrap_or_else(|p| p.into_inner());
+                let mut names: Vec<String> = map.values().map(|c| c.server_name.clone()).collect();
+                names.sort();
+                names.dedup();
+                names
+            };
+            let tools = host.registry.mcp_names();
+            Ok(serde_json::json!({"servers": servers, "tools": tools}))
+        })
+    })
+}
+
+/// The `marfim serve` embedding: fs/git/mcp route handlers + the
+/// redacted config view. The gateway never holds credential material —
+/// secrets stay in the credential chain; the config view exposes only
+/// non-secret shape.
+pub async fn serve_route_handlers(
+    config: &Config,
+    settings: &EffectiveSettings,
+) -> (marfim_gateway::serve::RouteHandlers, serde_json::Value) {
+    // ONE permission engine owns every gateway route (deny>ask>allow):
+    // AppUid level still force-asks mutations; asks are DENIED fail-closed
+    // (D14) because serve is unattended — a route can never hang on an
+    // approval nobody will answer.
+    let (perm, approval_rx) =
+        PermissionEngine::new(settings.permission_mode, settings.rules.clone());
+    let perm = match settings.sandbox_level {
+        marfim_core::sandbox::SandboxLevel::AppUid => perm.with_force_ask_mutations(true),
+        _ => perm,
+    };
+    let perm = Arc::new(
+        perm.with_privacy(Some(marfim_core::privacy::PrivacyGuard {
+            email: settings.account_email.clone(),
+        }))
+        .with_deny_instead_of_prompting(settings.deny_instead_of_prompting),
+    );
+    tokio::spawn(async move {
+        let mut approval_rx = approval_rx;
+        while let Some(job) = approval_rx.recv().await {
+            let _ = job
+                .respond
+                .send(marfim_core::permissions::ApprovalAnswer::Deny);
+        }
+    });
+
+    let tool_ctx = ToolCtx {
+        cwd: settings.cwd.clone(),
+        session_id: "gateway".into(),
+        ..Default::default()
+    };
+    let mut host = HostTools::new(
+        perm,
+        tool_ctx,
+        Sandbox::probe().with_level(settings.sandbox_level),
+        marfim_core::hooks::Hooks::default(),
+    );
+    let _connected = connect_mcp_servers(config, &mut host).await;
+    let host = Arc::new(host);
+    let cwd_str = settings.cwd.to_string_lossy().to_string();
+
+    let handlers = marfim_gateway::serve::RouteHandlers {
+        fs_read: Some(gateway_tool_handler(host.clone(), cwd_str.clone(), "Read")),
+        fs_list: Some(gateway_tool_handler(host.clone(), cwd_str.clone(), "LS")),
+        fs_write: Some(gateway_tool_handler(host.clone(), cwd_str.clone(), "Write")),
+        git_status: Some(gateway_git_handler(
+            settings.cwd.clone(),
+            GatewayGitOp::Status,
+        )),
+        git_diff: Some(gateway_git_handler(
+            settings.cwd.clone(),
+            GatewayGitOp::Diff,
+        )),
+        git_log: Some(gateway_git_handler(settings.cwd.clone(), GatewayGitOp::Log)),
+        mcp_list: Some(gateway_mcp_handler(host)),
+    };
+    (handlers, redacted_config_view(config, settings))
+}
+
+/// The config view served by GET /v1/config: provider/routing/sandbox
+/// shape only. Credential material (api keys, env values, auth tokens)
+/// is structurally absent — redaction happens HERE, not in transport.
+pub fn redacted_config_view(config: &Config, settings: &EffectiveSettings) -> serde_json::Value {
+    let mut mcp_servers = Vec::new();
+    if let Some(serde_json::Value::Object(map)) = config.get("mcpServers").cloned() {
+        mcp_servers.extend(map.keys().cloned());
+    }
+    serde_json::json!({
+        "provider": settings.provider_name,
+        "model": settings.model,
+        "small_model": settings.small_model,
+        "routing": settings.routing,
+        "permission_mode": format!("{:?}", settings.permission_mode),
+        "sandbox_level": format!("{:?}", settings.sandbox_level),
+        "budgeted": settings.budgeted,
+        "compact_threshold_tokens": settings.compact_threshold_tokens,
+        "bash_default_timeout_ms": settings.bash_default_timeout_ms,
+        "cwd": settings.cwd,
+        "mcp_servers": mcp_servers,
+        "secrets": "redacted"
+    })
+}
 pub fn latest_session(dir: &std::path::Path) -> PathBuf {
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     if let Ok(rd) = std::fs::read_dir(dir) {

@@ -115,8 +115,26 @@ async fn start(steps: Vec<Step>) -> (u16, String) {
     let dir = marfim_testkit::unique_dir("marfim-serve-e2e");
     let _ = std::fs::create_dir_all(&dir);
     let token = "e2e-secret".to_string();
+    let host = host_for(steps, &dir);
+    // W2.1: one REAL injected handler (fs/list over the session dir) —
+    // everything else stays unwired and answers 501.
+    let handler_dir = dir.clone();
+    let handlers = marfim_gateway::serve::RouteHandlers {
+        fs_list: Some(Arc::new(move |_args| {
+            let dir = handler_dir.clone();
+            Box::pin(async move {
+                let rd = std::fs::read_dir(&dir).map_err(|e| e.to_string())?;
+                let entries: Vec<String> = rd
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect();
+                Ok(serde_json::json!({"entries": entries}))
+            })
+        })),
+        ..Default::default()
+    };
     let state = ServeState::new(
-        host_for(steps, &dir),
+        host,
         token.clone(),
         tools_catalog(),
         vec!["127.0.0.1".into(), "localhost".into()],
@@ -124,6 +142,8 @@ async fn start(steps: Vec<Step>) -> (u16, String) {
             sse_ping: Duration::from_millis(50),
             ..Default::default()
         },
+        handlers,
+        serde_json::json!({"provider": "mock", "secrets": "redacted"}),
     );
     let server = Server::new(state);
     let listener = Server::bind("127.0.0.1", 0).await.unwrap();
@@ -177,6 +197,23 @@ async fn tool_call_approval_roundtrip_over_http() {
     assert_eq!(code, 200);
     assert_eq!(sessions["sessions"].as_array().map(|a| a.len()), Some(0));
 
+    // W2.1: injected fs/list handler works end-to-end; unwired ones 501
+    let read_body = serde_json::json!({"path": "."}).to_string();
+    let req = format!(
+        "POST /v1/fs/list HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{read_body}",
+        read_body.len()
+    );
+    let s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let (mut fs_rh, mut fs_wh) = tokio::io::split(s);
+    fs_wh.write_all(req.as_bytes()).await.unwrap();
+    let mut fs_resp = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), fs_rh.read_to_end(&mut fs_resp)).await;
+    let fs_resp = String::from_utf8_lossy(&fs_resp).to_string();
+    assert!(fs_resp.starts_with("HTTP/1.1 200"), "{fs_resp}");
+    assert!(fs_resp.contains("entries"), "{fs_resp}");
+    let (code, _) = get_json(port, &token, "/v1/git/status").await;
+    assert_eq!(code, 501, "unwired git route must answer 501");
+
     // run the prompt; stream the SSE until the terminal frame
     let prompt_body = serde_json::json!({"prompt": "run echo hi"}).to_string();
     let body = format!(
@@ -206,6 +243,8 @@ async fn tool_call_approval_roundtrip_over_http() {
         sse.contains("approval_requested"),
         "no approval surfaced: {sse}"
     );
+    // W2.1 envelope: every data frame carries an id: line
+    assert!(sse.contains("id: "), "seq envelope missing: {sse}");
 
     // the approval is REAL and pending
     let (code, approvals) = get_json(port, &token, "/v1/approvals").await;
