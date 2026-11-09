@@ -100,6 +100,7 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
                 deferred: $deferred,
                 timeout_ms: $timeout,
                 parameters: $params,
+                approval: marfim_core::permissions::ApprovalTier::Default,
                 run: Arc::new($fn),
             })
             .expect("tool registers");
@@ -552,24 +553,27 @@ impl HostTools {
                 raw_cmd = Some(cmd);
             }
         }
-        let class = self
-            .registry
-            .get(tool)
-            .map(|t| t.class)
-            .unwrap_or(ToolClass::Execute);
+        let (class, tier) = match self.registry.get(tool) {
+            Some(t) => (t.class, t.approval),
+            None => (
+                ToolClass::Execute,
+                marfim_core::permissions::ApprovalTier::Default,
+            ),
+        };
         // §privacy (distilled: claude-code `privacy` mod): the RAW command
         // text rides along so the guard can read the line as written and
         // stripped — not just the parsed argv.
         let raw_input = raw_cmd;
         let verdict = self
             .permissions
-            .check_with_input(
+            .check_with_tier(
                 tool,
                 class,
                 argv.as_deref(),
                 risk,
                 &format!("{tool} {args_json}"),
                 raw_input,
+                tier,
             )
             .await;
         if verdict.decision == marfim_core::permissions::Decision::Deny {

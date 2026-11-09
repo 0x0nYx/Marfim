@@ -39,6 +39,24 @@ pub enum ToolClass {
     None_,
 }
 
+/// W5.6 (codex/omp): the TOOL SPEC declares its approval tier — the
+/// tool's own contract layered on top of class/mode/rules.
+///
+/// - `Default`: class/mode/rules decide (today's behavior).
+/// - `AlwaysAsk`: the tool demands oversight — every Allow escalates to
+///   an Ask, even in Yolo. Denies are untouched (the deny floor wins).
+/// - `NeverAsk`: the tool opts OUT of prompting — a plain mode-based Ask
+///   becomes an Allow. Denies are untouched, the W1.4 AppUid force-ask
+///   still wins (a sandbox-attestation floor is not the tool's to
+///   waive), and privacy denies still fire first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApprovalTier {
+    #[default]
+    Default,
+    AlwaysAsk,
+    NeverAsk,
+}
+
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub tool: String,
@@ -304,7 +322,48 @@ impl PermissionEngine {
         summary: &str,
         input: Option<&str>,
     ) -> Verdict {
+        self.check_with_tier(
+            tool,
+            class,
+            argv,
+            risk,
+            summary,
+            input,
+            ApprovalTier::Default,
+        )
+        .await
+    }
+
+    /// W5.6: the tier-aware check — the host passes the tool spec's
+    /// declared approval tier; everything else matches `check_with_input`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn check_with_tier(
+        &self,
+        tool: &str,
+        class: ToolClass,
+        argv: Option<&[String]>,
+        risk: Option<ShellRisk>,
+        summary: &str,
+        input: Option<&str>,
+        tier: ApprovalTier,
+    ) -> Verdict {
         let mut stage = self.decide_stage(tool, class, argv, risk);
+        // W5.6 tool-declared approval tier (BEFORE the AppUid force-ask,
+        // so the sandbox floor keeps the last word):
+        //  - AlwaysAsk escalates an Allow to Ask (a Deny stays a Deny);
+        //  - NeverAsk downgrades a plain Ask to Allow (a Deny stays a
+        //    Deny — and the AppUid force-ask below re-escalates mutations
+        //    regardless, because containment absence is not waivable).
+        match tier {
+            ApprovalTier::AlwaysAsk if matches!(stage, Stage::Allow { .. }) => stage = Stage::Ask,
+            ApprovalTier::NeverAsk if matches!(stage, Stage::Ask) => {
+                stage = Stage::Allow {
+                    reason: "tool spec declares approval tier never-ask (W5.6)".into(),
+                    provenance: None,
+                };
+            }
+            _ => {}
+        }
         // W1.4 `SandboxLevel::AppUid`: no kernel containment available —
         // every mutation-tier ALLOW escalates to Ask (floors/denies are
         // untouched; deny > ask > allow holds). ReadOnly stays allow.
@@ -652,5 +711,129 @@ mod tests {
         let e = Arc::new(e.with_deny_instead_of_prompting(true));
         let v = e.check("Read", ToolClass::ReadOnly, None, None, "r").await;
         assert_eq!(v.decision, Decision::Allow);
+    }
+
+    // ------------------------------------------------ W5.6 approval tiers
+    #[tokio::test]
+    async fn w56_always_ask_escalates_even_in_yolo() {
+        let (e, mut rx) = PermissionEngine::new(Mode::Yolo, vec![]);
+        // Yolo allows a ReadOnly tool; AlwaysAsk escalates it to an Ask,
+        // which (with no listener) fails CLOSED.
+        tokio::spawn(async move {
+            while let Some(job) = rx.recv().await {
+                let _ = job.respond.send(ApprovalAnswer::Allow);
+            }
+        });
+        let v = e
+            .check_with_tier(
+                "Note",
+                ToolClass::ReadOnly,
+                None,
+                None,
+                "note",
+                None,
+                ApprovalTier::AlwaysAsk,
+            )
+            .await;
+        // with a listener that allows, the escalation resolves to Allow
+        // — but the ask itself proves the tier engaged
+        assert_eq!(v.decision, Decision::Allow);
+    }
+
+    #[tokio::test]
+    async fn w56_always_ask_fails_closed_without_listener() {
+        let (e, rx) = PermissionEngine::new(Mode::Yolo, vec![]);
+        drop(rx); // no listener
+        let v = e
+            .check_with_tier(
+                "Note",
+                ToolClass::ReadOnly,
+                None,
+                None,
+                "note",
+                None,
+                ApprovalTier::AlwaysAsk,
+            )
+            .await;
+        assert_eq!(v.decision, Decision::Deny);
+        assert!(v.reason.contains("fail closed"));
+    }
+
+    #[tokio::test]
+    async fn w56_never_ask_downgrades_a_mode_ask_but_not_a_deny() {
+        // Default mode: an Edit-class tool asks. NeverAsk downgrades it.
+        let (e, mut rx) = PermissionEngine::new(Mode::Default, vec![]);
+        tokio::spawn(async move {
+            while let Some(job) = rx.recv().await {
+                let _ = job.respond.send(ApprovalAnswer::Deny);
+            }
+        });
+        let v = e
+            .check_with_tier(
+                "Write",
+                ToolClass::Edit,
+                None,
+                None,
+                "w",
+                None,
+                ApprovalTier::NeverAsk,
+            )
+            .await;
+        assert_eq!(
+            v.decision,
+            Decision::Allow,
+            "the ask never reached the queue"
+        );
+
+        // an explicit deny RULE still wins — the tier cannot unlock
+        let (e2, _rx2) = PermissionEngine::new(
+            Mode::Default,
+            vec![Rule {
+                tool: "Write".into(),
+                decision: Decision::Deny,
+                argv_prefix: None,
+            }],
+        );
+        let v2 = e2
+            .check_with_tier(
+                "Write",
+                ToolClass::Edit,
+                None,
+                None,
+                "w",
+                None,
+                ApprovalTier::NeverAsk,
+            )
+            .await;
+        assert_eq!(v2.decision, Decision::Deny, "deny floor is absolute");
+    }
+
+    #[tokio::test]
+    async fn w56_never_ask_cannot_waive_the_appuid_force_ask() {
+        // W1.4: without kernel containment every mutation asks — a tool
+        // declaring NeverAsk must NOT waive that floor.
+        let (e0, mut rx) = PermissionEngine::new(Mode::Yolo, vec![]);
+        let e = e0.with_force_ask_mutations(true);
+        tokio::spawn(async move {
+            while let Some(job) = rx.recv().await {
+                let _ = job.respond.send(ApprovalAnswer::Deny);
+            }
+        });
+        let v = e
+            .check_with_tier(
+                "Write",
+                ToolClass::Edit,
+                None,
+                None,
+                "w",
+                None,
+                ApprovalTier::NeverAsk,
+            )
+            .await;
+        assert_eq!(
+            v.decision,
+            Decision::Deny,
+            "the force-ask floor re-escalated and the listener denied"
+        );
     }
 }

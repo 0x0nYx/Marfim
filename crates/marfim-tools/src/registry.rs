@@ -43,6 +43,9 @@ pub struct ToolDef {
     pub deferred: bool,
     pub timeout_ms: u64,
     pub parameters: Value,
+    /// W5.6: the tool spec's declared approval tier (default: the
+    /// class/mode/rules decide as before).
+    pub approval: marfim_core::permissions::ApprovalTier,
     pub run: std::sync::Arc<ToolFn>,
 }
 
@@ -52,6 +55,7 @@ impl std::fmt::Debug for ToolDef {
             .field("name", &self.name)
             .field("class", &self.class)
             .field("deferred", &self.deferred)
+            .field("approval", &self.approval)
             .finish()
     }
 }
@@ -259,6 +263,7 @@ mod tests {
             deferred,
             timeout_ms: 1000,
             parameters: serde_json::json!({"type": "object"}),
+            approval: marfim_core::permissions::ApprovalTier::Default,
             run: std::sync::Arc::new(|_ctx, _args| ToolOutput::ok("ok")),
         }
     }

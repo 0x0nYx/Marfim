@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0 — W5.6 complete: tool-declared approval tiers (2026-11-09)
+
+- `permissions::ApprovalTier {Default, AlwaysAsk, NeverAsk}`: the TOOL
+  SPEC declares its own approval contract. `AlwaysAsk` escalates an
+  Allow to an Ask even in Yolo (and fails closed with no listener);
+  `NeverAsk` downgrades a plain mode-based Ask to an Allow. Ordering is
+  pinned by tests: the deny floor is absolute, the W1.4 AppUid
+  force-ask re-escalates AFTER a NeverAsk downgrade (a sandbox
+  attestation is not the tool's to waive), and privacy denies fire
+  first as before.
+- `ToolDef.approval` rides the registry into the host dispatch
+  (`check_with_tier`); the old `check`/`check_with_input` signatures
+  stay as Default-tier wrappers — zero behavior change for every
+  existing builtin.
+- 737 tests green (was 733).
+
 ## 1.0.0 — W8 (partial): defrag ledger + context promotion (2026-11-09)
 
 - Defrag ledger (§C, Hermes micro_compaction): a micro-compaction sweep
