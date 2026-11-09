@@ -342,6 +342,42 @@ pub async fn build_session(
         marfim_core::sandbox::SandboxLevel::Enforced => {}
         level => eprintln!("{}", level.attestation()),
     }
+    // W9.2: the network enforcement proxy — bound BEFORE the tools exist
+    // (fail-closed: a demanded proxy that cannot bind refuses the start),
+    // then injected into every sandboxed child's env as HTTP(S)_PROXY.
+    let mut sandbox = sandbox;
+    if settings.network_proxy {
+        let allow = marfim_core::netproxy::Allowlist::from_entries(&settings.network_allow)
+            .unwrap_or_else(|e| {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("error: network proxy bind failed (fail-closed): {e}");
+                std::process::exit(1);
+            });
+        let proxy_port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+        let (cancel, cancel_handle) = marfim_core::netproxy::tokio_util_like::cancel_channel();
+        tokio::spawn(marfim_core::netproxy::serve(
+            listener,
+            Arc::new(allow),
+            cancel,
+        ));
+        // The proxy lives for the process lifetime; the cancel handle is
+        // deliberately leaked so the serve loop never sees a sender drop
+        // (a vanished enforcement point would silently un-restrict bash).
+        std::mem::forget(cancel_handle);
+        eprintln!("network proxy: 127.0.0.1:{proxy_port} (allowlist enforced)");
+        let p = format!("http://127.0.0.1:{proxy_port}");
+        sandbox.extra_env = vec![
+            ("HTTP_PROXY".into(), p.clone()),
+            ("HTTPS_PROXY".into(), p.clone()),
+            ("http_proxy".into(), p.clone()),
+            ("https_proxy".into(), p),
+        ];
+    }
     let (perm, approval_rx) =
         PermissionEngine::new(settings.permission_mode, settings.rules.clone());
     let perm = match settings.sandbox_level {
@@ -382,12 +418,18 @@ pub async fn build_session(
         bash_default_timeout_ms: settings.bash_default_timeout_ms,
         journal_path: Arc::new(std::sync::Mutex::new(None)),
     };
+    // W9.1: the exec policy table (when `[execpolicy]` is configured) —
+    // attached to the PRODUCTION host only; subagent children inherit the
+    // engine floors, not the policy table.
     let mut host = HostTools::new(
         perm.clone(),
         tool_ctx.clone(),
         sandbox,
         marfim_core::hooks::Hooks::default(),
     );
+    if let Some(policy) = &settings.exec_policy {
+        host = host.with_exec_policy(Arc::new(policy.clone()));
+    }
     // MCP (step 2): construct McpClient per config `mcpServers` BEHIND the
     // trust gate — config layers are already trust-gated (D13), so an
     // untrusted cwd can never contribute mcpServers. Servers that fail to

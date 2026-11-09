@@ -654,6 +654,11 @@ pub struct EffectiveSettings {
     pub allow_custom_tools: bool,
     /// W8: the compaction stage order (default promote→micro→summarize).
     pub compaction_strategies: Vec<marfim_core::compact::Strategy>,
+    /// W9.1: the loaded exec policy (None = table absent).
+    pub exec_policy: Option<marfim_core::execpolicy::ExecPolicy>,
+    /// W9.2: networkProxy + networkAllow from `[sandbox]`.
+    pub network_proxy: bool,
+    pub network_allow: Vec<String>,
 }
 
 /// Permission rules from the config `permissions` section only (no CLI):
@@ -935,6 +940,43 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
     let _ = config.get("lsp");
     let _ = config.get("hooks");
     let _ = config.get("env");
+    // W9.1: the exec policy table (amendments applied, self-tests run —
+    // a lying policy refuses the start).
+    let exec_policy = marfim_core::execpolicy::ExecPolicy::from_config(config)?;
+
+    // W9.2: the network enforcement proxy surface (the FACTORY binds it
+    // and injects the env; absent config = no proxy, byte-identical).
+    let mut network_proxy = false;
+    let mut network_allow: Vec<String> = Vec::new();
+    if let Some(v) = config.get("sandbox") {
+        let obj = v
+            .as_object()
+            .ok_or_else(|| "sandbox section must be an object".to_string())?;
+        if let Some(np) = obj.get("networkProxy") {
+            network_proxy = np
+                .as_bool()
+                .ok_or_else(|| "sandbox.networkProxy must be a boolean".to_string())?;
+        }
+        if let Some(na) = obj.get("networkAllow") {
+            let list = na
+                .as_array()
+                .ok_or_else(|| "sandbox.networkAllow must be an array".to_string())?;
+            for e in list {
+                network_allow.push(
+                    e.as_str()
+                        .map(String::from)
+                        .ok_or_else(|| "sandbox.networkAllow must hold strings".to_string())?,
+                );
+            }
+            if network_proxy && network_allow.is_empty() {
+                return Err(
+                    "sandbox.networkProxy = true needs sandbox.networkAllow entries                      (an allowlist proxy with no entries allows nothing)"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     let _ = config.get("unattended");
     // W1.4: sandbox.level is REAL config now (enforced | appUid | none;
     // unknown values fail closed — an invalid attestation is never a
@@ -1021,6 +1063,9 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         cache,
         allow_custom_tools,
         compaction_strategies,
+        exec_policy,
+        network_proxy,
+        network_allow,
     })
 }
 
@@ -1139,6 +1184,7 @@ mod tests {
         "credentialPools", // W7.4: CredentialPool::from_config reads [credentialPools]
         "responses",       // W7.5: responses.customTools (custom-grammar adoption)
         "compaction",      // W8: compaction.strategies (ordered stages)
+        "execpolicy",      // W9.1: ExecPolicy::from_config reads [execpolicy]
         "smallModel",
         "architectModel",
         "reviewModel",

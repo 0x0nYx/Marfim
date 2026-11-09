@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.0 — W9.1+W9.2: exec policy + network enforcement proxy (2026-11-09)
+
+- **`core::execpolicy`** (codex doctrine): allow/prompt/forbidden prefix
+  rules over child argv — longest matching prefix wins, equal-length
+  ties fail closed (forbidden > prompt > allow), no match leaves the
+  decision to the engine floor. Amendment rules apply at load in
+  declaration order; SELF-TESTS pin argv→decision expectations and a
+  policy that cannot prove them refuses to load. Wired into the
+  production host: the policy tightens the engine verdict (deny floor
+  absolute; `prompt` denies an engine-ALLOW — allow rules never clear a
+  prompt). The feature-`starlark` predicate layer is honestly queued:
+  the repo doctrine requires third-party APIs verified from vendored
+  source first.
+- **`core::netproxy`** (codex doctrine): the LOCAL allowlist enforcement
+  proxy — HTTP CONNECT tunnels, absolute-form GET/POST, SOCKS5, all
+  deny-closed against an exact-host/host:port allowlist. Config
+  `sandbox.networkProxy` + `sandbox.networkAllow`; the factory binds
+  before the tools exist (bind failure refuses the start) and injects
+  HTTP(S)_PROXY into every sandboxed child via `Sandbox.extra_env`.
+  Loopback only; tunnels, never inspects.
+- 786 tests green (was 777).
+
 ## 1.0.0 — W8 complete: async compaction + ordered strategies (2026-11-09)
 
 - **Ordered strategies** (§C): the compaction stages run in a CONFIGURED

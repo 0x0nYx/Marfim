@@ -21,6 +21,8 @@ pub struct HostTools {
     pub mcp: std::sync::Arc<
         std::sync::Mutex<std::collections::BTreeMap<String, Arc<marfim_mcp::client::McpClient>>>,
     >,
+    /// W9.1: the exec policy table (None = absent; see with_exec_policy).
+    pub exec_policy: Option<Arc<marfim_core::execpolicy::ExecPolicy>>,
 }
 
 impl HostTools {
@@ -39,6 +41,58 @@ impl HostTools {
             sandbox,
             state,
             mcp: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
+            exec_policy: None,
+        }
+    }
+
+    /// W9.1: attach the exec policy table (the factory sets it from
+    /// `[execpolicy]` when configured; the subagent host keeps None —
+    /// children inherit the engine floors, not the policy table).
+    pub fn with_exec_policy(mut self, policy: Arc<marfim_core::execpolicy::ExecPolicy>) -> Self {
+        self.exec_policy = Some(policy);
+        self
+    }
+
+    /// W9.1 enforcement: the policy runs AFTER the engine verdict (the
+    /// deny floor stays absolute) and may only TIGHTEN: `forbidden`
+    /// denies outright; `prompt` denies when the engine path did not ask
+    /// a human (allow rules / mode shortcuts never clear a prompt — the
+    /// same doctrine as the privacy guard); `allow` is no opinion.
+    fn apply_exec_policy(
+        &self,
+        tool: &str,
+        argv: Option<&[String]>,
+        verdict: marfim_core::permissions::Verdict,
+    ) -> marfim_core::permissions::Verdict {
+        use marfim_core::execpolicy::Verdict as Pv;
+        use marfim_core::permissions::Decision;
+        if verdict.decision == Decision::Deny {
+            return verdict; // deny floor absolute
+        }
+        let Some(policy) = self.exec_policy.as_ref() else {
+            return verdict;
+        };
+        let Some(av) = argv else {
+            return verdict;
+        };
+        match policy.evaluate(av) {
+            None => verdict,
+            Some(Pv::Forbidden) => marfim_core::permissions::Verdict {
+                decision: Decision::Deny,
+                reason: format!("exec policy forbids this command (forbidden prefix on `{tool}`)"),
+                provenance: None,
+            },
+            Some(Pv::Prompt) if verdict.decision == Decision::Allow => {
+                marfim_core::permissions::Verdict {
+                    decision: Decision::Deny,
+                    reason: "exec policy marks this command prompt-level; an allow rule \
+                             never clears a prompt — add an explicit execpolicy allow \
+                             for the exact prefix or run it interactively"
+                        .to_string(),
+                    provenance: None,
+                }
+            }
+            Some(_) => verdict,
         }
     }
 
@@ -576,6 +630,8 @@ impl HostTools {
                 tier,
             )
             .await;
+        // W9.1: the exec policy tightens the verdict (deny floor absolute).
+        let verdict = self.apply_exec_policy(tool, argv.as_deref(), verdict);
         if verdict.decision == marfim_core::permissions::Decision::Deny {
             return (format!("permission denied: {}", verdict.reason), true);
         }

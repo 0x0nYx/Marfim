@@ -68,6 +68,9 @@ pub struct Sandbox {
     exec_helper: Option<std::path::PathBuf>,
     /// W1.4: the explicit level. Default Enforced.
     pub level: SandboxLevel,
+    /// W9.2: env injected into EVERY sandboxed child after sanitization
+    /// (the network proxy endpoints when the enforcement proxy is on).
+    pub extra_env: Vec<(String, String)>,
 }
 
 impl Default for Sandbox {
@@ -80,6 +83,7 @@ impl Default for Sandbox {
             shell: p.shell_path().to_string(),
             exec_helper: p.exec_helper().ok(),
             level: SandboxLevel::Enforced,
+            extra_env: vec![],
         }
     }
 }
@@ -187,6 +191,11 @@ impl Sandbox {
     fn sanitize_and_group(&self, cmd: &mut Command) {
         cmd.env_clear();
         for (k, v) in crate::permissions::sanitize_env(std::env::vars().collect::<Vec<_>>()) {
+            cmd.env(k, v);
+        }
+        // W9.2: policy-injected env (proxy endpoints) after sanitization —
+        // never user-controlled, never a secret.
+        for (k, v) in &self.extra_env {
             cmd.env(k, v);
         }
         cmd.stdin(Stdio::piped());

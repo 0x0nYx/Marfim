@@ -41,6 +41,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "credentialPools",
     "cache",
     "responses",
+    "execpolicy",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -152,6 +153,11 @@ impl Config {
             ("credentialPools", &["values"]),
             ("responses", &["customTools"]),
             ("compaction", &["strategies"]),
+            ("execpolicy", &["rule", "amend", "self_test"]),
+            (
+                "sandbox",
+                &["level", "networkProxy", "networkAllow", "writableRoots"],
+            ),
         ];
         for (section, allowed) in nested {
             if let Some(v) = self.raw.get(*section) {
