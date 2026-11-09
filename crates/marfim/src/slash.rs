@@ -929,7 +929,134 @@ pub async fn dispatch(
                 format!("hot tools:\n{}", lines.join("\n"))
             }
         }
-        "cron" => "no cron facility in this build — schedule via your OS (crontab/systemd)".into(),
+        "cron" => {
+            // W10.2: the real cron surface over .marfim/cron.json.
+            //   /cron list                      — jobs + next fires
+            //   /cron add "NAME" "<schedule>" "PROMPT" [MODEL]
+            //   /cron pause <id> <reason> / /cron resume <id>
+            //   /cron run                       — the due catch-up sweep (one pass)
+            let path = ctx.cwd.join(".marfim").join("cron.json");
+            let mut book =
+                marfim_core::cronjobs::CronBook::load_best_effort(&path);
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let (verb, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+            match verb {
+                "list" | "" => {
+                    if book.jobs.is_empty() {
+                        format!(
+                            "no cron jobs ({} — add one: /cron add \"name\" \"daily at 09:00\" \"prompt\")",
+                            path.display()
+                        )
+                    } else {
+                        let mut out = String::from("cron jobs:\n");
+                        for j in &book.jobs {
+                            match &j.paused {
+                                Some(reason) => out.push_str(&format!(
+                                    "  {} {} PAUSED ({reason}) — {}\n",
+                                    j.id, j.name, j.schedule_humane()
+                                )),
+                                None => {
+                                    let next = j
+                                        .schedule
+                                        .next_after(j.last_run_ms.unwrap_or(0), now_ms);
+                                    out.push_str(&format!(
+                                        "  {} {} next ~{} — {}\n",
+                                        j.id,
+                                        j.name,
+                                        marfim_core::cronjobs::humane_unix_ms(next),
+                                        j.schedule_humane()
+                                    ))
+                                }
+                            }
+                        }
+                        out
+                    }
+                }
+                "add" => {
+                    let parts: Vec<&str> = rest.splitn(3, '"').collect();
+                    if parts.len() < 3 {
+                        return "usage: /cron add \"NAME\" \"SCHEDULE\" \"PROMPT\" [model]"
+                            .into();
+                    }
+                    let name = parts[1];
+                    let tail = parts[2].trim_start();
+                    let (sched, prompt, model) = match tail.split_once('"') {
+                        Some((s, after)) => {
+                            let s = s.trim().to_string();
+                            let after = after.trim_start();
+                            match after.split_once('"') {
+                                Some((p, m)) => (
+                                    s,
+                                    p.to_string(),
+                                    m.split_whitespace().next().map(|x| x.to_string()),
+                                ),
+                                None => (s, after.to_string(), None),
+                            }
+                        }
+                        None => return "usage: /cron add \"NAME\" \"SCHEDULE\" \"PROMPT\" [model]".into(),
+                    };
+                    match marfim_core::cronjobs::parse_schedule(&sched) {
+                        Ok(sc) => {
+                            let id = book.add(name, &prompt, sc, model, now_ms, false);
+                            match book.save(&path) {
+                                Ok(()) => format!("scheduled {id} ({name})"),
+                                Err(e) => format!("{id} added, but save failed: {e}"),
+                            }
+                        }
+                        Err(e) => format!("{e}"),
+                    }
+                }
+                "pause" => {
+                    let (id, reason) = rest.split_once(' ').unwrap_or((rest, ""));
+                    if book.pause(id.trim(), reason) {
+                        match book.save(&path) {
+                            Ok(()) => format!("{id} paused ({})", reason.trim()),
+                            Err(e) => format!("{id} paused, but save failed: {e}"),
+                        }
+                    } else {
+                        format!("no job {id:?}")
+                    }
+                }
+                "resume" => {
+                    if book.resume(rest.trim()) {
+                        match book.save(&path) {
+                            Ok(()) => format!("{} resumed", rest.trim()),
+                            Err(e) => format!("resumed, but save failed: {e}"),
+                        }
+                    } else {
+                        format!("no job {:?}" , rest.trim())
+                    }
+                }
+                "run" => {
+                    // one catch-up pass over due jobs; the runner prints
+                    // what WOULD fire (the execution ride is the session
+                    // loop — headless mode fires them for real).
+                    let due = book.due(now_ms, 0);
+                    if due.is_empty() {
+                        "nothing due".into()
+                    } else {
+                        let mut out = String::from("due jobs (catch-up, max 1/open):\n");
+                        for (id, fire) in &due {
+                            if let Some(j) = book.jobs.iter().find(|j| &j.id == id) {
+                                out.push_str(&format!(
+                                    "  {id} {} (fire ~{}) — prompt: {}\n",
+                                    j.name,
+                                    marfim_core::cronjobs::humane_unix_ms(*fire),
+                                    j.prompt
+                                ));
+                            }
+                            book.mark_ran(id, now_ms);
+                        }
+                        let _ = book.save(&path);
+                        out
+                    }
+                }
+                other => format!("bad cron verb {other:?} (list|add|pause|resume|run)"),
+            }
+        }
         "swarm" => {
             // honest: the swarm/distswarm oracle port is not in this build
             // (the preservation bundle was never delivered); nothing is
@@ -1336,7 +1463,7 @@ mod tests {
     behaviour!(editor_report, "/editor", contains = ["editor:"]);
     behaviour!(goal_empty, "/goal", contains = ["no goal"]);
     behaviour!(hot_empty, "/hot", contains = ["no tool activity"]);
-    behaviour!(cron_honest, "/cron", contains = ["no cron facility"]);
+    behaviour!(cron_real, "/cron", contains = ["no cron jobs"]);
     behaviour!(swarm_honest, "/swarm", contains = ["swarm"]);
     behaviour!(
         doctor_real,

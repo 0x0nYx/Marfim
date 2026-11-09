@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.0.0 — W10.2: mandates + effect queue/outbox + source plugins + cron + delegation ledger (2026-11-09)
+
+- **Mandates** (`core::mandates`, dsh policy doctrine): versioned,
+  revocable authorization objects for autonomous work. The gate is
+  DETERMINISTIC with a pinned refusal order (revoked → expired → tool
+  scope → path scope → budget); an advisory LLM assessment is recorded
+  on the outcome and NEVER flips the gate (both directions
+  test-asserted). Amendments create new versions (history preserved);
+  revocation is monotonic and blocks future amendments.
+- **Durable ordered effect queue/outbox** (`marfim-state::effects`,
+  dsh effects/outbox doctrine): STORE-FIRST effects in sqlite (schema
+  v2), STRICT insertion-order execution — nothing runs past a
+  dead-lettered head (the queue stalls honestly); crash recovery
+  replays a claimed head with the attempt count recorded; at 8 attempts
+  a head dead-letters with a receipt-bearing transition; `advance` is
+  the recorded human stall-breaker.
+- **Source plugins** (`core::sources`, dsh architecture): GitHub
+  webhooks (issues/pull_request/push) + Feishu (im.message.receive_v1)
+  normalized into `SourceEvent`s, routed to per-ticket worker specs
+  carrying the UNTRUSTED-WEBHOOK toolset (web_search/web_extract/
+  vision/clarify — never shell/edit); (source, delivery_id) dedupe with
+  a bounded 1024-entry drop-oldest window; unknown sources/kinds fail
+  closed.
+- **Cron** (`core::cronjobs`, Hermes doctrine): the FIVE natural-
+  language schedule forms (`every N minutes|hours`, `daily at HH:MM`,
+  `weekdays at HH:MM`, `weekly on <day> at HH:MM`; everything else
+  fails closed with the forms hint); deterministic UTC civil-date math
+  (Hinnant, no wall clock, no TZ db — documented); paused_reason audit;
+  missed-run catch-up capped at ONE per open; per-job model pinning;
+  `[SILENT]`/`[CRON_FAILURE]` markers. The real `/cron` surface
+  (list/add/pause/resume/run) replaces the old honest stub.
+- **Async delegation ledger** (`marfim-state::delegation`, Hermes
+  async_delegation doctrine): dispatch rows with a 48h replay window
+  (from creation), ≤8 attempts, orphan sweep returning expired leases
+  to the queue, exactly-once settle (a second settle is refused — the
+  result already entered as a turn upstream), honest expiry for
+  unrunnable rows.
+- 880 tests green (was 847).
 ## 1.0.0 — W10.1: memory caps + review fork + skills curator + instincts + vault (2026-11-09)
 
 - **Memory caps** (`core::memcaps`, Hermes memory stack): rendered memory

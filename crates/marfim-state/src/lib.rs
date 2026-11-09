@@ -15,10 +15,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod delegation;
+pub mod effects;
 pub mod inbox;
 pub mod schema;
 pub mod wal;
 pub mod write;
 
+pub use delegation::DelegationLedger;
+pub use effects::EffectQueue;
 pub use inbox::{DurableInbox, InboxItem, ItemState, LeaseInfo};
 pub use write::WriteCore;
