@@ -353,6 +353,7 @@ async fn gemini_stream_golden_replays_thoughts_tools_and_usage() {
         api_key: "k".into(),
         model: "gemini-test".into(),
         max_retries: 0,
+        auth_bearer: false,
     };
     let step = provider
         .chat_step(&ChatRequest {
@@ -409,6 +410,7 @@ async fn gemini_body_keeps_model_on_the_url_and_tools_in_declarations() {
         api_key: "k".into(),
         model: "gemini-test".into(),
         max_retries: 0,
+        auth_bearer: false,
     };
     // a tool-result round trip must produce a user-turn functionResponse
     // keyed by NAME (id→name map rebuilt from history)
@@ -823,4 +825,187 @@ fn cache_ttl_serde_round_trips_the_wire_strings() {
     let json = serde_json::to_string(&h.ttl).unwrap();
     assert_eq!(json, r#""1h""#);
     assert!(serde_json::from_str::<Holder>(r#"{"ttl": "24h"}"#).is_err());
+}
+
+// ------------------------------------------------- W7.5 wire breadth
+
+#[tokio::test]
+async fn bedrock_cassette_sigv4_headers_and_invoke_mapping() {
+    // A REAL local endpoint playing Bedrock: asserts the SigV4 shape on
+    // the wire (Authorization parses, X-Amz-Date present, model id
+    // percent-encoded on the path) and maps the invoke document onto a
+    // Step exactly like the Anthropic cassette does.
+    let captured: Arc<std::sync::Mutex<String>> = Default::default();
+    let cap2 = captured.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let Ok((mut sock, _)) = listener.accept().await else {
+            return;
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut buf = vec![0u8; 65536];
+        let n = sock.read(&mut buf).await.unwrap_or(0);
+        *cap2.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
+        let body = r#"{"content":[{"type":"text","text":"from bedrock"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":7}}"#;
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = sock.write_all(resp.as_bytes()).await;
+    });
+    let provider = marfim_core::providers::bedrock::Bedrock {
+        client: marfim_core::http_client(),
+        // Local mock endpoint — the suite NEVER touches the real
+        // bedrock-runtime host (the override also changes the signed host).
+        base_url: format!("http://127.0.0.1:{port}"),
+        region: "us-east-1".into(),
+        model_id: "anthropic.claude-sonnet-4-5-v2:0".into(),
+        access_key: "AKIDEXAMPLE".into(),
+        secret_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".into(),
+        session_token: Some("tok".into()),
+        max_retries: 0,
+    };
+    let step = provider
+        .chat_step(&ChatRequest {
+            messages: vec![ChatMessage::user("hi")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(step.text(), "from bedrock");
+    assert_eq!(step.usage.input_tokens, 5);
+    assert_eq!(step.usage.output_tokens, 7);
+
+    let req = captured.lock().unwrap().clone();
+    assert!(
+        req.starts_with("POST /model/anthropic.claude-sonnet-4-5-v2%3A0/invoke"),
+        "model id percent-encodes on the path: {}",
+        req.lines().next().unwrap_or("")
+    );
+    let auth = req
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+        .unwrap_or("");
+    assert!(auth.contains("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"));
+    assert!(auth.contains("us-east-1/bedrock/aws4_request"));
+    assert!(auth.contains("SignedHeaders=content-type;host;x-amz-date"));
+    assert!(auth.contains("Signature="));
+    let req = captured.lock().unwrap().clone();
+    assert!(
+        req.lines().any(
+            |l| l.to_ascii_lowercase().starts_with("x-amz-security-token:")
+                && l.to_ascii_lowercase().ends_with("tok")
+        ),
+        "the session token rides the wire (signed AND sent)"
+    );
+    assert!(req
+        .lines()
+        .any(|l| l.to_ascii_lowercase().starts_with("x-amz-date:")));
+}
+
+#[tokio::test]
+async fn vertex_cassette_bearer_auth_over_the_gemini_body() {
+    // The Vertex adoption form: the SAME GenerateContent body, the
+    // credential on `Authorization: Bearer` instead of the key header.
+    let captured: Arc<std::sync::Mutex<String>> = Default::default();
+    let cap2 = captured.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let Ok((mut sock, _)) = listener.accept().await else {
+            return;
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut buf = vec![0u8; 65536];
+        let n = sock.read(&mut buf).await.unwrap_or(0);
+        *cap2.lock().unwrap() = String::from_utf8_lossy(&buf[..n]).to_string();
+        let body = r#"data: {"candidates":[{"content":{"parts":[{"text":"from vertex"}]}}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":4}}"#
+            .to_string()
+            + "\n\n"; // SSE framing: the tail MUST be newline-terminated
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = sock.write_all(resp.as_bytes()).await;
+    });
+    let provider = marfim_core::providers::Gemini {
+        client: marfim_core::http_client(),
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "ya29.access-token".into(),
+        model: "publishers/google/models/gemini-2.5-pro".into(),
+        max_retries: 0,
+        auth_bearer: true,
+    };
+    let step = provider
+        .chat_step(&ChatRequest {
+            messages: vec![ChatMessage::user("hi")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(step.text(), "from vertex");
+
+    let req = captured.lock().unwrap().clone();
+    assert!(
+        req.starts_with(
+            "POST /v1/models/publishers/google/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+        ),
+        "vertex path rides the base_url + model id: {}",
+        req.lines().next().unwrap_or("")
+    );
+    assert!(
+        req.lines()
+            .any(|l| l == "authorization: Bearer ya29.access-token"),
+        "bearer auth on the wire"
+    );
+    assert!(
+        !req.lines()
+            .any(|l| l.to_ascii_lowercase().starts_with("x-goog-api-key")),
+        "the key header never leaks on the vertex path"
+    );
+}
+
+#[test]
+fn mistral_cassette_is_the_openai_chat_dialect() {
+    // One preset, no second wire: the Mistral body is the chat/
+    // completions shape with the model and max_tokens the preset picked.
+    let req = ChatRequest {
+        messages: vec![ChatMessage::user("hi")],
+        tools: vec![serde_json::json!({"name": "Read", "input_schema": {"type": "object"}})],
+        max_completion_tokens: Some(512),
+        ..Default::default()
+    };
+    let body = marfim_core::providers::openai::build_body(&req, "mistral-large-latest");
+    assert_eq!(body["model"], "mistral-large-latest");
+    // The chat-completions dialect Marfim speaks carries the explicit cap
+    // as `max_completion_tokens` (the fallback default is `max_tokens`).
+    assert_eq!(body["max_completion_tokens"], 512);
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["function"]["name"], "Read");
+}
+
+#[test]
+fn custom_tool_kind_passes_through_only_when_adopted() {
+    // W7.5 adoption form (FORMER-REJECTS): `custom` tools pass verbatim
+    // ONLY with allow_custom_tools; default OFF keeps the function
+    // fallback, byte-identical to every pre-W7.5 body.
+    let mut req = ChatRequest {
+        messages: vec![ChatMessage::user("hi")],
+        tools: vec![serde_json::json!({
+            "type": "custom",
+            "name": "apply_patch",
+            "format": {"type": "grammar", "syntax": "lark", "definition": "start: ..."}
+        })],
+        ..Default::default()
+    };
+    let off = marfim_core::providers::responses::build_body(&req, "m");
+    assert_eq!(off["tools"][0]["type"], "function", "fallback when off");
+    assert_eq!(off["tools"][0]["name"], "apply_patch");
+
+    req.allow_custom_tools = true;
+    let on = marfim_core::providers::responses::build_body(&req, "m");
+    assert_eq!(on["tools"][0], req.tools[0], "verbatim when adopted");
+    assert_eq!(on["tools"][0]["format"]["syntax"], "lark");
 }

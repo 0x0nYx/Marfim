@@ -40,6 +40,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "credentials",
     "credentialPools",
     "cache",
+    "responses",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -149,6 +150,7 @@ impl Config {
             ("verify", &["commands"]),
             ("cache", &["ttl", "cachedContentName", "warm"]),
             ("credentialPools", &["values"]),
+            ("responses", &["customTools"]),
         ];
         for (section, allowed) in nested {
             if let Some(v) = self.raw.get(*section) {

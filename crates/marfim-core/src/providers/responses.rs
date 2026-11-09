@@ -108,13 +108,20 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
     if !req.tools.is_empty() {
         // Responses tools are FLAT: {type:"function", name, description,
         // parameters} — not nested under `function` like chat/completions.
+        // W7.5 adoption form: a tool that DECLARES `"type":"custom"`
+        // (grammar-constrained, e.g. an apply_patch grammar) passes through
+        // VERBATIM when `allow_custom_tools` is on; default OFF converts it
+        // to a function tool (the fallback — every existing body is
+        // byte-identical).
         let tools: Vec<serde_json::Value> = req
             .tools
             .iter()
             .map(|t| {
-                if t.get("type").and_then(|v| v.as_str()) == Some("function")
-                    && t.get("name").is_some()
-                {
+                let declared = t.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if req.allow_custom_tools && declared == "custom" && t.get("name").is_some() {
+                    return t.clone();
+                }
+                if declared == "function" && t.get("name").is_some() {
                     t.clone()
                 } else {
                     let mut f = serde_json::json!({

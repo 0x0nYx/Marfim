@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod anthropic;
+pub mod bedrock;
 pub mod cache;
 pub mod capabilities;
 pub mod effort;
@@ -212,6 +213,12 @@ pub struct ChatRequest {
     /// `None` sends nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
+    /// W7.5 (FORMER-REJECTS adoption form): allow the Responses wire to
+    /// pass `custom`-grammar tool definitions through verbatim instead of
+    /// converting them to function tools. Default OFF — every builtin
+    /// ships function tools, so nothing changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_custom_tools: bool,
 }
 
 /// Single retry layer (INV-06): the ONLY place in the codebase that

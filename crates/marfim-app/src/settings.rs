@@ -252,6 +252,42 @@ pub fn builtin_presets() -> std::collections::BTreeMap<&'static str, Preset> {
             default_model: "local-model".into(),
         },
     );
+    m.insert(
+        "mistral",
+        Preset {
+            // W7.5: Mistral speaks the OpenAI chat-completions dialect on
+            // its own host — one preset, one cassette, no second wire.
+            wire: "openai".into(),
+            base_url: "https://api.mistral.ai/v1".into(),
+            api_key_env: "MISTRAL_API_KEY".into(),
+            default_model: "mistral-large-latest".into(),
+        },
+    );
+    m.insert(
+        "google-vertex",
+        Preset {
+            // W7.5 (FORMER-REJECTS adoption form, OFF until selected): the
+            // Gemini wire + Bearer auth on the regional Vertex endpoint.
+            // The model is the FULL Vertex publisher-model id
+            // (publishers/google/models/gemini-2.5-pro).
+            wire: "gemini-vertex".into(),
+            base_url: "https://us-central1-aiplatform.googleapis.com/v1".into(),
+            api_key_env: "VERTEX_ACCESS_TOKEN".into(),
+            default_model: "publishers/google/models/gemini-2.5-pro".into(),
+        },
+    );
+    m.insert(
+        "amazon-bedrock",
+        Preset {
+            // W7.5: SigV4-signed Bedrock invoke (non-streaming — the
+            // binary event-stream decoder is the honest limitation).
+            // `model` is the Bedrock model or inference-profile id.
+            wire: "bedrock".into(),
+            base_url: String::new(),
+            api_key_env: "BEDROCK_ACCESS_KEY".into(),
+            default_model: "anthropic.claude-sonnet-4-5-v2:0".into(),
+        },
+    );
     m
 }
 
@@ -488,6 +524,59 @@ pub fn build_provider_with(
                 api_key,
                 model: model.to_string(),
                 max_retries: 3,
+                auth_bearer: false,
+            }))
+        }
+        "gemini-vertex" => {
+            // W7.5 (FORMER-REJECTS adoption form): the Vertex preset rides
+            // the SAME Gemini wire with `Authorization: Bearer` — the
+            // access token comes from the credential chain (W1.3/W7.4:
+            // env `VERTEX_ACCESS_TOKEN`, `[credentials]`, or an
+            // `[credentials.oauth]` refresh flow). The preset exists and
+            // works, but it is OFF until explicitly selected.
+            let base = if preset.base_url.is_empty() {
+                std::env::var("VERTEX_BASE_URL").unwrap_or_else(|_| {
+                    "https://us-central1-aiplatform.googleapis.com/v1".into()
+                })
+            } else {
+                preset.base_url.clone()
+            };
+            Ok(Arc::new(marfim_core::providers::Gemini {
+                client: marfim_core::http_client(),
+                base_url: base,
+                api_key,
+                model: model.to_string(),
+                max_retries: 3,
+                auth_bearer: true,
+            }))
+        }
+        "bedrock" => {
+            // W7.5: SigV4-signed invoke (clean-room, vector-tested). The
+            // three AWS credentials ride the credential chain under the
+            // names BEDROCK_ACCESS_KEY / BEDROCK_SECRET_KEY /
+            // BEDROCK_SESSION_TOKEN (the token optional).
+            let access = chain.resolve("BEDROCK_ACCESS_KEY");
+            let secret = chain.resolve("BEDROCK_SECRET_KEY");
+            if access.is_empty() || secret.is_empty() {
+                return Err(
+                    "bedrock preset needs BEDROCK_ACCESS_KEY and BEDROCK_SECRET_KEY \
+                     (env, [credentials], or a credential pool)"
+                        .to_string(),
+                );
+            }
+            let region = std::env::var("BEDROCK_REGION").unwrap_or_else(|_| "us-east-1".into());
+            Ok(Arc::new(marfim_core::providers::bedrock::Bedrock {
+                client: marfim_core::http_client(),
+                base_url: preset.base_url.clone(),
+                region,
+                model_id: model.to_string(),
+                access_key: access,
+                secret_key: secret,
+                session_token: {
+                    let t = chain.resolve("BEDROCK_SESSION_TOKEN");
+                    (!t.is_empty()).then_some(t)
+                },
+                max_retries: 3,
             }))
         }
         "mock" => {
@@ -502,7 +591,7 @@ pub fn build_provider_with(
             }))
         }
         other => Err(format!(
-            "provider wire `{other}` is not wired in this build (known wires: anthropic, openai, openai-responses, gemini, mock)"
+            "provider wire `{other}` is not wired in this build (known wires: anthropic, openai, openai-responses, gemini, gemini-vertex, bedrock, mock)"
         )),
     }
 }
@@ -561,6 +650,8 @@ pub struct EffectiveSettings {
     pub deny_instead_of_prompting: bool,
     /// W7.2: the `[cache]` config section (ttl / cachedContentName / warm).
     pub cache: marfim_core::providers::cache::CacheSettings,
+    /// W7.5: `responses.customTools` (default off).
+    pub allow_custom_tools: bool,
 }
 
 /// Permission rules from the config `permissions` section only (no CLI):
@@ -677,6 +768,21 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
     } else {
         Vec::new()
     };
+
+    // --- responses (config section; W7.5) — the custom-grammar adoption
+    // form: `customTools = true` passes `custom` tool defs through the
+    // Responses wire verbatim (default OFF = function-tool fallback).
+    let mut allow_custom_tools = false;
+    if let Some(v) = config.get("responses") {
+        let obj = v
+            .as_object()
+            .ok_or_else(|| "responses section must be an object".to_string())?;
+        if let Some(ct) = obj.get("customTools") {
+            allow_custom_tools = ct
+                .as_bool()
+                .ok_or_else(|| "responses.customTools must be a boolean".to_string())?;
+        }
+    }
 
     // --- cache (config section; W7.2) — unknown keys fail closed via
     // validate_consumed_sections, type errors fail closed here.
@@ -896,6 +1002,7 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         account_email,
         deny_instead_of_prompting,
         cache,
+        allow_custom_tools,
     })
 }
 
@@ -1012,6 +1119,7 @@ mod tests {
         "credentials",     // W1.3: CredentialChain::standard reads [credentials]
         "cache",           // W7.2: CacheSettings::from_config reads [cache]
         "credentialPools", // W7.4: CredentialPool::from_config reads [credentialPools]
+        "responses",       // W7.5: responses.customTools (custom-grammar adoption)
         "smallModel",
         "architectModel",
         "reviewModel",

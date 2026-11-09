@@ -21,6 +21,12 @@ pub struct Gemini {
     pub api_key: String,
     pub model: String,
     pub max_retries: u32,
+    /// W7.5 (Vertex adoption form): when true the credential rides
+    /// `Authorization: Bearer` (an OAuth access token resolved through the
+    /// W1.3 chain / W7.4 OAuthSource) instead of `x-goog-api-key`. The
+    /// body/URL shape is unchanged — Vertex speaks the same
+    /// GenerateContent schema behind a regional endpoint.
+    pub auth_bearer: bool,
 }
 
 /// Body builder — pure, so the fixture tests assert the exact wire shape.
@@ -299,14 +305,16 @@ impl Gemini {
     ) -> Result<reqwest::Response> {
         let mut attempt: u32 = 0;
         loop {
-            let res = self
+            let mut rb = self
                 .client
                 .post(self.url())
-                .header("x-goog-api-key", &self.api_key)
-                .header("User-Agent", crate::user_agent())
-                .json(body)
-                .send()
-                .await;
+                .header("User-Agent", crate::user_agent());
+            rb = if self.auth_bearer {
+                rb.header("authorization", format!("Bearer {}", self.api_key))
+            } else {
+                rb.header("x-goog-api-key", &self.api_key)
+            };
+            let res = rb.json(body).send().await;
             match res {
                 Ok(r) if r.status().is_success() => return Ok(r),
                 Ok(r) => {

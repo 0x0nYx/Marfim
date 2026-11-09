@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.0 — W7.5: wire breadth — Bedrock, Vertex, Mistral, custom grammar (2026-11-09)
+
+- **Amazon Bedrock** (`providers/bedrock.rs`): clean-room SigV4 signing
+  proven against the LITERAL AWS-documentation vector (the exact
+  Authorization header, signature `5d672d79…` — which caught the
+  canonical-URI slash-encoding bug and pinned single-encoding of the
+  model id). Non-streaming `invoke` reusing the Anthropic Messages body
+  with `stream:false`; the binary AWS event-stream decoder is the honest
+  limitation (one buffered emission, never a fake stream). Credentials
+  ride the W1.3 chain; missing keys fail visibly at build.
+- **Google Vertex** (the FORMER-REJECTS adoption form, OFF until
+  selected): the same Gemini wire with `Authorization: Bearer`;
+  `google-vertex` preset on the regional endpoint; the access token
+  comes from the W1.3 chain or the W7.4 OAuth refresh flow.
+- **Mistral**: one preset on the OpenAI chat-completions dialect — no
+  second wire.
+- **Custom-grammar tools** (the FORMER-REJECTS adoption form):
+  `responses.customTools = true` passes `type:"custom"` tool definitions
+  through the Responses wire verbatim; default OFF keeps the function
+  fallback (byte-identical bodies).
+- Every new wire is cassette-tested against LOCAL mock endpoints only —
+  the suite never touches a vendor host. 775 tests green (was 766).
+
 ## 1.0.0 — W7.4: OAuth2 PKCE + credential pools (2026-11-09)
 
 - New `core::oauth`: PKCE per RFC 7636 (verifier/challenge verified

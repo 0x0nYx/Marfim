@@ -526,6 +526,8 @@ pub async fn build_session(
     // W7.2 config truth: the [cache] section reaches every primary request
     // (ttl / cachedContentName) and arms the bounded warming ping (warm).
     harness.cache = settings.cache.clone();
+    // W7.5 config truth: the custom-grammar adoption form reaches the wire.
+    harness.allow_custom_tools = settings.allow_custom_tools;
     // Distillation §C1: the compaction trigger math needs the primary
     // model's context window from the offline catalog (best-effort —
     // unknown models keep the plain configured threshold).

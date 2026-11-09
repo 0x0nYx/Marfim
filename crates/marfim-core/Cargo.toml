@@ -22,6 +22,8 @@ toml.workspace = true
 # APIs, not incidental ones.
 sha2 = "0.10"
 base64 = "0.22"
+# W7.5 Bedrock: SigV4 key derivation is an HMAC-SHA256 chain (RFC 2104).
+hmac = "0.12"
 
 # Safe process-group signalling (kill(2) on the negative pgid) for Linux+macOS.
 # marfim-core forbids unsafe code, so libc is wrapped via nix's safe API.

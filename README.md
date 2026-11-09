@@ -57,7 +57,7 @@ marfim doctor           # environment check
 ## Quick start
 
 ```bash
-# 1. pick any provider (10 presets; keys come from the standard env vars)
+# 1. pick any provider (13 presets; keys come from the standard env vars)
 export OPENROUTER_API_KEY=sk-or-...
 marfim models                       # browse the models.dev catalog (free models included)
 marfim --provider openrouter --model deepseek/deepseek-chat-v3.1:free
@@ -99,7 +99,8 @@ defaultTimeoutMs = 120000
 ## Feature surface
 
 - **Providers** — OpenAI-compatible + Anthropic wire protocols (SSE streaming, tool calls,
-  usage accounting), 10 presets incl. local (Ollama/LM Studio/vLLM), live models.dev
+  usage accounting), 13 presets incl. local (Ollama/LM Studio/vLLM) and the W7.5 additions
+  (Mistral, Amazon Bedrock via vector-tested SigV4, Google Vertex via Bearer auth), live models.dev
   catalog (235 providers / 8,935 models) with 24h cache and offline fallback, free-model
   onboarding, custom `base_url` providers, mock provider for tests/CI.
 - **Agent loop** — streaming turns, tool dispatch with schema validation, exponential-backoff

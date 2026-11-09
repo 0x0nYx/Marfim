@@ -215,6 +215,10 @@ pub struct Harness {
     /// W7.2 cache plumbing: the `[cache]` config section (ttl /
     /// cachedContentName / warm), resolved once at settings time.
     pub cache: crate::providers::cache::CacheSettings,
+    /// W7.5 (FORMER-REJECTS adoption form): pass `custom`-grammar tools
+    /// through the Responses wire verbatim (default OFF — function-tool
+    /// fallback).
+    pub allow_custom_tools: bool,
     /// W7.2: the warming ping fires at most once per session.
     cache_warmed: AtomicBool,
 }
@@ -359,6 +363,7 @@ impl Harness {
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
+            allow_custom_tools: false,
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             verify_armed: AtomicBool::new(false),
@@ -664,6 +669,9 @@ impl Harness {
                 // request (None/default = byte-identical bodies).
                 cache_ttl: self.cache.ttl,
                 cached_content: self.cache.cached_content.clone(),
+                // W7.5: custom-grammar tools pass through only when the
+                // config turned the adoption form on.
+                allow_custom_tools: self.allow_custom_tools,
                 system: Some(system_prompt_with_nudge(
                     &self.ctx,
                     // §S memory cadence: every Nth turn carries the
@@ -1765,6 +1773,7 @@ mod tests {
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
+            allow_custom_tools: false,
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -2009,6 +2018,7 @@ mod tests {
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
+            allow_custom_tools: false,
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -2523,6 +2533,7 @@ mod tests {
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
+            allow_custom_tools: false,
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -2623,6 +2634,7 @@ mod tests {
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
+            allow_custom_tools: false,
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
