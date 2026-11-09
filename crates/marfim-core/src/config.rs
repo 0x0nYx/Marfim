@@ -151,6 +151,7 @@ impl Config {
             ("cache", &["ttl", "cachedContentName", "warm"]),
             ("credentialPools", &["values"]),
             ("responses", &["customTools"]),
+            ("compaction", &["strategies"]),
         ];
         for (section, allowed) in nested {
             if let Some(v) = self.raw.get(*section) {

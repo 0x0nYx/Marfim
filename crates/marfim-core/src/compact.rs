@@ -304,6 +304,83 @@ pub fn trigger_tokens(context_window: u64, max_output_tokens: u64, pct: f64) -> 
     t.max(1).min(effective)
 }
 
+// ---------------------------------------------------------------------
+// W8 (§C, ordered strategies): the compaction stages are a CONFIGURED
+// ORDER, not a hardwired ladder. The default order is exactly the
+// pre-W8 behavior (promote → micro → summarize), so absent config the
+// byte-shape of every decision is unchanged.
+
+/// One compaction stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strategy {
+    /// Context promotion (lossless): a larger-window chain sibling takes
+    /// the next step instead of compacting.
+    Promote,
+    /// Micro-compaction (pure elision, no provider call).
+    Micro,
+    /// Full summarization via the Small role (the W8 async form may have
+    /// pre-started it in the background).
+    Summarize,
+}
+
+/// The default order — identical to the pre-W8 hardwired ladder.
+pub const DEFAULT_STRATEGIES: &[Strategy] =
+    &[Strategy::Promote, Strategy::Micro, Strategy::Summarize];
+
+/// Parse the `[compaction] strategies` list. Unknown names fail closed
+/// with did-you-mean; an EMPTY list is refused (a session with NO
+/// compaction path would end in an unbounded context — the honest
+/// minimum is one stage).
+pub fn parse_strategies(raw: &[serde_json::Value]) -> Result<Vec<Strategy>, String> {
+    if raw.is_empty() {
+        return Err("compaction.strategies must not be empty (a session needs at least one compaction path)".into());
+    }
+    raw.iter()
+        .map(|v| {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "compaction.strategies must hold strings".to_string())?;
+            match s {
+                "promote" => Ok(Strategy::Promote),
+                "micro" => Ok(Strategy::Micro),
+                "summarize" => Ok(Strategy::Summarize),
+                other => Err(format!(
+                    "compaction.strategies: unknown stage `{other}` (known: promote, micro, summarize)"
+                )),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod strategy_tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_three_stages_and_refuses_unknowns() {
+        let raw = serde_json::json!(["promote", "micro", "summarize"]);
+        assert_eq!(
+            parse_strategies(raw.as_array().unwrap()).unwrap(),
+            DEFAULT_STRATEGIES.to_vec()
+        );
+        assert!(
+            parse_strategies(serde_json::json!(["promote", "wat"]).as_array().unwrap()).is_err()
+        );
+        assert!(parse_strategies(serde_json::json!([17]).as_array().unwrap()).is_err());
+        assert!(parse_strategies(&[]).is_err(), "empty is refused");
+    }
+
+    #[test]
+    fn order_is_configurable() {
+        // summarize-only (no cheap stages) is a legitimate choice.
+        let raw = serde_json::json!(["summarize"]);
+        assert_eq!(
+            parse_strategies(raw.as_array().unwrap()).unwrap(),
+            vec![Strategy::Summarize]
+        );
+    }
+}
+
 #[cfg(test)]
 mod trigger_tests {
     use super::*;

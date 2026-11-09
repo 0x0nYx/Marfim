@@ -124,6 +124,7 @@ pub fn event_lines() -> BTreeMap<String, String> {
             ok: false,
             model: "claude-sonnet-4-5".to_string(),
         },
+        Event::CompactionStarted { background: true },
         Event::Actuation {
             faculty: "learning".to_string(),
             kind: "model_select".to_string(),
@@ -598,8 +599,8 @@ mod tests {
 
     #[test]
     fn every_event_kind_has_a_fixture_line() {
-        // 19 kinds in the enum; the fixture must cover all of them.
-        assert_eq!(event_lines().len(), 19);
+        // 20 kinds in the enum; the fixture must cover all of them.
+        assert_eq!(event_lines().len(), 20);
     }
 
     #[test]

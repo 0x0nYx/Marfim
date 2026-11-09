@@ -212,6 +212,16 @@ pub struct Harness {
     /// already compressed — churning it wastes steps) until a full
     /// summarization resets the counter.
     defrag_fails: std::sync::atomic::AtomicU32,
+    /// W8 ordered strategies (§C): the compaction stage order from
+    /// `[compaction] strategies` (default promote → micro → summarize).
+    pub compaction_strategies: Vec<crate::compact::Strategy>,
+    /// W8 async compaction: the ONE background summarization task
+    /// (started past the soft threshold, consumed at the hard trigger).
+    pending_compaction: std::sync::Mutex<Option<PendingCompaction>>,
+    /// W8 async compaction: history length when the background summary's
+    /// snapshot was taken — messages beyond it survive compaction as the
+    /// protected tail.
+    compaction_snapshot_len: std::sync::atomic::AtomicU64,
     /// W7.2 cache plumbing: the `[cache]` config section (ttl /
     /// cachedContentName / warm), resolved once at settings time.
     pub cache: crate::providers::cache::CacheSettings,
@@ -248,6 +258,14 @@ pub fn prompt_cache_key(session_id: &str) -> String {
 /// remedy in the message. Denials do NOT count toward the streak (the
 /// denial circuit breaker owns that path; the two guards stay
 /// orthogonal — a denied call is the breaker's business, not a loop).
+/// W8 async compaction (§C): the background summarizer starts at this
+/// fraction of the hard trigger — the expensive Small-role call overlaps
+/// the rest of the turn instead of blocking the next one.
+pub const COMPACTION_SOFT_RATIO: f64 = 0.7;
+
+/// W8 async compaction: the pending background summarization handle.
+pub type PendingCompaction = tokio::task::JoinHandle<crate::Result<(String, Usage, String)>>;
+
 pub const MAX_TOOL_CALLS_PER_TURN: u64 = 200;
 pub const MAX_IDENTICAL_CALLS: u32 = 3;
 
@@ -364,6 +382,9 @@ impl Harness {
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
             allow_custom_tools: false,
+            compaction_strategies: crate::compact::DEFAULT_STRATEGIES.to_vec(),
+            pending_compaction: std::sync::Mutex::new(None),
+            compaction_snapshot_len: std::sync::atomic::AtomicU64::new(0),
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             verify_armed: AtomicBool::new(false),
@@ -1379,140 +1400,249 @@ impl Harness {
             None => configured,
         };
         if last_step_input_tokens <= threshold {
+            // W8 async compaction (§C): between the SOFT threshold (70%
+            // of the trigger) and the hard one, START the Small-role
+            // summarization in the BACKGROUND — the next over-trigger
+            // step usually consumes a ready summary instead of paying
+            // the latency inline. Bounded: at most ONE pending task;
+            // failure is swallowed at consume time (the sync path owns
+            // the retry) and the task never mutates anything itself.
+            let soft = (threshold as f64 * COMPACTION_SOFT_RATIO) as u64;
+            if last_step_input_tokens > soft {
+                // Lock-free around the await: check → snapshot → re-check
+                // → store (a std Mutex guard must never cross an await).
+                let free = self
+                    .pending_compaction
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_none();
+                let mut started = false;
+                if free {
+                    let snapshot = self.history.read().await.clone();
+                    self.compaction_snapshot_len
+                        .store(snapshot.len() as u64, std::sync::atomic::Ordering::SeqCst);
+                    let mut slot = self
+                        .pending_compaction
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    if slot.is_none() {
+                        let fut = summarize_via_small(self.router.clone(), snapshot);
+                        *slot = Some(tokio::spawn(fut));
+                        started = true;
+                    }
+                }
+                if started {
+                    self.bus
+                        .publish(Event::CompactionStarted { background: true });
+                }
+            }
             return Ok(false);
         }
-        // W8 context promotion (§C, OMP trigger order): near the honest
-        // ceiling, a chain sibling with a LARGER known context window takes
-        // the next step INSTEAD of compacting — promotion is lossless,
-        // summarization is not. The promotion band is the trigger math's
-        // cap ratio; when no larger sibling exists (or the catalog knows
-        // no windows) the normal compaction stages proceed.
-        if let Some(w) = self.context_window {
-            let ceiling = ((w.saturating_sub(self.sampling.max_completion_tokens.unwrap_or(8192))
-                as f64)
-                * crate::compact::FLOOR_CAP_RATIO) as u64;
-            if last_step_input_tokens > ceiling {
-                let router = self.router.read().await;
-                let promote = router.promote_overflow(
-                    Role::Primary,
-                    last_step_input_tokens,
-                    self.context_window,
-                );
-                drop(router);
-                if let Some(bigger) = promote {
-                    self.bus.publish(Event::Error {
-                        message: format!(
-                            "context overflow: promoting to `{bigger}` instead of compacting"
-                        ),
-                        fatal: false,
-                    });
-                    self.turn_overrides
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .model = Some(bigger);
-                    return Ok(false);
+        // W8 (§C, ordered strategies): the stages run in the CONFIGURED
+        // order (default promote → micro → summarize — byte-identical to
+        // the pre-W8 ladder).
+        for stage in self.compaction_strategies.iter().copied() {
+            match stage {
+                crate::compact::Strategy::Promote => {
+                    // W8 context promotion (§C, OMP trigger order): near
+                    // the honest ceiling, a chain sibling with a LARGER
+                    // known context window takes the next step INSTEAD of
+                    // compacting — promotion is lossless, summarization is
+                    // not. The promotion band is the trigger math's cap
+                    // ratio; when no larger sibling exists (or the catalog
+                    // knows no windows) the next stage proceeds.
+                    if let Some(w) = self.context_window {
+                        let ceiling = ((w
+                            .saturating_sub(self.sampling.max_completion_tokens.unwrap_or(8192))
+                            as f64)
+                            * crate::compact::FLOOR_CAP_RATIO)
+                            as u64;
+                        if last_step_input_tokens > ceiling {
+                            let router = self.router.read().await;
+                            let promote = router.promote_overflow(
+                                Role::Primary,
+                                last_step_input_tokens,
+                                self.context_window,
+                            );
+                            drop(router);
+                            if let Some(bigger) = promote {
+                                self.bus.publish(Event::Error {
+                                    message: format!(
+                                        "context overflow: promoting to `{bigger}` instead of compacting"
+                                    ),
+                                    fatal: false,
+                                });
+                                self.turn_overrides
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner())
+                                    .model = Some(bigger);
+                                return Ok(false);
+                            }
+                        }
+                    }
                 }
-            }
-        }
-        // Stage 1: micro-compaction — elide stale tool results (cheap,
-        // pure, no provider call). Protected tail keeps the live exchange
-        // intact — §C2: with a known window the tail is sized in TOKENS
-        // (2.5% clamped [10k, 25k]) on top of the message-count floor;
-        // errors are never elided.
-        //
-        // W8 defrag ledger (§C, Hermes micro_compaction): a sweep that
-        // reclaims less than DEFRAG_MIN_TOKENS is a failure; at 3
-        // consecutive failures the micro stage is skipped entirely until
-        // a full summarization resets the counter.
-        {
-            let fails = self.defrag_fails.load(std::sync::atomic::Ordering::SeqCst);
-            if fails < crate::compact::DEFRAG_MAX_FAILS {
-                let mut history = self.history.write().await;
-                let removed = crate::compact::micro_compact_budget(
-                    &mut history,
-                    threshold,
-                    6,
-                    Some(crate::compact::tail_budget_tokens(self.context_window)),
-                );
-                let removed_tokens = removed.div_ceil(4);
-                if removed_tokens >= crate::compact::DEFRAG_MIN_TOKENS {
-                    self.defrag_fails
-                        .store(0, std::sync::atomic::Ordering::SeqCst);
-                    let after =
-                        (history.iter().map(|m| m.content.len() as u64).sum::<u64>()).div_ceil(4);
+                crate::compact::Strategy::Micro => {
+                    // Stage: micro-compaction — elide stale tool results
+                    // (cheap, pure, no provider call). Protected tail
+                    // keeps the live exchange intact — §C2: with a known
+                    // window the tail is sized in TOKENS (2.5% clamped
+                    // [10k, 25k]) on top of the message-count floor; errors
+                    // are never elided.
+                    //
+                    // W8 defrag ledger (§C, Hermes micro_compaction): a
+                    // sweep that reclaims less than DEFRAG_MIN_TOKENS is a
+                    // failure; at 3 consecutive failures the micro stage is
+                    // skipped entirely until a full summarization resets
+                    // the counter.
+                    let fails = self.defrag_fails.load(std::sync::atomic::Ordering::SeqCst);
+                    if fails < crate::compact::DEFRAG_MAX_FAILS {
+                        let mut history = self.history.write().await;
+                        let removed = crate::compact::micro_compact_budget(
+                            &mut history,
+                            threshold,
+                            6,
+                            Some(crate::compact::tail_budget_tokens(self.context_window)),
+                        );
+                        let removed_tokens = removed.div_ceil(4);
+                        if removed_tokens >= crate::compact::DEFRAG_MIN_TOKENS {
+                            self.defrag_fails
+                                .store(0, std::sync::atomic::Ordering::SeqCst);
+                            let after =
+                                (history.iter().map(|m| m.content.len() as u64).sum::<u64>())
+                                    .div_ceil(4);
+                            self.bus.publish(Event::Compaction {
+                                before_tokens: last_step_input_tokens,
+                                after_tokens: after,
+                            });
+                            self.journal_rec(&JournalRecord::Compaction {
+                                summary: format!(
+                                    "micro-compaction: elided {removed} bytes of stale tool results"
+                                ),
+                            })?;
+                            if after <= threshold {
+                                return Ok(true); // micro stage was enough
+                            }
+                        } else {
+                            // insufficient sweep (or nothing eligible):
+                            // count it
+                            let n = self
+                                .defrag_fails
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                                + 1;
+                            if n >= crate::compact::DEFRAG_MAX_FAILS {
+                                self.bus.publish(Event::Error {
+                                    message: format!(
+                                        "micro-compaction skipped: {n} sweeps reclaimed \
+                                         <{} tokens each — summarizing instead",
+                                        crate::compact::DEFRAG_MIN_TOKENS
+                                    ),
+                                    fatal: false,
+                                });
+                            }
+                        }
+                    }
+                }
+                crate::compact::Strategy::Summarize => {
+                    // Stage: full summarization via the Small role. W8
+                    // async form: consume the background summary when one
+                    // is pending (started at the soft threshold); a failed
+                    // or absent background run falls back to the
+                    // synchronous path — never a silent continuation.
+                    self.bus
+                        .publish(Event::CompactionStarted { background: false });
+                    let (summary, small_usage, small_model) = {
+                        let pending = self
+                            .pending_compaction
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .take();
+                        match pending {
+                            Some(handle) => match handle.await {
+                                Ok(Ok(out)) => out,
+                                _ => {
+                                    self.bus.publish(Event::Error {
+                                        message:
+                                            "background compaction failed; compacting synchronously"
+                                                .into(),
+                                        fatal: false,
+                                    });
+                                    self.compact_via_small().await?
+                                }
+                            },
+                            None => self.compact_via_small().await?,
+                        }
+                    };
                     self.bus.publish(Event::Compaction {
                         before_tokens: last_step_input_tokens,
-                        after_tokens: after,
+                        after_tokens: (summary.len() as u64).div_ceil(4),
                     });
                     self.journal_rec(&JournalRecord::Compaction {
-                        summary: format!(
-                            "micro-compaction: elided {removed} bytes of stale tool results"
-                        ),
+                        summary: summary.clone(),
                     })?;
-                    if after <= threshold {
-                        return Ok(true); // micro stage was enough
+                    // D4: Small-role usage is ledgered (event + journal)
+                    let cost = self
+                        .router
+                        .read()
+                        .await
+                        .costs
+                        .cost_usd(&small_model, &small_usage);
+                    self.bus.publish(Event::Usage {
+                        role: Role::Small.as_str().into(),
+                        model: small_model.clone(),
+                        input_tokens: small_usage.input_tokens,
+                        output_tokens: small_usage.output_tokens,
+                        cache_read_tokens: small_usage.cache_read_tokens,
+                        cache_creation_tokens: small_usage.cache_creation_tokens,
+                        cost_usd: cost,
+                    });
+                    self.journal_rec(&JournalRecord::Usage {
+                        role: Role::Small.as_str().into(),
+                        model: small_model,
+                        input_tokens: small_usage.input_tokens,
+                        output_tokens: small_usage.output_tokens,
+                        cost_usd: cost,
+                    })?;
+                    // D4: summary re-injected as the FIRST message. W8
+                    // async form: turns that ran WHILE the background
+                    // summary was in flight survive as a protected tail —
+                    // snapped forward past any orphaned tool result so the
+                    // wire never sees a tool_result without its call.
+                    let snapshot_len = self
+                        .compaction_snapshot_len
+                        .swap(0, std::sync::atomic::Ordering::SeqCst);
+                    let snap = snapshot_len as usize;
+                    let mut tail: Vec<ChatMessage> = Vec::new();
+                    {
+                        let history = self.history.read().await;
+                        if snap > 0 && history.len() > snap {
+                            tail = history[snap..].to_vec();
+                            // snap past a leading orphaned tool result
+                            let cut = tail
+                                .iter()
+                                .position(|m| m.tool_call_id.is_none())
+                                .unwrap_or(tail.len());
+                            tail = tail.split_off(cut.min(tail.len()));
+                        }
                     }
-                } else {
-                    // insufficient sweep (or nothing eligible): count it
-                    let n = self
-                        .defrag_fails
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                        + 1;
-                    if n >= crate::compact::DEFRAG_MAX_FAILS {
-                        self.bus.publish(Event::Error {
-                            message: format!(
-                                "micro-compaction skipped: {n} sweeps reclaimed \
-                                 <{} tokens each — summarizing instead",
-                                crate::compact::DEFRAG_MIN_TOKENS
-                            ),
-                            fatal: false,
-                        });
-                    }
+                    let mut next =
+                        vec![ChatMessage::user(format!("[compacted context]\n{summary}"))];
+                    next.extend(tail);
+                    *self.history.write().await = next;
+                    // W8 defrag ledger: a full summarization does NOT
+                    // reset the failure count — in a two-stage loop every
+                    // micro failure is immediately followed by
+                    // summarization, so the only honest reset is a sweep
+                    // that actually reclaims ≥ DEFRAG_MIN_TOKENS. Until
+                    // then the micro stage stays skipped (the summarizer
+                    // owns reduction; sweeps on an already-compressed
+                    // state are waste).
+                    return Ok(true);
                 }
             }
         }
-        // Stage 2: full summarization via the Small role.
-        let (summary, small_usage, small_model) = self.compact_via_small().await?;
-        self.bus.publish(Event::Compaction {
-            before_tokens: last_step_input_tokens,
-            after_tokens: (summary.len() as u64).div_ceil(4),
-        });
-        self.journal_rec(&JournalRecord::Compaction {
-            summary: summary.clone(),
-        })?;
-        // D4: Small-role usage is ledgered (event + journal)
-        let cost = self
-            .router
-            .read()
-            .await
-            .costs
-            .cost_usd(&small_model, &small_usage);
-        self.bus.publish(Event::Usage {
-            role: Role::Small.as_str().into(),
-            model: small_model.clone(),
-            input_tokens: small_usage.input_tokens,
-            output_tokens: small_usage.output_tokens,
-            cache_read_tokens: small_usage.cache_read_tokens,
-            cache_creation_tokens: small_usage.cache_creation_tokens,
-            cost_usd: cost,
-        });
-        self.journal_rec(&JournalRecord::Usage {
-            role: Role::Small.as_str().into(),
-            model: small_model,
-            input_tokens: small_usage.input_tokens,
-            output_tokens: small_usage.output_tokens,
-            cost_usd: cost,
-        })?;
-        // D4: summary re-injected as the FIRST message
-        *self.history.write().await =
-            vec![ChatMessage::user(format!("[compacted context]\n{summary}"))];
-        // W8 defrag ledger: a full summarization does NOT reset the
-        // failure count — in a two-stage loop every micro failure is
-        // immediately followed by summarization, so the only honest
-        // reset is a sweep that actually reclaims ≥ DEFRAG_MIN_TOKENS.
-        // Until then the micro stage stays skipped (the summarizer owns
-        // reduction; sweeps on an already-compressed state are waste).
-        Ok(true)
+        // Every configured stage ran without reducing below the trigger
+        // (e.g. a promote-only config): honest report, no compaction.
+        Ok(false)
     }
 
     /// D4: compaction via the Small role, usage returned for ledgering.
@@ -1522,70 +1652,7 @@ impl Harness {
     /// search tool, so post-compaction work can still reach pre-compaction
     /// facts through the journal.
     async fn compact_via_small(&self) -> crate::Result<(String, Usage, String)> {
-        let router = self.router.read().await;
-        let (entry, _tried) = router.resolve(Role::Small, |_| true)?;
-        drop(router);
-        let history = self.history.read().await.clone();
-        let body = history
-            .iter()
-            .map(|m| {
-                let tc_info = if m.tool_calls.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " [calls: {}]",
-                        m.tool_calls
-                            .iter()
-                            .map(|t| t.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                format!("{}: {}{tc_info}", m.role, m.content)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        // Verbatim user messages, newest-first, hard-capped: 4000 chars
-        // per message, 24000 chars total. Deterministic selection.
-        const VERBATIM_TOTAL_CAP: usize = 24_000;
-        const VERBATIM_PER_MSG_CAP: usize = 4_000;
-        let mut verbatim = String::new();
-        for m in history.iter().rev().filter(|m| m.role == "user") {
-            if verbatim.len() >= VERBATIM_TOTAL_CAP {
-                break;
-            }
-            let mut t: String = m.content.chars().take(VERBATIM_PER_MSG_CAP).collect();
-            if m.content.chars().count() > VERBATIM_PER_MSG_CAP {
-                t.push_str(" …[truncated]");
-            }
-            let room = VERBATIM_TOTAL_CAP - verbatim.len();
-            let t: String = t.chars().take(room).collect();
-            verbatim.push_str("\n---\n");
-            verbatim.push_str(&t);
-        }
-        if verbatim.is_empty() {
-            verbatim.push_str("\n---\n(no user messages)");
-        }
-        let req = ChatRequest {
-            messages: vec![ChatMessage::user(format!(
-                "Summarize the following conversation for context continuation. \
-                 Keep file paths, decisions, and pending work.\
-                 \n\n=== VERBATIM RECENT USER REQUESTS (newest first; preserve these goals EXACTLY) ==={verbatim}\
-                 \n\n=== CONVERSATION ===\
-                 \n{body}\
-                 \n\nNOTE: older tool outputs may have been elided or summarized away. \
-                 For exact details from earlier in this session, run the SessionSearch tool with keywords from the original task."
-            ))],
-            ..Default::default()
-        };
-        let step = entry.provider.chat_step(&req).await?;
-        let s = step.text();
-        if s.trim().is_empty() {
-            return Err(crate::CoreError::Provider(
-                "compaction produced empty summary".into(),
-            ));
-        }
-        Ok((s, step.usage, entry.model.clone()))
+        summarize_via_small(self.router.clone(), self.history.read().await.clone()).await
     }
 
     fn journal_total_usage(&self, usage: &Usage, model: &str) -> crate::Result<()> {
@@ -1601,6 +1668,80 @@ impl Harness {
 
 pub fn system_prompt(ctx: &LoopCtx) -> String {
     system_prompt_with_nudge(ctx, None)
+}
+
+/// W8 async compaction: the Small-role summarization as a FREE function
+/// over owned state (the router Arc + a history snapshot), so it can run
+/// in a background task started at the soft threshold. The prompt carries
+/// a VERBATIM user-message section (24k chars total / 4k per message,
+/// newest-first — Hermes lean summary spec) and a recovery footer
+/// steering to the session search tool. Pure with respect to the harness:
+/// the task never mutates harness state — the caller consumes the result.
+pub(crate) async fn summarize_via_small(
+    router: Arc<RwLock<Router>>,
+    history: Vec<ChatMessage>,
+) -> crate::Result<(String, Usage, String)> {
+    let (entry, _tried) = router.read().await.resolve(Role::Small, |_| true)?;
+    let body = history
+        .iter()
+        .map(|m| {
+            let tc_info = if m.tool_calls.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " [calls: {}]",
+                    m.tool_calls
+                        .iter()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            format!("{}: {}{tc_info}", m.role, m.content)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Verbatim user messages, newest-first, hard-capped: 4000 chars
+    // per message, 24000 chars total. Deterministic selection.
+    const VERBATIM_TOTAL_CAP: usize = 24_000;
+    const VERBATIM_PER_MSG_CAP: usize = 4_000;
+    let mut verbatim = String::new();
+    for m in history.iter().rev().filter(|m| m.role == "user") {
+        if verbatim.len() >= VERBATIM_TOTAL_CAP {
+            break;
+        }
+        let mut t: String = m.content.chars().take(VERBATIM_PER_MSG_CAP).collect();
+        if m.content.chars().count() > VERBATIM_PER_MSG_CAP {
+            t.push_str(" …[truncated]");
+        }
+        let room = VERBATIM_TOTAL_CAP - verbatim.len();
+        let t: String = t.chars().take(room).collect();
+        verbatim.push_str("\n---\n");
+        verbatim.push_str(&t);
+    }
+    if verbatim.is_empty() {
+        verbatim.push_str("\n---\n(no user messages)");
+    }
+    let req = ChatRequest {
+        messages: vec![ChatMessage::user(format!(
+            "Summarize the following conversation for context continuation. \
+             Keep file paths, decisions, and pending work.\
+             \n\n=== VERBATIM RECENT USER REQUESTS (newest first; preserve these goals EXACTLY) ==={verbatim}\
+             \n\n=== CONVERSATION ===\
+             \n{body}\
+             \n\nNOTE: older tool outputs may have been elided or summarized away. \
+             For exact details from earlier in this session, run the SessionSearch tool with keywords from the original task."
+        ))],
+        ..Default::default()
+    };
+    let step = entry.provider.chat_step(&req).await?;
+    let s = step.text();
+    if s.trim().is_empty() {
+        return Err(crate::CoreError::Provider(
+            "compaction produced empty summary".into(),
+        ));
+    }
+    Ok((s, step.usage, entry.model.clone()))
 }
 
 /// System prompt with an optional cadence note (§S memory nudge). The
@@ -1774,6 +1915,9 @@ mod tests {
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
             allow_custom_tools: false,
+            compaction_strategies: crate::compact::DEFAULT_STRATEGIES.to_vec(),
+            pending_compaction: std::sync::Mutex::new(None),
+            compaction_snapshot_len: std::sync::atomic::AtomicU64::new(0),
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -2019,6 +2163,9 @@ mod tests {
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
             allow_custom_tools: false,
+            compaction_strategies: crate::compact::DEFAULT_STRATEGIES.to_vec(),
+            pending_compaction: std::sync::Mutex::new(None),
+            compaction_snapshot_len: std::sync::atomic::AtomicU64::new(0),
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -2534,6 +2681,9 @@ mod tests {
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
             allow_custom_tools: false,
+            compaction_strategies: crate::compact::DEFAULT_STRATEGIES.to_vec(),
+            pending_compaction: std::sync::Mutex::new(None),
+            compaction_snapshot_len: std::sync::atomic::AtomicU64::new(0),
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
@@ -2635,6 +2785,9 @@ mod tests {
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
             cache: crate::providers::cache::CacheSettings::default(),
             allow_custom_tools: false,
+            compaction_strategies: crate::compact::DEFAULT_STRATEGIES.to_vec(),
+            pending_compaction: std::sync::Mutex::new(None),
+            compaction_snapshot_len: std::sync::atomic::AtomicU64::new(0),
             cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),

@@ -528,6 +528,8 @@ pub async fn build_session(
     harness.cache = settings.cache.clone();
     // W7.5 config truth: the custom-grammar adoption form reaches the wire.
     harness.allow_custom_tools = settings.allow_custom_tools;
+    // W8 config truth: the compaction stage order.
+    harness.compaction_strategies = settings.compaction_strategies.clone();
     // Distillation §C1: the compaction trigger math needs the primary
     // model's context window from the offline catalog (best-effort —
     // unknown models keep the plain configured threshold).

@@ -652,6 +652,8 @@ pub struct EffectiveSettings {
     pub cache: marfim_core::providers::cache::CacheSettings,
     /// W7.5: `responses.customTools` (default off).
     pub allow_custom_tools: bool,
+    /// W8: the compaction stage order (default promote→micro→summarize).
+    pub compaction_strategies: Vec<marfim_core::compact::Strategy>,
 }
 
 /// Permission rules from the config `permissions` section only (no CLI):
@@ -885,7 +887,22 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         .get("autoCompactThreshold")
         .and_then(|v| v.as_u64())
         .unwrap_or(120_000);
-    let _ = config.get("compaction");
+    // W8 (§C ordered strategies): the compaction stage ORDER is config —
+    // default promote → micro → summarize (identical to the pre-W8
+    // ladder). Unknown stages and the empty list fail closed.
+    let mut compaction_strategies: Vec<marfim_core::compact::Strategy> =
+        marfim_core::compact::DEFAULT_STRATEGIES.to_vec();
+    if let Some(v) = config.get("compaction") {
+        let obj = v
+            .as_object()
+            .ok_or_else(|| "compaction section must be an object".to_string())?;
+        if let Some(st) = obj.get("strategies") {
+            let list = st
+                .as_array()
+                .ok_or_else(|| "compaction.strategies must be an array".to_string())?;
+            compaction_strategies = marfim_core::compact::parse_strategies(list)?;
+        }
+    }
     let _ = config.get("steerMode");
 
     // --- stream + display ---
@@ -1003,6 +1020,7 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         deny_instead_of_prompting,
         cache,
         allow_custom_tools,
+        compaction_strategies,
     })
 }
 
@@ -1120,6 +1138,7 @@ mod tests {
         "cache",           // W7.2: CacheSettings::from_config reads [cache]
         "credentialPools", // W7.4: CredentialPool::from_config reads [credentialPools]
         "responses",       // W7.5: responses.customTools (custom-grammar adoption)
+        "compaction",      // W8: compaction.strategies (ordered stages)
         "smallModel",
         "architectModel",
         "reviewModel",
@@ -1133,7 +1152,6 @@ mod tests {
         "hooks",
         "lsp",
         "wal",
-        "compaction",
         "autoCompactThreshold",
         "steerMode",
         "stream",

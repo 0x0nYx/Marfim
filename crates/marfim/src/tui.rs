@@ -466,6 +466,25 @@ impl TuiModel {
                     self.why.pop_front();
                 }
             }
+            // W8 async compaction: the pre-started background summary
+            // lands in the why panel (observability only).
+            Event::CompactionStarted { background } => {
+                self.why.push_back(WhyEntry {
+                    faculty: clip("compact", 10),
+                    hook: clip(if *background { "bg" } else { "run" }, 8),
+                    detail: clip(
+                        if *background {
+                            "pre-started"
+                        } else {
+                            "summarizing"
+                        },
+                        12,
+                    ),
+                });
+                while self.why.len() > WHY_KEEP {
+                    self.why.pop_front();
+                }
+            }
             Event::Actuation {
                 faculty,
                 kind,

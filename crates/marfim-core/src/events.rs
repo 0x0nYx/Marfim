@@ -93,6 +93,12 @@ pub enum Event {
         ok: bool,
         model: String,
     },
+    /// W8 async compaction: a summarization run STARTED. `background`
+    /// marks the soft-threshold pre-start (the expensive Small-role call
+    /// overlapping the rest of the turn); `false` is the inline run.
+    CompactionStarted {
+        background: bool,
+    },
     /// A faculty ACTUATION landed (the four bounded powers: model_select,
     /// permission_tighten, compact_threshold, idle_propose). Every
     /// actuation carries the full before/after pair plus the evidence the
@@ -126,6 +132,7 @@ impl Event {
             Event::VerifyFinished { .. } => "verify_finished",
             Event::FacultyHook { .. } => "faculty_hook",
             Event::CacheWarm { .. } => "cache_warm",
+            Event::CompactionStarted { .. } => "compaction_started",
             Event::Actuation { .. } => "actuation",
             Event::TurnEnded { .. } => "turn_end",
             Event::Error { .. } => "error",
