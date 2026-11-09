@@ -451,6 +451,21 @@ impl TuiModel {
                     self.why.pop_front();
                 }
             }
+            // W7.2: the cache-warm ping outcome lands in the why panel
+            // (observability only — it changes no UI state).
+            Event::CacheWarm { ok, model } => {
+                self.why.push_back(WhyEntry {
+                    faculty: clip("cache", 10),
+                    hook: clip("warm", 8),
+                    detail: clip(
+                        &format!("{}/{}", if *ok { "ok" } else { "failed" }, model),
+                        12,
+                    ),
+                });
+                while self.why.len() > WHY_KEEP {
+                    self.why.pop_front();
+                }
+            }
             Event::Actuation {
                 faculty,
                 kind,

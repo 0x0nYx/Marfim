@@ -496,6 +496,8 @@ pub struct EffectiveSettings {
     pub account_email: String,
     /// §P (claude-code 2.1.319): asks become denies, the turn continues.
     pub deny_instead_of_prompting: bool,
+    /// W7.2: the `[cache]` config section (ttl / cachedContentName / warm).
+    pub cache: marfim_core::providers::cache::CacheSettings,
 }
 
 /// Permission rules from the config `permissions` section only (no CLI):
@@ -612,6 +614,10 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
     } else {
         Vec::new()
     };
+
+    // --- cache (config section; W7.2) — unknown keys fail closed via
+    // validate_consumed_sections, type errors fail closed here.
+    let cache = marfim_core::providers::cache::CacheSettings::from_config(config)?;
 
     // --- permissions (config section + --permission-mode + --glob) ---
     let mut permission_mode = cli.permission_mode.as_str();
@@ -826,6 +832,7 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         prompt_vars,
         account_email,
         deny_instead_of_prompting,
+        cache,
     })
 }
 
@@ -911,6 +918,7 @@ mod tests {
         "provider",
         "providers",
         "credentials", // W1.3: CredentialChain::standard reads [credentials]
+        "cache",       // W7.2: CacheSettings::from_config reads [cache]
         "smallModel",
         "architectModel",
         "reviewModel",

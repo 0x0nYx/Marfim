@@ -16,11 +16,20 @@ pub struct Anthropic {
 pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
     let mut system_val = serde_json::Value::Null;
     if let Some(sys) = &req.system {
-        system_val = if req.cache_breakpoints {
-            serde_json::json!([{"type": "text", "text": sys, "cache_control": {"type": "ephemeral"}}])
+        if req.cache_breakpoints {
+            // W7.2: an explicit ttl (config `cache.ttl`) rides the SYSTEM
+            // breakpoint only — tools keep the plain ephemeral marker.
+            // "1h" is emitted verbatim; "5m" IS the wire default, so it is
+            // omitted (the no-ttl body stays byte-identical).
+            let mut marker = serde_json::json!({"type": "ephemeral"});
+            if req.cache_ttl == Some(super::cache::CacheTtl::OneHour) {
+                marker["ttl"] = serde_json::json!("1h");
+            }
+            system_val =
+                serde_json::json!([{"type": "text", "text": sys, "cache_control": marker}]);
         } else {
-            serde_json::json!(sys)
-        };
+            system_val = serde_json::json!(sys);
+        }
     }
     // D10: tool results become tool_result blocks, and ALL results of one
     // batch are merged into a SINGLE user message (Anthropic wire contract).

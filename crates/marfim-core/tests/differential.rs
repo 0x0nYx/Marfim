@@ -744,3 +744,83 @@ fn gemini_thought_signature_round_trips_verbatim() {
         .get("thoughtSignature")
         .is_none());
 }
+
+// ------------------------------------------------------ W7.2 cache plumbing
+
+#[test]
+fn anthropic_ttl_rides_the_system_breakpoint_only() {
+    // W7.2: `cache.ttl = "1h"` lands on the SYSTEM breakpoint; tools keep
+    // the plain ephemeral marker (bounded surface). Default (no ttl) is
+    // byte-identical to the pre-W7.2 body.
+    let mut req = ChatRequest {
+        messages: vec![ChatMessage::user("hi")],
+        tools: vec![serde_json::json!({"name": "Read", "input_schema": {}})],
+        cache_breakpoints: true,
+        system: Some("sys".into()),
+        ..Default::default()
+    };
+    let plain = marfim_core::providers::anthropic::build_body(&req, "m");
+    assert_eq!(
+        plain["system"][0]["cache_control"],
+        serde_json::json!({"type": "ephemeral"}),
+        "no ttl configured → plain ephemeral"
+    );
+
+    req.cache_ttl = Some(marfim_core::providers::cache::CacheTtl::OneHour);
+    let body = marfim_core::providers::anthropic::build_body(&req, "m");
+    assert_eq!(
+        body["system"][0]["cache_control"],
+        serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+    );
+    let tools = body["tools"].as_array().unwrap();
+    assert_eq!(
+        tools.last().unwrap()["cache_control"],
+        serde_json::json!({"type": "ephemeral"}),
+        "tool breakpoints never carry the ttl"
+    );
+
+    // 5m is the wire default — the marker stays ttl-free (identical bytes
+    // to no-ttl).
+    req.cache_ttl = Some(marfim_core::providers::cache::CacheTtl::FiveMinutes);
+    let body = marfim_core::providers::anthropic::build_body(&req, "m");
+    assert_eq!(
+        body["system"][0]["cache_control"],
+        serde_json::json!({"type": "ephemeral"})
+    );
+}
+
+#[test]
+fn gemini_cachedcontent_rides_the_body_verbatim() {
+    // W7.2 (§R3): the cache name is the caller's business; the wire only
+    // carries the reference. Absent = absent (byte-identical legacy body).
+    let req = ChatRequest {
+        messages: vec![ChatMessage::user("hi")],
+        cached_content: Some("cachedContents/abc123".into()),
+        ..Default::default()
+    };
+    let body = marfim_core::providers::gemini::build_body(&req, "m");
+    assert_eq!(body["cachedContent"], "cachedContents/abc123");
+
+    let plain = marfim_core::providers::gemini::build_body(
+        &ChatRequest {
+            messages: vec![ChatMessage::user("hi")],
+            ..Default::default()
+        },
+        "m",
+    );
+    assert!(plain.get("cachedContent").is_none());
+}
+
+#[test]
+fn cache_ttl_serde_round_trips_the_wire_strings() {
+    // The ChatRequest serializes the WIRE strings, not variant names.
+    #[derive(serde::Deserialize)]
+    struct Holder {
+        ttl: marfim_core::providers::cache::CacheTtl,
+    }
+    let h: Holder = serde_json::from_str(r#"{"ttl": "1h"}"#).unwrap();
+    assert_eq!(h.ttl, marfim_core::providers::cache::CacheTtl::OneHour);
+    let json = serde_json::to_string(&h.ttl).unwrap();
+    assert_eq!(json, r#""1h""#);
+    assert!(serde_json::from_str::<Holder>(r#"{"ttl": "24h"}"#).is_err());
+}

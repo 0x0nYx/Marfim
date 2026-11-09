@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod anthropic;
+pub mod cache;
 pub mod capabilities;
 pub mod effort;
 pub mod gemini;
@@ -192,6 +193,14 @@ pub struct ChatRequest {
     pub thinking_budget: Option<u64>,
     /// Anthropic cache breakpoints on the last tool/user block.
     pub cache_breakpoints: bool,
+    /// W7.2: explicit prompt-cache TTL on the Anthropic system
+    /// breakpoint (`"1h"` extended cache). `None` = plain ephemeral
+    /// (byte-identical default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_ttl: Option<crate::providers::cache::CacheTtl>,
+    /// W7.2: Gemini `cachedContent` name, sent verbatim when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
     /// Canonical reasoning-effort ladder (distilled: docs/DISTILLATION.md

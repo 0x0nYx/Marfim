@@ -38,6 +38,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "effort",
     "accountEmail",
     "credentials",
+    "cache",
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -145,6 +146,7 @@ impl Config {
             ("bash", &["defaultTimeoutMs", "envAllowlist"]),
             ("hooks", &["PreToolUse", "PostToolUse"]),
             ("verify", &["commands"]),
+            ("cache", &["ttl", "cachedContentName", "warm"]),
         ];
         for (section, allowed) in nested {
             if let Some(v) = self.raw.get(*section) {

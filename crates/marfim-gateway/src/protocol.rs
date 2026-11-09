@@ -120,6 +120,10 @@ pub fn event_lines() -> BTreeMap<String, String> {
             hook: "post_step".to_string(),
             detail: json!({"drift": 0.01}),
         },
+        Event::CacheWarm {
+            ok: false,
+            model: "claude-sonnet-4-5".to_string(),
+        },
         Event::Actuation {
             faculty: "learning".to_string(),
             kind: "model_select".to_string(),
@@ -594,8 +598,8 @@ mod tests {
 
     #[test]
     fn every_event_kind_has_a_fixture_line() {
-        // 18 kinds in the enum; the fixture must cover all of them.
-        assert_eq!(event_lines().len(), 18);
+        // 19 kinds in the enum; the fixture must cover all of them.
+        assert_eq!(event_lines().len(), 19);
     }
 
     #[test]

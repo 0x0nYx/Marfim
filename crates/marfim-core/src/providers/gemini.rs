@@ -82,6 +82,12 @@ pub fn build_body(req: &ChatRequest, model_id: &str) -> serde_json::Value {
     if let Some(sys) = &req.system {
         body["systemInstruction"] = serde_json::json!({"parts": [{"text": sys}]});
     }
+    // W7.2 (§R3): an explicit cachedContent name rides the body verbatim —
+    // managing the cache itself is the caller's business (a pre-created
+    // Gemini cache); the wire only carries the reference.
+    if let Some(cc) = &req.cached_content {
+        body["cachedContent"] = serde_json::json!(cc);
+    }
     let mut gen_cfg = serde_json::json!({
         "maxOutputTokens": req.max_completion_tokens.unwrap_or(8192)
     });

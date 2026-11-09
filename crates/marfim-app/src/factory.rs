@@ -492,6 +492,9 @@ pub async fn build_session(
         thinking_budget: settings.thinking_budget,
         effort: settings.effort,
     };
+    // W7.2 config truth: the [cache] section reaches every primary request
+    // (ttl / cachedContentName) and arms the bounded warming ping (warm).
+    harness.cache = settings.cache.clone();
     // Distillation §C1: the compaction trigger math needs the primary
     // model's context window from the offline catalog (best-effort —
     // unknown models keep the plain configured threshold).

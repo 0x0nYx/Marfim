@@ -86,6 +86,13 @@ pub enum Event {
         hook: String,
         detail: Value,
     },
+    /// W7.2 (§P): the bounded cache-warming ping outcome (once per
+    /// session when `cache.warm` is on; failure is observable, never
+    /// fatal).
+    CacheWarm {
+        ok: bool,
+        model: String,
+    },
     /// A faculty ACTUATION landed (the four bounded powers: model_select,
     /// permission_tighten, compact_threshold, idle_propose). Every
     /// actuation carries the full before/after pair plus the evidence the
@@ -118,6 +125,7 @@ impl Event {
             Event::VerifyStarted { .. } => "verify_started",
             Event::VerifyFinished { .. } => "verify_finished",
             Event::FacultyHook { .. } => "faculty_hook",
+            Event::CacheWarm { .. } => "cache_warm",
             Event::Actuation { .. } => "actuation",
             Event::TurnEnded { .. } => "turn_end",
             Event::Error { .. } => "error",

@@ -212,6 +212,11 @@ pub struct Harness {
     /// already compressed — churning it wastes steps) until a full
     /// summarization resets the counter.
     defrag_fails: std::sync::atomic::AtomicU32,
+    /// W7.2 cache plumbing: the `[cache]` config section (ttl /
+    /// cachedContentName / warm), resolved once at settings time.
+    pub cache: crate::providers::cache::CacheSettings,
+    /// W7.2: the warming ping fires at most once per session.
+    cache_warmed: AtomicBool,
 }
 
 /// Turn-scoped faculty overrides. Every field is optional and validated:
@@ -353,6 +358,8 @@ impl Harness {
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
+            cache: crate::providers::cache::CacheSettings::default(),
+            cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error,
@@ -653,6 +660,10 @@ impl Harness {
                 messages: history_snapshot,
                 tools: self.tools.schemas(),
                 cache_breakpoints: true,
+                // W7.2: the [cache] config section rides every primary
+                // request (None/default = byte-identical bodies).
+                cache_ttl: self.cache.ttl,
+                cached_content: self.cache.cached_content.clone(),
                 system: Some(system_prompt_with_nudge(
                     &self.ctx,
                     // §S memory cadence: every Nth turn carries the
@@ -672,6 +683,34 @@ impl Harness {
             // P4 pre_model hook (observational)
             crate::faculty::run_pre_model(&self.bus, &self.faculties, &self.hook_ctx(steps), &req)
                 .await;
+
+            // W7.2 (§P): the bounded cache-warming ping — at most ONCE per
+            // session, before the first provider step, when `cache.warm`
+            // is on. The result is discarded; the outcome is observable on
+            // the bus (CacheWarm) and never fatal: a failed warm leaves
+            // the turn untouched.
+            if self.cache.warm && !self.cache_warmed.swap(true, Ordering::SeqCst) {
+                let sys = req.system.clone().unwrap_or_default();
+                let warm_req = crate::providers::cache::warm_request(
+                    &sys,
+                    &prompt_cache_key(&self.ctx.session_id),
+                );
+                let primary = self
+                    .router
+                    .read()
+                    .await
+                    .chain(Role::Primary)
+                    .first()
+                    .cloned();
+                let (ok, model) = match primary {
+                    Some(entry) => {
+                        let ok = entry.provider.chat_step(&warm_req).await.is_ok();
+                        (ok, entry.model)
+                    }
+                    None => (false, String::new()),
+                };
+                self.bus.publish(Event::CacheWarm { ok, model });
+            }
 
             // 2. call provider — D11 real failover: on a transport error the
             //    model is marked unavailable and the next chain entry is
@@ -766,17 +805,31 @@ impl Harness {
                         // W7.3 recovery rung (§F): a 400-SHAPE error names a
                         // parameter the model rejects — retry THIS model
                         // once with that parameter stripped before the
-                        // failover walk moves on. One rung per attempt;
-                        // ambiguous errors never classify.
-                        if let Some(stripped) = crate::providers::recovery::strip_after_shape_error(
-                            &req,
-                            &err.to_string(),
-                        ) {
+                        // failover walk moves on. W7.2 adds the cache
+                        // ladder, which classifies FIRST (a ttl rejection
+                        // is strictly more specific than a parameter shape
+                        // error): ttl removed → then every cache marker
+                        // removed. One rung per attempt; ambiguous errors
+                        // never classify.
+                        let cache_stripped =
+                            crate::providers::cache::cache_after_error(&req, &err.to_string());
+                        let stripped = cache_stripped.clone().or_else(|| {
+                            crate::providers::recovery::strip_after_shape_error(
+                                &req,
+                                &err.to_string(),
+                            )
+                        });
+                        if let Some(stripped) = stripped {
+                            let rung_kind = if cache_stripped.is_some() {
+                                "cache marker"
+                            } else {
+                                "parameter"
+                            };
                             self.bus.publish(Event::Error {
                                 message: format!(
-                                    "provider `{}` rejected a parameter ({err}); \
+                                    "provider `{}` rejected a {} ({err}); \
                                      retrying with it stripped",
-                                    e.model
+                                    e.model, rung_kind
                                 ),
                                 fatal: false,
                             });
@@ -1711,6 +1764,8 @@ mod tests {
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
+            cache: crate::providers::cache::CacheSettings::default(),
+            cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -1953,6 +2008,8 @@ mod tests {
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
+            cache: crate::providers::cache::CacheSettings::default(),
+            cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -2465,6 +2522,8 @@ mod tests {
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
+            cache: crate::providers::cache::CacheSettings::default(),
+            cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -2563,6 +2622,8 @@ mod tests {
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
             defrag_fails: std::sync::atomic::AtomicU32::new(0),
+            cache: crate::providers::cache::CacheSettings::default(),
+            cache_warmed: AtomicBool::new(false),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
