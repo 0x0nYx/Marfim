@@ -457,15 +457,46 @@ pub async fn build_session(
     if settings.routing == "bandit" {
         router.set_bandit(true);
     }
-    let primary = settings::build_primary_chain(settings, config).unwrap_or_else(|e| {
+    // W7.4: the chain materials are prepared ONCE; the OAuth sources
+    // refresh here (async context — a real HTTP round-trip), then every
+    // chain (primary + small, pool-expanded) builds from them.
+    let materials = settings::prepare_chain_materials(config).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
+    if !materials.oauth.is_empty() {
+        let mut any_ok = true;
+        for src in &materials.oauth {
+            match src.refresh_if_needed().await {
+                Ok(true) => {
+                    eprintln!(
+                        "oauth: refreshed access token for `{}`",
+                        src.credential_name()
+                    )
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    // A failed refresh keeps the previous token in place;
+                    // the provider request will fail its own auth visibly
+                    // if the token is actually dead.
+                    eprintln!("oauth: refresh for `{}` failed: {e}", src.credential_name());
+                    any_ok = false;
+                }
+            }
+        }
+        let _ = any_ok;
+    }
+    let primary =
+        settings::build_primary_chain_with(settings, config, &materials).unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        });
     router.set_chain(marfim_core::router::Role::Primary, primary);
-    let small = settings::build_small_chain(settings, config).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    });
+    let small =
+        settings::build_small_chain_with(settings, config, &materials).unwrap_or_else(|e| {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        });
     router.set_chain(marfim_core::router::Role::Small, small);
 
     let ctx = LoopCtx {

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.0 — W7.4: OAuth2 PKCE + credential pools (2026-11-09)
+
+- New `core::oauth`: PKCE per RFC 7636 (verifier/challenge verified
+  against the RFC's own test vector), authorize-URL and token-exchange/
+  refresh builders, a token store with the 60s refresh skew, and a REAL
+  refresh grant against a token endpoint (RFC 6749 §6 refresh-token
+  carry-forward). `OAuthSource` is a W1.3 `CredentialSource`: a seeded
+  refresh token in `[credentials.oauth.<NAME>]` keeps an access token
+  fresh machine-side — a failed refresh never blanks a working token,
+  and no seed + no refresh resolves to nothing (never fabricated). The
+  browser dance is honestly out of scope for a headless harness.
+- Credential pools (the FORMER-REJECT adoption form for in-place key
+  rotation): `[credentialPools.<NAME>] values` (≥ 2, empties refused)
+  expands to one IMMUTABLE snapshot per chain entry — rotation IS the
+  failover walk, no published context ever mutates. Chain precedence:
+  pool snapshot → oauth → env → config → memory.
+- The factory prepares chain materials once, refreshes OAuth tokens in
+  the async context, then builds every chain (primary + small).
+- 766 tests green (was 756).
+
 ## 1.0.0 — W7.2: cache-TTL plumbing (2026-11-09)
 
 - New `providers::cache`: `CacheTtl` ("5m"/"1h", wire-string serde,

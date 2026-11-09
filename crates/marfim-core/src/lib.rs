@@ -21,6 +21,7 @@ pub mod journal;
 pub mod levenshtein;
 pub mod loop_;
 pub mod memory;
+pub mod oauth;
 pub mod permissions;
 pub mod platform;
 pub mod privacy;

@@ -363,6 +363,69 @@ fn api_key_for(preset: &Preset, chain: &marfim_core::credentials::CredentialChai
     }
 }
 
+/// W7.4: everything the chain builders need that is resolved ONCE and
+/// refreshed OUTSIDE the builder (OAuth tokens refresh in the async
+/// factory, where a real HTTP round-trip is possible).
+pub struct ChainMaterials {
+    pub oauth: Vec<Arc<marfim_core::oauth::OAuthSource>>,
+    pub pool: marfim_core::oauth::CredentialPool,
+}
+
+/// Read `[credentials.oauth.<NAME>]` entries and `[credentialPools]`.
+/// Both are optional; absent sections yield empty materials.
+pub fn prepare_chain_materials(config: &Config) -> Result<ChainMaterials, String> {
+    let mut oauth = Vec::new();
+    if let Some(v) = config.get("credentials") {
+        if let Some(obj) = v.as_object() {
+            if let Some(oa) = obj.get("oauth") {
+                let map = oa
+                    .as_object()
+                    .ok_or_else(|| "credentials.oauth must be an object".to_string())?;
+                for (name, entry) in map {
+                    oauth.push(Arc::new(marfim_core::oauth::OAuthSource::new(
+                        name,
+                        marfim_core::oauth::OAuthConfig::from_value(entry)?,
+                    )));
+                }
+            }
+        }
+    }
+    let pool = marfim_core::oauth::CredentialPool::from_config(config)?;
+    Ok(ChainMaterials { oauth, pool })
+}
+
+impl ChainMaterials {
+    /// The credential chains for one preset. The OAuth sources sit at the
+    /// FRONT of the chain: a machine-refreshed access token must beat a
+    /// possibly-stale env value FOR ITS OWN NAME (other names fall
+    /// through untouched). With a pool: one chain PER immutable snapshot,
+    /// snapshot in front of everything (rotation is the failover walk;
+    /// no published context mutates).
+    fn chains_for(
+        &self,
+        config: &Config,
+        api_key_env: &str,
+    ) -> Vec<marfim_core::credentials::CredentialChain> {
+        let mut base = marfim_core::credentials::CredentialChain::standard(config);
+        for s in self.oauth.iter().rev() {
+            let src: Arc<dyn marfim_core::credentials::CredentialSource> = s.clone();
+            base = base.with_source_front(src);
+        }
+        let snaps = self.pool.snapshots(api_key_env);
+        if snaps.is_empty() {
+            return vec![base];
+        }
+        snaps
+            .into_iter()
+            .map(|v| {
+                base.clone().with_source_front(Arc::new(
+                    marfim_core::credentials::FixedSource::new(api_key_env, v),
+                ))
+            })
+            .collect()
+    }
+}
+
 /// Build a real provider from a preset through an explicit credential
 /// chain (W1.3). D11: the mock wire only exists via the explicit `mock`
 /// name — nothing falls back to it silently.
@@ -841,15 +904,30 @@ pub fn build_primary_chain(
     settings: &EffectiveSettings,
     config: &Config,
 ) -> Result<Vec<ModelEntry>, String> {
+    let materials = prepare_chain_materials(config)?;
+    build_primary_chain_with(settings, config, &materials)
+}
+
+/// The materials-taking variant: the factory prepares the materials once,
+/// refreshes the OAuth tokens (async), then builds every chain.
+pub fn build_primary_chain_with(
+    settings: &EffectiveSettings,
+    config: &Config,
+    materials: &ChainMaterials,
+) -> Result<Vec<ModelEntry>, String> {
     // W1.3: env -> config -> memory pool (identical to env-only when the
-    // config has no `credentials` table and the pool is empty).
-    let creds = marfim_core::credentials::CredentialChain::standard(config);
+    // config has no `credentials` table and the pool is empty). W7.4:
+    // a pooled credential expands to one immutable snapshot per chain
+    // entry — rotation IS the failover walk.
     let preset = resolve_preset(&settings.provider_name, config)?;
-    let mut chain = vec![ModelEntry {
-        model: settings.model.clone(),
-        provider: build_provider_with(&preset, &settings.model, &creds)?,
-        priced: true, // pricedness enforced by the CostBook at usage time
-    }];
+    let mut chain = Vec::new();
+    for creds in materials.chains_for(config, &preset.api_key_env) {
+        chain.push(ModelEntry {
+            model: settings.model.clone(),
+            provider: build_provider_with(&preset, &settings.model, &creds)?,
+            priced: true, // pricedness enforced by the CostBook at usage time
+        });
+    }
     for (prov, model) in &settings.failover {
         let p = resolve_preset(prov, config)?;
         let m = if model.is_empty() {
@@ -857,11 +935,13 @@ pub fn build_primary_chain(
         } else {
             model
         };
-        chain.push(ModelEntry {
-            model: m.clone(),
-            provider: build_provider_with(&p, m, &creds)?,
-            priced: true,
-        });
+        for creds in materials.chains_for(config, &p.api_key_env) {
+            chain.push(ModelEntry {
+                model: m.clone(),
+                provider: build_provider_with(&p, m, &creds)?,
+                priced: true,
+            });
+        }
     }
     Ok(chain)
 }
@@ -870,13 +950,25 @@ pub fn build_small_chain(
     settings: &EffectiveSettings,
     config: &Config,
 ) -> Result<Vec<ModelEntry>, String> {
-    let creds = marfim_core::credentials::CredentialChain::standard(config);
+    let materials = prepare_chain_materials(config)?;
+    build_small_chain_with(settings, config, &materials)
+}
+
+pub fn build_small_chain_with(
+    settings: &EffectiveSettings,
+    config: &Config,
+    materials: &ChainMaterials,
+) -> Result<Vec<ModelEntry>, String> {
     let preset = resolve_preset(&settings.provider_name, config)?;
-    Ok(vec![ModelEntry {
-        model: settings.small_model.clone(),
-        provider: build_provider_with(&preset, &settings.small_model, &creds)?,
-        priced: true,
-    }])
+    let mut out = Vec::new();
+    for creds in materials.chains_for(config, &preset.api_key_env) {
+        out.push(ModelEntry {
+            model: settings.small_model.clone(),
+            provider: build_provider_with(&preset, &settings.small_model, &creds)?,
+            priced: true,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -917,8 +1009,9 @@ mod tests {
         "model",
         "provider",
         "providers",
-        "credentials", // W1.3: CredentialChain::standard reads [credentials]
-        "cache",       // W7.2: CacheSettings::from_config reads [cache]
+        "credentials",     // W1.3: CredentialChain::standard reads [credentials]
+        "cache",           // W7.2: CacheSettings::from_config reads [cache]
+        "credentialPools", // W7.4: CredentialPool::from_config reads [credentialPools]
         "smallModel",
         "architectModel",
         "reviewModel",
@@ -1025,6 +1118,63 @@ mod tests {
         // missing provider errors
         let cfg3 = Config::default();
         assert!(effective(&cli(), &cfg3, PathBuf::from(".")).is_err());
+    }
+
+    #[test]
+    fn pool_expands_chains_per_snapshot_and_oauth_sits_in_front() {
+        // W7.4: a pooled name yields one immutable-snapshot chain per
+        // value; an unpooled name yields exactly one chain; the OAuth
+        // source resolves its own name ahead of env/config and nothing
+        // else.
+        let config = Config::from_json_str(
+            r#"{"credentialPools": {"POOL_KEY": {"values": ["one", "two"]}},
+                "credentials": {"oauth": {"OAUTH_KEY": {"tokenUrl": "http://127.0.0.1:1/t",
+                                                          "clientId": "cid",
+                                                          "refreshToken": "rt"}}}}"#,
+        )
+        .unwrap();
+        let materials = prepare_chain_materials(&config).unwrap();
+        assert_eq!(materials.oauth.len(), 1);
+
+        let pooled = materials.chains_for(&config, "POOL_KEY");
+        assert_eq!(pooled.len(), 2, "one chain per snapshot");
+        assert_eq!(pooled[0].resolve("POOL_KEY"), "one");
+        assert_eq!(pooled[1].resolve("POOL_KEY"), "two");
+        // Debug never prints values — only source names.
+        let dbg = format!("{pooled:?}");
+        assert!(!dbg.contains("\"one\"") && !dbg.contains("\"two\""));
+
+        let plain = materials.chains_for(&config, "OTHER_KEY");
+        assert_eq!(plain.len(), 1, "no pool for this name → single chain");
+        assert_eq!(
+            plain[0].resolve("OAUTH_KEY"),
+            "",
+            "no seed + no refresh = honest empty"
+        );
+
+        // The OAuth source answers ahead of env for ITS OWN NAME only.
+        std::env::set_var("OAUTH_KEY", "stale-from-env");
+        let seeded = ChainMaterials {
+            oauth: vec![Arc::new(marfim_core::oauth::OAuthSource::new(
+                "OAUTH_KEY",
+                marfim_core::oauth::OAuthConfig {
+                    token_url: "http://127.0.0.1:1/t".into(),
+                    client_id: "cid".into(),
+                    refresh_token: "rt".into(),
+                    access_token: Some("fresh".into()),
+                    expires_in_secs: Some(3600),
+                },
+            ))],
+            pool: marfim_core::oauth::CredentialPool::new(),
+        };
+        let chains = seeded.chains_for(&config, "OAUTH_KEY");
+        assert_eq!(chains.len(), 1);
+        assert_eq!(
+            chains[0].resolve("OAUTH_KEY"),
+            "fresh",
+            "oauth beats stale env"
+        );
+        std::env::remove_var("OAUTH_KEY");
     }
 
     #[test]

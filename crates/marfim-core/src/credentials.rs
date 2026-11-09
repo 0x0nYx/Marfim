@@ -131,9 +131,44 @@ impl CredentialSource for GlobalPool {
 }
 
 /// The precedence chain. Resolution order = construction order; the
-/// standard chain is env → config → memory pool.
+/// standard chain is env → config → memory pool. Clone is cheap (every
+/// source is an Arc) — the W7.4 pool expansion clones the base chain per
+/// snapshot and prepends one FixedSource.
+#[derive(Clone)]
 pub struct CredentialChain {
     sources: Vec<Arc<dyn CredentialSource>>,
+}
+
+/// W7.4: one immutable pool snapshot as a chain source — the expansion
+/// unit of a credential pool (rotation = the failover walk over one
+/// snapshot per chain entry; no published context is ever mutated).
+#[derive(Clone)]
+pub struct FixedSource {
+    name: String,
+    value: std::sync::Arc<str>,
+}
+
+impl FixedSource {
+    pub fn new(name: &str, value: std::sync::Arc<str>) -> Self {
+        Self {
+            name: name.to_string(),
+            value,
+        }
+    }
+}
+
+impl CredentialSource for FixedSource {
+    fn resolve(&self, name: &str) -> Option<String> {
+        if name == self.name {
+            Some(self.value.to_string())
+        } else {
+            None
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "pool-snapshot"
+    }
 }
 
 impl std::fmt::Debug for CredentialChain {
@@ -179,6 +214,20 @@ impl CredentialChain {
     pub fn with_source(mut self, source: Arc<dyn CredentialSource>) -> Self {
         self.sources.push(source);
         self
+    }
+
+    /// Prepend a source at the FRONT of the chain (highest precedence) —
+    /// W7.4 pool snapshots pin ONE value for a pooled name ahead of env
+    /// and config (an explicit pool is deliberate).
+    pub fn with_source_front(mut self, source: Arc<dyn CredentialSource>) -> Self {
+        self.sources.insert(0, source);
+        self
+    }
+
+    /// Source names in precedence order (Debug/testing only — never
+    /// values).
+    pub fn source_names(&self) -> Vec<&'static str> {
+        self.sources.iter().map(|s| s.name()).collect()
     }
 
     /// First non-empty credential in chain order; "" when none (the

@@ -38,6 +38,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "effort",
     "accountEmail",
     "credentials",
+    "credentialPools",
     "cache",
 ];
 
@@ -147,6 +148,7 @@ impl Config {
             ("hooks", &["PreToolUse", "PostToolUse"]),
             ("verify", &["commands"]),
             ("cache", &["ttl", "cachedContentName", "warm"]),
+            ("credentialPools", &["values"]),
         ];
         for (section, allowed) in nested {
             if let Some(v) = self.raw.get(*section) {

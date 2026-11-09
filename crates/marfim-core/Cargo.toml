@@ -17,6 +17,11 @@ futures-util.workspace = true
 regex.workspace = true
 async-trait.workspace = true
 toml.workspace = true
+# W7.4 OAuth2: PKCE S256 (RFC 7636) needs SHA-256 + base64url. Both are
+# already in the dependency graph (transitively); this pins them as real
+# APIs, not incidental ones.
+sha2 = "0.10"
+base64 = "0.22"
 
 # Safe process-group signalling (kill(2) on the negative pgid) for Linux+macOS.
 # marfim-core forbids unsafe code, so libc is wrapped via nix's safe API.
