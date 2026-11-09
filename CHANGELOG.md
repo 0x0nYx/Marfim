@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.0.0 — W4.1: marfim-ffi, the C ABI boundary (2026-11-09)
+
+- New crate `marfim-ffi` (cdylib + rlib): the single sanctioned holder of
+  `unsafe` in the workspace (DISTILLATION §FORMER-REJECTS, panic-
+  containment adoption form). Every other crate root — including
+  marfim-testkit, which was missing it — carries the crate-level
+  unsafe-forbid attribute, and that invariant is now TEST-enforced.
+- Hygiene is structural, not aspirational (tests/ffi_hygiene.rs = gate
+  G14, now ACTIVATED): every `extern "C"` fn wraps its body in
+  `catch_unwind` (a panic surfaces as a recorded last error + null —
+  never crosses the boundary), every `unsafe` block carries a `// SAFETY:`
+  comment in its preceding comment run (scanner cuts at line starts so
+  mid-line matches are checked against the reachable comment run), and
+  doc prose can never satisfy the scan (comment lines are dropped before
+  the extern-fn segment scan).
+- Honest, small surface: `marfim_version` (the single version source,
+  static, never freed), `marfim_config_probe` (validates a config TOML
+  through the SAME core loader + consumed-sections validator the CLI uses
+  — fail-closed, JSON envelope `{"ok":…}`), `marfim_last_error`,
+  `marfim_string_free`. Null and non-UTF8 inputs are honest errors; the
+  probe refuses to be stricter or looser than the binary.
+- 745 tests green (was 737). Gates 11 PASS / 0 FAIL / 2 SKIP (G14
+  activated and green; G12/G13 wait on the W4.2/W4.4 artifacts).
+
 ## 1.0.0 — W5.6 complete: tool-declared approval tiers (2026-11-09)
 
 - `permissions::ApprovalTier {Default, AlwaysAsk, NeverAsk}`: the TOOL

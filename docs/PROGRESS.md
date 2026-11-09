@@ -5,9 +5,9 @@ Statuses: TODO / WIP / DONE / BLOCKED. Each row's commit is the commit that
 landed the work (the in-flight row says `this commit` and is back-filled by
 the next ledger update).
 
-**Live test count: 737** (`cargo test --workspace`, 0 failed — measured at
-the W5.6 commit; every committed change re-lands it green). Historical
-counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687/712/722/731/733) were
+**Live test count: 745** (`cargo test --workspace`, 0 failed — measured at
+the W4.1 commit; every committed change re-lands it green). Historical
+counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687/712/722/731/733/737) were
 true at their commits.
 
 Owner inputs required: see docs/OWNER-INPUT.md. A row is BLOCKED only when
@@ -43,7 +43,7 @@ an owner input is missing; the reason and the exact ask live in that file.
 | W6.4 | DONE | this commit | core::trajectory — trajectory_compress_to: head/first-of-role/last-4 protection, tool-pair snap during drops, a fixpoint pair-repair pass (budget loses to integrity), bounded honest summary naming what was removed; Hermes constants (target 15250 / summary 750); 4 tests | pure + deterministic; the loop integration point is compact.rs (next wave) |
 | W12 | DONE | this commit | core::rea — EvidenceRecord (confidence full>partial>indirect, derived digests, bounded hot view of 512), ObligationLedger (reconstruct/verify; verify demands ≥partial, reconstruct demands a shown thing — a weak claim REFUSES), UnknownsLedger (record_unknown → verify_unknown_resolution), gate() names EVERY blocker; the tool host auto-records EVERY dispatched tool result (success=full, error=indirect) so evidence exists whether or not the model cites it; `Rea` tool (deferred, 7 actions) drives the ledger; 9 tests (5 core + 3 tool + digest) | REA bridge: the gate is callable from any surface; slash wiring is additive |
 | W12 phase end | — | this commit | fmt ✓, clippy ✓, 712 green, gates 10/0/3 | evidence pipeline complete |
-| W4.1 | TODO | — | — | marfim-ffi C ABI (G14 activates) |
+| W4.1 | DONE | this commit | crates/marfim-ffi (cdylib+rlib): 4 extern fns, EVERY one catch_unwind-wrapped (panic → recorded last error + null, never crosses), every unsafe block SAFETY-commented (structural scan, line-start anchored, comment-stripped extern scan); forbid(unsafe) now test-enforced on every crate root incl. marfim-testkit (was missing, added); honest surface: version (single source, static) + config probe (SAME core loader + consumed-sections validator, fail-closed JSON envelope) + last-error + string_free; 8 tests (5 lib + 3 hygiene); 745 green, clippy -D warnings clean, gates 11/0/2 — G14 ACTIVATED and green | cdylib artifact builds; G12/G13 artifacts (android toolchain, apps/flutter) still pending W4.2/W4.4 — honestly SKIP |
 | W4.2 | TODO | — | — | apps/flutter android project + gradle cargo-ndk |
 | W4.3 | TODO | — | — | Flutter app modules + docs/DESIGN.md |
 | W4.4 | TODO | — | — | .github/workflows/mobile.yml + docs/ANDROID-FINDINGS.md |
@@ -75,3 +75,4 @@ an owner input is missing; the reason and the exact ask live in that file.
 | baseline (dc980ef) | ✓ | ✓ | 603 green | G1–G10 PASS | ✓ (CI) | W0.1 |
 | W1 phase end | ✓ | ✓ | 627 green | 9 PASS / 0 FAIL / 4 SKIP (G11-G14 pending artifacts) | cargo deny + cargo audit green, zero ignores (local, 2026-11-07) | W1.5b |
 | W2 phase end | ✓ | ✓ | 642 green | 10 PASS / 0 FAIL / 3 SKIP (G11 ACTIVATED: protocol fixtures byte-checked; G12-G14 pending artifacts) | pending next local run | W2.3 |
+| W4.1 | ✓ | ✓ | 745 green | 11 PASS / 0 FAIL / 2 SKIP (G14 ACTIVATED: FFI hygiene; G12/G13 pending artifacts) | pending next local run | W4.1 |

@@ -2627,6 +2627,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "marfim-ffi"
+version = "1.0.0"
+dependencies = [
+ "marfim-app",
+ "marfim-core",
+ "serde_json",
+]
+
+[[package]]
 name = "marfim-gateway"
 version = "1.0.0"
 dependencies = [

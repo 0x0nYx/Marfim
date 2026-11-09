@@ -11,6 +11,8 @@
 //! isolation comes from the pid, same-process isolation from the counter.
 //! The counter is deterministic, which keeps run layouts reproducible.
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
