@@ -59,6 +59,12 @@ pub struct Router {
     /// ladder in `mark_failure` (distillation §F1: Hermes' main-chain
     /// cooldown `min(60s * 2^n, 14400s)`).
     fail_counts: std::collections::BTreeMap<(Role, String), u32>,
+    /// W7.3 health TTLs (§F Hermes `auxiliary_health.py`): the last
+    /// success per (role, model) is TRUSTED for 600s, then goes stale
+    /// (re-probed); a transient failure quarantines the candidate for at
+    /// least 60s. Observability only — chain order and the bandit keep
+    /// owning selection; health annotates `explain`.
+    last_success: std::collections::BTreeMap<(Role, String), std::time::Instant>,
 }
 
 /// Cooldown ladder for repeated provider failures (distilled from
@@ -73,6 +79,13 @@ pub fn cooldown_ms(consecutive_failures: u32) -> u64 {
         .saturating_mul(1u64 << consecutive_failures.min(20))
         .min(COOLDOWN_CAP_MS)
 }
+
+/// W7.3 (§F): how long a POSITIVE health observation is trusted before
+/// it goes stale and the candidate is re-probed.
+pub const HEALTH_TTL_MS: u64 = 600_000;
+/// W7.3 (§F): a transient failure quarantines the candidate for at least
+/// this long (the ladder owns anything longer).
+pub const TRANSIENT_QUARANTINE_MS: u64 = 60_000;
 
 /// Observed outcomes for one (role, model) under bandit routing.
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -107,6 +120,7 @@ impl Router {
             stats: Default::default(),
             rounds: Default::default(),
             fail_counts: Default::default(),
+            last_success: Default::default(),
         }
     }
 
@@ -196,7 +210,13 @@ impl Router {
         let n = self.fail_counts.entry(key.clone()).or_insert(0);
         *n = n.saturating_add(1);
         let ladder = cooldown_ms(*n);
-        let wait = retry_after_ms.unwrap_or(0).max(ladder);
+        // W7.3: even the FIRST failure carries the 60s transient
+        // quarantine floor — a failed candidate is not retried within a
+        // minute even if a future ladder change would say otherwise.
+        let wait = retry_after_ms
+            .unwrap_or(0)
+            .max(ladder)
+            .max(TRANSIENT_QUARANTINE_MS);
         self.unavailable_until.insert(
             key,
             std::time::Instant::now() + std::time::Duration::from_millis(wait),
@@ -209,6 +229,24 @@ impl Router {
     pub fn mark_success(&mut self, role: Role, model: &str) {
         self.fail_counts.remove(&(role, model.to_string()));
         self.unavailable_until.remove(&(role, model.to_string()));
+        self.last_success
+            .insert((role, model.to_string()), std::time::Instant::now());
+    }
+
+    /// W7.3 health state: `Some(true)` while the last success is inside
+    /// the 600s trust window, `Some(false)` while the candidate is in a
+    /// failure window, `None` when never probed (unknown → healthy).
+    pub fn health(&self, role: Role, model: &str) -> Option<bool> {
+        if !self.is_available(role, model) {
+            return Some(false);
+        }
+        match self.last_success.get(&(role, model.to_string())) {
+            Some(at) => {
+                let trusted = at.elapsed().as_millis() as u64 <= HEALTH_TTL_MS;
+                Some(trusted)
+            }
+            None => None,
+        }
     }
 
     /// Current consecutive-failure count (observability).
@@ -304,6 +342,21 @@ impl Router {
                 tried.join(", ")
             )
         }
+    }
+
+    /// W7.3: the health line for the /why surface — one clause per
+    /// probed chain entry (trusted / quarantined / stale / unknown).
+    pub fn health_line(&self, role: Role) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for e in self.chain(role) {
+            let note = match self.health(role, &e.model) {
+                Some(true) => "trusted",
+                Some(false) => "quarantined",
+                None => "unknown",
+            };
+            parts.push(format!("{}:{note}", e.model));
+        }
+        format!("health[{}] {}", role.as_str(), parts.join(" "))
     }
 }
 
@@ -495,5 +548,38 @@ mod tests {
         assert_eq!(s.pulls, 2);
         assert_eq!(s.successes, 1);
         assert!((s.total_latency_ms - 150.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn w73_health_trust_quarantine_and_unknown_states() {
+        let mut r = two_chain();
+        // never probed → unknown
+        assert_eq!(r.health(Role::Primary, "a"), None);
+        // success → trusted inside the 600s window
+        r.mark_success(Role::Primary, "a");
+        assert_eq!(r.health(Role::Primary, "a"), Some(true));
+        // failure → quarantined
+        r.mark_failure(Role::Primary, "a", None);
+        assert_eq!(r.health(Role::Primary, "a"), Some(false));
+        // a later success clears the quarantine
+        r.mark_success(Role::Primary, "a");
+        assert_eq!(r.health(Role::Primary, "a"), Some(true));
+        assert_eq!(
+            r.health_line(Role::Primary),
+            "health[primary] a:trusted b:unknown"
+        );
+    }
+
+    #[test]
+    fn w73_transient_quarantine_floor_holds_against_short_retry_after() {
+        let mut r = two_chain();
+        // a provider-declared Retry-After SHORTER than the 60s transient
+        // quarantine must not shorten the quarantine (floor wins)
+        r.mark_failure(Role::Primary, "a", Some(1_000));
+        assert!(!r.is_available(Role::Primary, "a"));
+        // the ladder never dips below the quarantine floor at any rung
+        for n in 0u32..6 {
+            assert!(cooldown_ms(n) >= TRANSIENT_QUARANTINE_MS);
+        }
     }
 }

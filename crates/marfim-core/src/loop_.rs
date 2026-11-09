@@ -756,6 +756,62 @@ impl Harness {
                             .write()
                             .await
                             .mark_failure(Role::Primary, &e.model, None);
+                        // W7.3 recovery rung (§F): a 400-SHAPE error names a
+                        // parameter the model rejects — retry THIS model
+                        // once with that parameter stripped before the
+                        // failover walk moves on. One rung per attempt;
+                        // ambiguous errors never classify.
+                        if let Some(stripped) = crate::providers::recovery::strip_after_shape_error(
+                            &req,
+                            &err.to_string(),
+                        ) {
+                            self.bus.publish(Event::Error {
+                                message: format!(
+                                    "provider `{}` rejected a parameter ({err}); \
+                                     retrying with it stripped",
+                                    e.model
+                                ),
+                                fatal: false,
+                            });
+                            let bus2 = bus.clone();
+                            let cancel2 = cancel.clone();
+                            let mut on_ev2 = |ev: StreamEvent| match ev {
+                                StreamEvent::Text(t) => bus2.publish(Event::StreamDelta {
+                                    kind: "text".into(),
+                                    text: t,
+                                }),
+                                StreamEvent::Thinking(t) => bus2.publish(Event::StreamDelta {
+                                    kind: "thinking".into(),
+                                    text: t,
+                                }),
+                            };
+                            match tokio::select! {
+                                r = e.provider.chat_step_stream(&stripped, &mut on_ev2) => r,
+                                _ = cancel2.cancelled() => {
+                                    return Ok(StopReason::Aborted("cancelled by user".into()));
+                                }
+                            } {
+                                Ok(s) => {
+                                    self.router.write().await.report_outcome(
+                                        Role::Primary,
+                                        &e.model,
+                                        true,
+                                        step_t0.elapsed().as_secs_f64() * 1000.0,
+                                    );
+                                    self.router
+                                        .write()
+                                        .await
+                                        .mark_success(Role::Primary, &e.model);
+                                    entry = Some(e);
+                                    step = Some(s);
+                                    break;
+                                }
+                                Err(_) => {
+                                    // the rung did not save the attempt —
+                                    // the failover walk proceeds below
+                                }
+                            }
+                        }
                         if attempt + 1 >= chain_len.max(1) {
                             return Err(err);
                         }
@@ -1435,7 +1491,7 @@ mod tests {
 
     use super::*;
     use crate::permissions::{Decision, Mode, PermissionEngine, Rule, ToolClass};
-    use crate::providers::{Block, MockProvider, Step, Stop};
+    use crate::providers::{Block, MockAction, MockProvider, Step, Stop};
     use std::sync::Mutex;
 
     struct ScriptedTools {
@@ -1531,13 +1587,17 @@ mod tests {
     }
 
     fn harness(script: Vec<Step>, tools: Arc<dyn ToolHost>) -> (Harness, EventBus) {
+        harness_actions(script.into_iter().map(MockAction::Step).collect(), tools)
+    }
+
+    fn harness_actions(actions: Vec<MockAction>, tools: Arc<dyn ToolHost>) -> (Harness, EventBus) {
         let bus = EventBus::new(4096);
         let mut router = Router::new(crate::providers::CostBook::default(), false);
         router.set_chain(
             Role::Primary,
             vec![crate::router::ModelEntry {
                 model: "mock-primary".into(),
-                provider: Arc::new(MockProvider::new(script)),
+                provider: Arc::new(MockProvider::from_actions(actions)),
                 priced: true,
             }],
         );
@@ -1633,6 +1693,49 @@ mod tests {
         ];
         let (h, _bus) = harness(script, tools);
         let _ = h.run_turn("x").await;
+    }
+
+    #[tokio::test]
+    async fn w73_shape_error_rung_strips_the_named_parameter_and_retries() {
+        // W7.3 (§F): a 400-SHAPE error gets ONE same-model retry with the
+        // offending parameter stripped — before the failover walk.
+        let tools = Arc::new(ScriptedTools::new());
+        let actions = vec![
+            MockProvider::error("400 temperature is unsupported for this model"),
+            MockAction::Step(MockProvider::text("recovered")),
+        ];
+        let (mut h, bus) = harness_actions(actions, tools.clone());
+        h.sampling.temperature = Some(0.7);
+        let mut sub = bus.subscribe();
+        let stop = h.run_turn("go").await;
+        assert_eq!(stop, StopReason::EndTurn);
+
+        // the rung event was published, naming the stripped retry
+        let mut saw_rung = false;
+        while let Ok(ev) = sub.try_recv() {
+            if let Event::Error { message, .. } = ev {
+                if message.contains("retrying with it stripped") {
+                    saw_rung = true;
+                }
+            }
+        }
+        assert!(saw_rung, "rung event missing on the bus");
+    }
+
+    #[tokio::test]
+    async fn w73_ambiguous_errors_never_trigger_a_rung() {
+        // A plain transport failure must NOT get a stripped retry — the
+        // failover walk owns it (one scripted error, no second step).
+        let tools = Arc::new(ScriptedTools::new());
+        let actions = vec![MockProvider::error("503 upstream unavailable")];
+        let (mut h, _bus) = harness_actions(actions, tools.clone());
+        h.sampling.temperature = Some(0.7);
+        let stop = h.run_turn("go").await;
+        // single-model chain: the error is terminal (fail-visible)
+        assert!(
+            matches!(stop, StopReason::Aborted(_)),
+            "unexpected stop {stop:?}"
+        );
     }
 
     #[tokio::test]

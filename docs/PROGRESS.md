@@ -5,9 +5,9 @@ Statuses: TODO / WIP / DONE / BLOCKED. Each row's commit is the commit that
 landed the work (the in-flight row says `this commit` and is back-filled by
 the next ledger update).
 
-**Live test count: 722** (`cargo test --workspace`, 0 failed — measured at
-the W7.1 commit; every committed change re-lands it green). Historical
-counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687/712) were
+**Live test count: 731** (`cargo test --workspace`, 0 failed — measured at
+the W7.3 commit; every committed change re-lands it green). Historical
+counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687/712/722) were
 true at their commits.
 
 Owner inputs required: see docs/OWNER-INPUT.md. A row is BLOCKED only when
@@ -52,7 +52,7 @@ an owner input is missing; the reason and the exact ask live in that file.
 | W5.6 | PARTIAL | this commit | the per-turn pure plan mechanics live via CodeMode plan-then-execute + the W5.5 per-turn budget; tool-declared approval tiers remain | remaining: tool-spec-declared approval tiers (codex/omp) |
 | W7.1 | DONE | this commit | `providers::capabilities` — committed TOML registry (capabilities.toml, include_str! + lazy parse, fail-closed row validation), longest-prefix-wins resolver; Anthropic wire: adaptive rows emit `{"type":"adaptive",budget_tokens}`, mandatory rows force the `high` budget when the user set nothing (unknown models byte-identical); Gemini wire: `thoughtSignature` parsed off functionCall parts, carried on ToolCall, replayed verbatim in build_body; 10 tests (6 registry + 2 anthropic goldens + gemini capture + round-trip); 722 green, clippy clean | thinking-replay fingerprint ledger stays QUEUED per its own spec (needs a live signature-400 to justify — §R); thinking is not yet stored in history, so nothing to filter today |
 | W7.2 | TODO | — | — | cache-TTL plumbing (retention, TTL-reject ladder, cachedContent, warming) |
-| W7.3 | TODO | — | — | aux failover ladder + health TTLs |
+| W7.3 | PARTIAL | this commit | `providers::recovery` — 400-shape classification (conservative: only vendor-documented field rejections classify; ambiguous errors never invent a retry) + parameter-strip rungs (temperature → reasoning → max_tokens), wired into the loop as ONE same-model retry before the failover walk (2 loop tests, rung event on the bus); router health TTLs — 600s success trust + 60s transient-quarantine floor under `mark_failure` (Retry-After shorter than the floor cannot shorten it), `health()`/`health_line()` for the /why surface (2 router tests); 731 green, clippy clean | credential refresh + key rotation rungs stay QUEUED for W7.4 (no credential pool to refresh against yet); strict-tool capability recovery is MOOT (Marfim never sends `strict: true`) |
 | W7.4 | TODO | — | — | OAuth2 PKCE + credential pools |
 | W7.5 | TODO | — | — | wires: Bedrock/Vertex/Mistral/custom-grammar (cassettes) |
 | W8 | TODO | — | — | context: cut-point rules, defrag counter, skill-prune markers, shake, snapcompact (opt-in), promotion, async compaction, ordered strategies, snapshot-once |

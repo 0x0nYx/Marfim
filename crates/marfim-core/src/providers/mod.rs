@@ -18,6 +18,7 @@ pub mod capabilities;
 pub mod effort;
 pub mod gemini;
 pub mod openai;
+pub mod recovery;
 pub mod responses;
 pub mod validate;
 

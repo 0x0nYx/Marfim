@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0 — W7.3: aux failover rungs + health TTLs (2026-11-09)
+
+- `providers::recovery` (§F, Hermes auxiliary_client): a 400-SHAPE error
+  classifies to the offending parameter — only exact, vendor-documented
+  rejections classify; anything ambiguous NEVER invents a retry — and the
+  loop retries the SAME model once with that parameter stripped
+  (temperature → reasoning → max_tokens) before the failover walk moves
+  on. The rung publishes a bus event naming the stripped retry.
+- Router health TTLs (§F, Hermes auxiliary_health): a success is TRUSTED
+  for 600s then goes stale; every failure carries a 60s transient
+  quarantine floor (a short provider Retry-After cannot shorten it; the
+  ladder still escalates beyond). `health()` / `health_line()` surface
+  trusted/quarantined/unknown per chain entry for the /why surface.
+- Credential-refresh + key-rotation rungs stay QUEUED for W7.4 (no
+  credential pool to refresh against yet); strict-tool capability
+  recovery is MOOT (Marfim never sends `strict: true`).
+- 731 tests green (was 722).
+
 ## 1.0.0 — W7.1: model capability registry, adaptive thinking, thought signatures (2026-11-09)
 
 - `providers::capabilities`: the per-model compat registry is COMMITTED
