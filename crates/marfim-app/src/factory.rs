@@ -346,6 +346,8 @@ pub async fn build_session(
     // (fail-closed: a demanded proxy that cannot bind refuses the start),
     // then injected into every sandboxed child's env as HTTP(S)_PROXY.
     let mut sandbox = sandbox;
+    // W9.4 secret scoping: the config-named secrets never reach a child.
+    sandbox.secret_scope = settings.secret_scope.clone();
     if settings.network_proxy {
         let allow = marfim_core::netproxy::Allowlist::from_entries(&settings.network_allow)
             .unwrap_or_else(|e| {
@@ -390,7 +392,8 @@ pub async fn build_session(
         perm.with_privacy(Some(marfim_core::privacy::PrivacyGuard {
             email: settings.account_email.clone(),
         }))
-        .with_deny_instead_of_prompting(settings.deny_instead_of_prompting),
+        .with_deny_instead_of_prompting(settings.deny_instead_of_prompting)
+        .with_observe(settings.observe),
     );
 
     // D16: real subagent host — Task/TaskOutput spawn nested agent loops

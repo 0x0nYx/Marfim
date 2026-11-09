@@ -37,8 +37,10 @@ pub mod sessionsearch;
 pub mod sessiontree;
 pub mod shellparse;
 pub mod skills;
+pub mod smart_approval;
 pub mod trajectory;
 pub mod trust;
+pub mod urlpolicy;
 pub mod usage;
 
 /// Single version source: every user agent (UA header, CLI `--version`,

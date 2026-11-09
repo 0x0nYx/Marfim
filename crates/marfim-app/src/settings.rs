@@ -656,6 +656,10 @@ pub struct EffectiveSettings {
     pub compaction_strategies: Vec<marfim_core::compact::Strategy>,
     /// W9.1: the loaded exec policy (None = table absent).
     pub exec_policy: Option<marfim_core::execpolicy::ExecPolicy>,
+    /// W9.4 observe mode.
+    pub observe: bool,
+    /// W9.4 secret scoping: env names stripped from every child.
+    pub secret_scope: Vec<String>,
     /// W9.2: networkProxy + networkAllow from `[sandbox]`.
     pub network_proxy: bool,
     pub network_allow: Vec<String>,
@@ -791,6 +795,21 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         }
     }
 
+    // W9.4 secret scoping: additional env var names stripped from every
+    // sandboxed child.
+    let mut secret_scope: Vec<String> = Vec::new();
+    if let Some(v) = config.get("bash") {
+        if let Some(list) = v.get("secretScope").and_then(|x| x.as_array()) {
+            for e in list {
+                secret_scope.push(
+                    e.as_str()
+                        .map(String::from)
+                        .ok_or_else(|| "bash.secretScope must hold strings".to_string())?,
+                );
+            }
+        }
+    }
+
     // --- cache (config section; W7.2) — unknown keys fail closed via
     // validate_consumed_sections, type errors fail closed here.
     let cache = marfim_core::providers::cache::CacheSettings::from_config(config)?;
@@ -800,6 +819,8 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
     let mut rules: Vec<Rule> = Vec::new();
     let mut working_globs = cli.glob.clone();
     let mut deny_instead_of_prompting = false;
+    // W9.4 observe mode: mode-asks become annotated allows (analytics).
+    let mut observe = false;
     if let Some(perms) = config.get("permissions") {
         if let Some(m) = perms.get("mode").and_then(|v| v.as_str()) {
             permission_mode = m;
@@ -840,6 +861,10 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         }
         deny_instead_of_prompting = perms
             .get("denyInsteadOfPrompting")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        observe = perms
+            .get("observe")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
     }
@@ -1064,6 +1089,8 @@ pub fn effective(cli: &Cli, config: &Config, cwd: PathBuf) -> Result<EffectiveSe
         allow_custom_tools,
         compaction_strategies,
         exec_policy,
+        observe,
+        secret_scope,
         network_proxy,
         network_allow,
     })

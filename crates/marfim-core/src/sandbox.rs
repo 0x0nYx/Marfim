@@ -71,6 +71,10 @@ pub struct Sandbox {
     /// W9.2: env injected into EVERY sandboxed child after sanitization
     /// (the network proxy endpoints when the enforcement proxy is on).
     pub extra_env: Vec<(String, String)>,
+    /// W9.4 secret scoping: additional env var NAMES stripped from every
+    /// child (on top of the static allowlist sanitizer) — case-sensitive,
+    /// exact names, config-controlled.
+    pub secret_scope: Vec<String>,
 }
 
 impl Default for Sandbox {
@@ -84,6 +88,7 @@ impl Default for Sandbox {
             exec_helper: p.exec_helper().ok(),
             level: SandboxLevel::Enforced,
             extra_env: vec![],
+            secret_scope: vec![],
         }
     }
 }
@@ -191,6 +196,17 @@ impl Sandbox {
     fn sanitize_and_group(&self, cmd: &mut Command) {
         cmd.env_clear();
         for (k, v) in crate::permissions::sanitize_env(std::env::vars().collect::<Vec<_>>()) {
+            cmd.env(k, v);
+        }
+        // W9.4 secret scoping: the config-named secrets never reach a
+        // child env, even when a future sanitizer allowlist change would
+        // carry them.
+        let vars: Vec<(String, String)> =
+            crate::permissions::sanitize_env(std::env::vars().collect::<Vec<_>>())
+                .into_iter()
+                .filter(|(k, _)| !self.secret_scope.contains(k))
+                .collect();
+        for (k, v) in vars {
             cmd.env(k, v);
         }
         // W9.2: policy-injected env (proxy endpoints) after sanitization —

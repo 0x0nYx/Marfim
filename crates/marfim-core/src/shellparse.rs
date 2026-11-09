@@ -427,6 +427,12 @@ pub fn hardline_matches(
         return Some("fork bomb");
     }
 
+    // W9.4: the WINDOWS tier (Hermes approval_detection tiers) — checked
+    // on every segment, case-insensitive (PowerShell/cmd semantics).
+    if let Some(reason) = hardline_windows_matches(segments, raw_cmd) {
+        return Some(reason);
+    }
+
     // redirect into a raw device (the target survives in the segment
     // argv; SAFE_DEV_TARGETS are the sanctioned exceptions)
     for seg in segments {
@@ -449,8 +455,124 @@ pub fn hardline_matches(
 // < Sequenced < Heredoc < NestedExec < Hardline — exactly the risk
 // escalation order.
 
+// ---------------------------------------------------------------------
+// W9.4: the Windows tier (distilled: Hermes approval_detection.py
+// windows tier). Case-insensitive: PowerShell/cmd are.
+
+/// Windows commands that are irreversible by construction.
+const HARDLINE_WINDOWS_CMDS: &[&str] = &["format", "diskpart", "bcdedit", "cipher"];
+
+/// Protected Windows roots whose wholesale deletion is always denied.
+const HARDLINE_WINDOWS_ROOTS: &[&str] = &[
+    "c:\\",
+    "c:\\windows",
+    "c:\\program files",
+    "c:\\users",
+    "%systemroot%",
+    "$env:systemroot",
+    "c:\\bootmgr",
+];
+
+/// Root comparison that survives the tokenizer's backslash collapsing:
+/// strip backslashes from BOTH the token and the root before matching.
+fn win_root_hit(token: &str) -> bool {
+    let l = token.to_lowercase();
+    let ln = l.replace('\\', "");
+    HARDLINE_WINDOWS_ROOTS
+        .iter()
+        .any(|r| l.starts_with(r) || ln.starts_with(&r.replace('\\', "")))
+}
+
+fn hardline_windows_matches(segments: &[Vec<String>], raw_cmd: &str) -> Option<&'static str> {
+    let raw_lower = raw_cmd.to_lowercase();
+    for seg in segments {
+        let Some(argv0) = seg.first().map(|s| s.as_str()) else {
+            continue;
+        };
+        let base = argv0.rsplit('\\').next().unwrap_or(argv0).to_lowercase();
+        let base = base.strip_suffix(".exe").unwrap_or(&base);
+        if HARDLINE_WINDOWS_CMDS.contains(&base) {
+            return Some("windows destructive utility (format/diskpart/bcdedit/cipher)");
+        }
+        if base == "vssadmin" && seg.iter().any(|a| a.to_lowercase().contains("delete")) {
+            return Some("vssadmin shadow-copy deletion");
+        }
+        if base == "remove-item" || base == "ri" {
+            let recursive = seg.iter().any(|a| {
+                a.to_lowercase().starts_with("-recurse") || a.to_lowercase().starts_with("-r")
+            });
+            let force = seg.iter().any(|a| a.to_lowercase().starts_with("-force"));
+            if recursive && force && seg.iter().any(|a| win_root_hit(a)) {
+                return Some("Remove-Item -Recurse -Force on a protected Windows root");
+            }
+        }
+        if (base == "rd" || base == "rmdir" || base == "del" || base == "erase")
+            && seg.iter().any(|a| {
+                let l = a.to_lowercase();
+                l == "/s" || l == "/q" || l == "-recurse"
+            })
+            && seg.iter().any(|a| win_root_hit(a))
+        {
+            return Some("recursive delete of a protected Windows root");
+        }
+        // Registry: HKLM writes are system-level (HKCU is the user's own).
+        if base == "reg" {
+            let target = seg
+                .iter()
+                .skip(1)
+                .find(|a| a.to_lowercase().starts_with("hklm"))
+                .map(|a| a.to_lowercase());
+            if let Some(t) = target {
+                if t.starts_with("hklm\\system") || t.starts_with("hklm\\sam") {
+                    return Some("registry write to HKLM\\SYSTEM/HKLM\\SAM");
+                }
+            }
+        }
+    }
+    // The classic `reg add HKLM\... /v ... /f` written as one raw line
+    // sometimes tokenizes oddly; the raw scan is the backstop.
+    if raw_lower.contains("reg add hklm\\system") || raw_lower.contains("reg add hklm\\sam") {
+        return Some("registry write to HKLM\\SYSTEM/HKLM\\SAM");
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_tier_denies_destructive_utilities() {
+        for cmd in [
+            "format C:",
+            "FORMAT /q C:",
+            "diskpart",
+            "bcdedit /set testsigning on",
+            "cipher /w:C:\\",
+            "vssadmin delete shadows /all",
+            "Remove-Item -Recurse -Force C:\\Windows\\Temp\\..",
+        ] {
+            let a = analyze(cmd);
+            assert_eq!(a.risk, ShellRisk::Hardline, "{cmd} must be hardline");
+        }
+        // HKLM SYSTEM/SAM registry writes deny; HKCU does not.
+        assert_eq!(
+            analyze("reg add HKLM\\SYSTEM\\CurrentControlSet /v x /t REG_DWORD /d 1 /f").risk,
+            ShellRisk::Hardline
+        );
+        assert_eq!(
+            analyze("reg add HKLM\\SAM /v x /f").risk,
+            ShellRisk::Hardline
+        );
+        assert_ne!(
+            analyze("reg add HKCU\\Software\\marfim /v x /f").risk,
+            ShellRisk::Hardline
+        );
+        // benign windows commands stay non-hardline
+        assert_ne!(
+            analyze("Get-ChildItem C:\\Windows").risk,
+            ShellRisk::Hardline
+        );
+    }
+
     use super::*;
 
     fn seg0(cmd: &str) -> Vec<String> {

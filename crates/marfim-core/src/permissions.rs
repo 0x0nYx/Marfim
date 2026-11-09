@@ -115,6 +115,10 @@ pub struct PermissionEngine {
     /// the turn continues. Ask verdicts from rules AND mode defaults both
     /// convert.
     pub deny_instead_of_prompting: bool,
+    /// W9.4 observe mode: a MODE-based ask becomes an ALLOW annotated
+    /// "[observe]" — analytics without a human. Floors, denies, privacy
+    /// and rule-denies stay absolute (observe never weakens a floor).
+    pub observe: bool,
     /// W1.4 `SandboxLevel::AppUid`: no kernel containment available, so
     /// every mutation-tier verdict (Edit/Execute/Network) that would
     /// ALLOW is forced to Ask. Deny floors/rules stay absolute.
@@ -146,6 +150,7 @@ impl PermissionEngine {
                 rules,
                 privacy: None,
                 deny_instead_of_prompting: false,
+                observe: false,
                 force_ask_mutations: false,
                 queue_tx: tx,
             },
@@ -164,6 +169,12 @@ impl PermissionEngine {
     /// W1.4: app-uid attestation — mutations ask, always.
     pub fn with_force_ask_mutations(mut self, on: bool) -> Self {
         self.force_ask_mutations = on;
+        self
+    }
+
+    /// W9.4: arm observe mode (record-only analytics on mode-asks).
+    pub fn with_observe(mut self, on: bool) -> Self {
+        self.observe = on;
         self
     }
 
@@ -393,6 +404,15 @@ impl PermissionEngine {
                 if let Some(v) = self.privacy_deny(tool, input) {
                     return v;
                 }
+                if self.observe {
+                    // W9.4: record-only analytics — the mutation runs, the
+                    // provenance note records what WOULD have waited.
+                    return Verdict {
+                        decision: Decision::Allow,
+                        reason: "observe mode: would have asked".into(),
+                        provenance: Some("[observe] would-have-asked".to_string()),
+                    };
+                }
                 if self.deny_instead_of_prompting {
                     return Verdict::new(
                         Decision::Deny,
@@ -482,6 +502,30 @@ pub type SharedEngine = Arc<PermissionEngine>;
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn observe_mode_converts_mode_asks_but_never_floors() {
+        // A mode-ask becomes an observe-allow with the provenance note.
+        let (e, _rx) = PermissionEngine::new(Mode::Default, vec![]);
+        let e = e.with_observe(true);
+        let v = e
+            .check("Write", ToolClass::Edit, None, None, "write file")
+            .await;
+        assert_eq!(v.decision, Decision::Allow);
+        assert_eq!(v.provenance.as_deref(), Some("[observe] would-have-asked"));
+
+        // A hardline deny STAYS a deny under observe (floors absolute).
+        let v2 = e
+            .check(
+                "Bash",
+                ToolClass::Execute,
+                Some(&["rm".to_string(), "-rf".to_string(), "/".to_string()]),
+                Some(crate::shellparse::ShellRisk::Hardline),
+                "rm -rf /",
+            )
+            .await;
+        assert_eq!(v2.decision, Decision::Deny);
+    }
+
     use super::*;
 
     fn engine(
