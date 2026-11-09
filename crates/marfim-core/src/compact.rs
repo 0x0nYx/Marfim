@@ -277,6 +277,13 @@ pub const DEFAULT_TRIGGER_PCT: f64 = 0.50;
 pub const MIN_TRIGGER_TOKENS: u64 = 64_000;
 /// Windows below this size get the raise-only 75% floor (Hermes
 /// `_SMALL_CTX_WINDOW_LIMIT = 512_000`).
+/// W8 (§C, Hermes micro_compaction): a defrag sweep must reclaim at
+/// least this many tokens to count as a success.
+pub const DEFRAG_MIN_TOKENS: u64 = 2_000;
+/// W8 (§C): after this many consecutive insufficient sweeps the micro
+/// stage is skipped until the next full summarization resets the ledger.
+pub const DEFRAG_MAX_FAILS: u32 = 3;
+
 pub const SMALL_WINDOW_LIMIT: u64 = 512_000;
 /// Cap ratio that binds when the 64k floor would overreach (Hermes
 /// `_MIN_CTX_TRIGGER_RATIO = 0.85`).

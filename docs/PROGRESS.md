@@ -5,9 +5,9 @@ Statuses: TODO / WIP / DONE / BLOCKED. Each row's commit is the commit that
 landed the work (the in-flight row says `this commit` and is back-filled by
 the next ledger update).
 
-**Live test count: 731** (`cargo test --workspace`, 0 failed — measured at
-the W7.3 commit; every committed change re-lands it green). Historical
-counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687/712/722) were
+**Live test count: 733** (`cargo test --workspace`, 0 failed — measured at
+the W8 commit; every committed change re-lands it green). Historical
+counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687/712/722/731) were
 true at their commits.
 
 Owner inputs required: see docs/OWNER-INPUT.md. A row is BLOCKED only when
@@ -55,7 +55,7 @@ an owner input is missing; the reason and the exact ask live in that file.
 | W7.3 | PARTIAL | this commit | `providers::recovery` — 400-shape classification (conservative: only vendor-documented field rejections classify; ambiguous errors never invent a retry) + parameter-strip rungs (temperature → reasoning → max_tokens), wired into the loop as ONE same-model retry before the failover walk (2 loop tests, rung event on the bus); router health TTLs — 600s success trust + 60s transient-quarantine floor under `mark_failure` (Retry-After shorter than the floor cannot shorten it), `health()`/`health_line()` for the /why surface (2 router tests); 731 green, clippy clean | credential refresh + key rotation rungs stay QUEUED for W7.4 (no credential pool to refresh against yet); strict-tool capability recovery is MOOT (Marfim never sends `strict: true`) |
 | W7.4 | TODO | — | — | OAuth2 PKCE + credential pools |
 | W7.5 | TODO | — | — | wires: Bedrock/Vertex/Mistral/custom-grammar (cassettes) |
-| W8 | TODO | — | — | context: cut-point rules, defrag counter, skill-prune markers, shake, snapcompact (opt-in), promotion, async compaction, ordered strategies, snapshot-once |
+| W8 | PARTIAL | this commit | defrag ledger (§C Hermes): a micro sweep reclaiming <2000 tokens is a failure; at 3 consecutive failures the micro stage is skipped for the session (only a ≥2000 sweep resets — the honest mapping onto a two-stage loop where every micro failure is immediately followed by summarization); skip event on the bus; context promotion (§C OMP): `catalog::context_of` + `router::promote_overflow` — on real overflow past the 85% ceiling a chain sibling with a strictly larger catalog window takes the next step INSTEAD of compacting (lossless beats lossy), override rides the turn-scoped actuation channel; 2 tests + snapshot goldens green; 733 total | cut-point rule MOOT (stage 2 replaces history wholesale — no prefix cut exists); skill-prune markers QUEUED (needs skills in the prompt, §S); shake/snapcompact QUEUED (snapcompact REJECTED in §C); async compaction + ordered strategies remain TODO |
 | W9.1 | TODO | — | — | Starlark execpolicy (feature starlark) + amendment rules |
 | W9.2 | TODO | — | — | network enforcement proxy |
 | W9.3 | TODO | — | — | inspector chain + LLM judge + guardian (7.3 budget) |

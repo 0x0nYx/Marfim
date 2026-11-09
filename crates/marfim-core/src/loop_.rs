@@ -206,6 +206,12 @@ pub struct Harness {
     /// W5.5 per-turn tool budget: total tool calls in the current turn
     /// (reset at TurnStarted; the cap refuses further dispatch).
     turn_tool_calls: AtomicU64,
+    /// W8 defrag ledger (§C, Hermes micro_compaction): consecutive
+    /// micro-compaction sweeps that failed to reclaim the 2000-token
+    /// minimum. At 3 the micro stage is skipped entirely (the history is
+    /// already compressed — churning it wastes steps) until a full
+    /// summarization resets the counter.
+    defrag_fails: std::sync::atomic::AtomicU32,
 }
 
 /// Turn-scoped faculty overrides. Every field is optional and validated:
@@ -346,6 +352,7 @@ impl Harness {
             turn_counter: AtomicU64::new(0),
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
+            defrag_fails: std::sync::atomic::AtomicU32::new(0),
             denied_tools: AtomicU64::new(0),
             verify_armed: AtomicBool::new(false),
             stop_on_tool_error,
@@ -1313,33 +1320,93 @@ impl Harness {
         if last_step_input_tokens <= threshold {
             return Ok(false);
         }
+        // W8 context promotion (§C, OMP trigger order): near the honest
+        // ceiling, a chain sibling with a LARGER known context window takes
+        // the next step INSTEAD of compacting — promotion is lossless,
+        // summarization is not. The promotion band is the trigger math's
+        // cap ratio; when no larger sibling exists (or the catalog knows
+        // no windows) the normal compaction stages proceed.
+        if let Some(w) = self.context_window {
+            let ceiling = ((w.saturating_sub(self.sampling.max_completion_tokens.unwrap_or(8192))
+                as f64)
+                * crate::compact::FLOOR_CAP_RATIO) as u64;
+            if last_step_input_tokens > ceiling {
+                let router = self.router.read().await;
+                let promote = router.promote_overflow(
+                    Role::Primary,
+                    last_step_input_tokens,
+                    self.context_window,
+                );
+                drop(router);
+                if let Some(bigger) = promote {
+                    self.bus.publish(Event::Error {
+                        message: format!(
+                            "context overflow: promoting to `{bigger}` instead of compacting"
+                        ),
+                        fatal: false,
+                    });
+                    self.turn_overrides
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .model = Some(bigger);
+                    return Ok(false);
+                }
+            }
+        }
         // Stage 1: micro-compaction — elide stale tool results (cheap,
         // pure, no provider call). Protected tail keeps the live exchange
         // intact — §C2: with a known window the tail is sized in TOKENS
         // (2.5% clamped [10k, 25k]) on top of the message-count floor;
         // errors are never elided.
+        //
+        // W8 defrag ledger (§C, Hermes micro_compaction): a sweep that
+        // reclaims less than DEFRAG_MIN_TOKENS is a failure; at 3
+        // consecutive failures the micro stage is skipped entirely until
+        // a full summarization resets the counter.
         {
-            let mut history = self.history.write().await;
-            let removed = crate::compact::micro_compact_budget(
-                &mut history,
-                threshold,
-                6,
-                Some(crate::compact::tail_budget_tokens(self.context_window)),
-            );
-            if removed > 0 {
-                let after =
-                    (history.iter().map(|m| m.content.len() as u64).sum::<u64>()).div_ceil(4);
-                self.bus.publish(Event::Compaction {
-                    before_tokens: last_step_input_tokens,
-                    after_tokens: after,
-                });
-                self.journal_rec(&JournalRecord::Compaction {
-                    summary: format!(
-                        "micro-compaction: elided {removed} bytes of stale tool results"
-                    ),
-                })?;
-                if after <= threshold {
-                    return Ok(true); // micro stage was enough
+            let fails = self.defrag_fails.load(std::sync::atomic::Ordering::SeqCst);
+            if fails < crate::compact::DEFRAG_MAX_FAILS {
+                let mut history = self.history.write().await;
+                let removed = crate::compact::micro_compact_budget(
+                    &mut history,
+                    threshold,
+                    6,
+                    Some(crate::compact::tail_budget_tokens(self.context_window)),
+                );
+                let removed_tokens = removed.div_ceil(4);
+                if removed_tokens >= crate::compact::DEFRAG_MIN_TOKENS {
+                    self.defrag_fails
+                        .store(0, std::sync::atomic::Ordering::SeqCst);
+                    let after =
+                        (history.iter().map(|m| m.content.len() as u64).sum::<u64>()).div_ceil(4);
+                    self.bus.publish(Event::Compaction {
+                        before_tokens: last_step_input_tokens,
+                        after_tokens: after,
+                    });
+                    self.journal_rec(&JournalRecord::Compaction {
+                        summary: format!(
+                            "micro-compaction: elided {removed} bytes of stale tool results"
+                        ),
+                    })?;
+                    if after <= threshold {
+                        return Ok(true); // micro stage was enough
+                    }
+                } else {
+                    // insufficient sweep (or nothing eligible): count it
+                    let n = self
+                        .defrag_fails
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                        + 1;
+                    if n >= crate::compact::DEFRAG_MAX_FAILS {
+                        self.bus.publish(Event::Error {
+                            message: format!(
+                                "micro-compaction skipped: {n} sweeps reclaimed \
+                                 <{} tokens each — summarizing instead",
+                                crate::compact::DEFRAG_MIN_TOKENS
+                            ),
+                            fatal: false,
+                        });
+                    }
                 }
             }
         }
@@ -1378,6 +1445,12 @@ impl Harness {
         // D4: summary re-injected as the FIRST message
         *self.history.write().await =
             vec![ChatMessage::user(format!("[compacted context]\n{summary}"))];
+        // W8 defrag ledger: a full summarization does NOT reset the
+        // failure count — in a two-stage loop every micro failure is
+        // immediately followed by summarization, so the only honest
+        // reset is a sweep that actually reclaims ≥ DEFRAG_MIN_TOKENS.
+        // Until then the micro stage stays skipped (the summarizer owns
+        // reduction; sweeps on an already-compressed state are waste).
         Ok(true)
     }
 
@@ -1637,6 +1710,7 @@ mod tests {
             turn_counter: AtomicU64::new(0),
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
+            defrag_fails: std::sync::atomic::AtomicU32::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -1739,6 +1813,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn w8_defrag_ledger_skips_micro_after_three_insufficient_sweeps() {
+        // W8 (§C Hermes micro_compaction): a sweep reclaiming <2000
+        // tokens is a failure; at 3 consecutive failures the micro stage
+        // is skipped until a full summarization resets the ledger.
+        let tools = Arc::new(ScriptedTools::new());
+        let (mut h, bus) = harness(vec![], tools.clone());
+        h.compact_threshold_tokens = 1;
+        {
+            let mut hist = h.history.write().await;
+            // 400 bytes ≈ 100 tokens reclaimed — below the 2000 floor
+            hist.push(ChatMessage::tool_result("t1", "x".repeat(400), false));
+            hist.push(ChatMessage::user("hi"));
+        }
+        let mut sub = bus.subscribe();
+        let _ = h.maybe_compact(10).await.unwrap();
+        let _ = h.maybe_compact(10).await.unwrap();
+        let _ = h.maybe_compact(10).await.unwrap();
+        let mut saw_skip = false;
+        while let Ok(ev) = sub.try_recv() {
+            if let Event::Error { message, .. } = ev {
+                if message.contains("micro-compaction skipped") {
+                    saw_skip = true;
+                }
+            }
+        }
+        assert!(saw_skip, "3-failure skip event missing on the bus");
+        assert_eq!(
+            h.defrag_fails.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "three consecutive insufficient sweeps"
+        );
+
+        // the next trigger skips the micro stage entirely (no sweep) and
+        // goes straight to stage 2 — the summarizer owns reduction now
+        let _ = h.maybe_compact(10).await.unwrap();
+        assert_eq!(
+            h.defrag_fails.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "skip state persists until a sweep succeeds"
+        );
+        let hist = h.history.read().await;
+        assert!(
+            hist[0].content.contains("[compacted context]"),
+            "stage 2 summarized the history: {:?}",
+            hist[0].content
+        );
+    }
+
+    #[tokio::test]
     async fn inv03_truncated_toolcall_is_never_executed() {
         let tools = Arc::new(ScriptedTools::new());
         let bad = Step {
@@ -1829,6 +1952,7 @@ mod tests {
             turn_counter: AtomicU64::new(0),
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
+            defrag_fails: std::sync::atomic::AtomicU32::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -2340,6 +2464,7 @@ mod tests {
             turn_counter: AtomicU64::new(0),
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
+            defrag_fails: std::sync::atomic::AtomicU32::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
@@ -2437,6 +2562,7 @@ mod tests {
             turn_counter: AtomicU64::new(0),
             last_call: std::sync::Mutex::new((None, 0)),
             turn_tool_calls: AtomicU64::new(0),
+            defrag_fails: std::sync::atomic::AtomicU32::new(0),
             denied_tools: AtomicU64::new(0),
             faculties: Vec::new(),
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),

@@ -89,6 +89,22 @@ pub fn model_count(provider: &str) -> usize {
     catalog().get(provider).map(|m| m.len()).unwrap_or(0)
 }
 
+/// W8 context promotion: the CATALOG context window for one model id,
+/// scanned across every committed provider (deterministic: the snapshot
+/// is a committed BTreeMap; an id present under several providers —
+/// e.g. google vs google-vertex — resolves to the FIRST provider in
+/// key order, which is stable within one committed snapshot).
+pub fn context_of(model_id: &str) -> Option<u64> {
+    for p in providers() {
+        if let Some(ms) = catalog().get(&p) {
+            if let Some(m) = ms.get(model_id) {
+                return m.context_tokens;
+            }
+        }
+    }
+    None
+}
+
 pub fn total_model_count() -> usize {
     catalog().values().map(|m| m.len()).sum()
 }

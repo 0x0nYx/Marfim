@@ -344,6 +344,38 @@ impl Router {
         }
     }
 
+    /// W8 context promotion (§C, OMP trigger order): when the current
+    /// primary overflows, find a chain sibling whose CATALOG context
+    /// window is strictly larger than the CURRENT model's window AND big
+    /// enough for the live token load. Deterministic: chain order, first
+    /// fit among the qualifying (ties resolve to the earliest). `None`
+    /// when the catalog knows no such sibling — the caller compacts.
+    pub fn promote_overflow(
+        &self,
+        role: Role,
+        live_tokens: u64,
+        current_window: Option<u64>,
+    ) -> Option<String> {
+        // A REAL overflow of the current model's capacity — anything less
+        // and the current model keeps the step (promotion is for
+        // overflow, not preference).
+        let cur = current_window?;
+        if live_tokens <= cur {
+            return None;
+        }
+        let chain = self.chain(role);
+        for e in &chain {
+            let Some(ctx) = crate::catalog::context_of(&e.model) else {
+                continue;
+            };
+            if ctx <= live_tokens || ctx <= cur {
+                continue;
+            }
+            return Some(e.model.clone());
+        }
+        None
+    }
+
     /// W7.3: the health line for the /why surface — one clause per
     /// probed chain entry (trusted / quarantined / stale / unknown).
     pub fn health_line(&self, role: Role) -> String {
@@ -581,5 +613,42 @@ mod tests {
         for n in 0u32..6 {
             assert!(cooldown_ms(n) >= TRANSIENT_QUARANTINE_MS);
         }
+    }
+
+    #[test]
+    fn w8_promote_overflow_picks_the_largest_known_sibling() {
+        let mut r = Router::new(CostBook::default(), false);
+        // real catalog ids: haiku 200k? pro larger — pin relative order
+        // from the committed snapshot itself (honest, not hand-waved)
+        let haiku = crate::catalog::context_of("claude-haiku-4-5");
+        let pro = crate::catalog::context_of("claude-opus-4-6");
+        if let (Some(h), Some(p)) = (haiku, pro) {
+            assert!(p > h, "snapshot ordering changed: haiku {h}, opus {p}");
+            r.set_chain(
+                Role::Primary,
+                vec![
+                    entry("claude-haiku-4-5", true),
+                    entry("claude-opus-4-6", true),
+                ],
+            );
+            // live load above haiku's window → promote to the larger one
+            assert_eq!(
+                r.promote_overflow(Role::Primary, h + 1, Some(h)).as_deref(),
+                Some("claude-opus-4-6")
+            );
+            // live load the CURRENT window still holds → no promotion
+            assert_eq!(r.promote_overflow(Role::Primary, 1_000, Some(h)), None);
+            // a candidate must also hold the live load itself
+            assert_eq!(
+                r.promote_overflow(Role::Primary, u64::MAX / 2, Some(h)),
+                None
+            );
+        }
+        // models the catalog does not know → no promotion, compact instead
+        r.set_chain(
+            Role::Primary,
+            vec![entry("mock-a", true), entry("mock-b", true)],
+        );
+        assert_eq!(r.promote_overflow(Role::Primary, u64::MAX / 2, None), None);
     }
 }

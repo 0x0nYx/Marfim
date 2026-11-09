@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.0 — W8 (partial): defrag ledger + context promotion (2026-11-09)
+
+- Defrag ledger (§C, Hermes micro_compaction): a micro-compaction sweep
+  that reclaims <2000 tokens is a FAILURE; at 3 consecutive failures the
+  micro stage is skipped for the rest of the session and the skip is
+  published on the bus. In a two-stage loop every micro failure is
+  immediately followed by full summarization, so the only honest reset is
+  a sweep that actually reclaims ≥2000 tokens — not "any summarization".
+- Context promotion (§C, OMP trigger order): past the trigger math's 85%
+  ceiling with a REAL overflow of the current model's window, a chain
+  sibling with a strictly larger catalog context window takes the next
+  step instead of compacting (promotion is lossless, summarization is
+  not). `catalog::context_of` resolves windows from the committed
+  snapshot; the override rides the existing turn-scoped actuation
+  channel and is validated like any faculty model_select.
+- Cut-point rule noted MOOT for Marfim's architecture (stage 2 replaces
+  the history wholesale — no prefix cut exists); skill-prune markers,
+  shake, async compaction and ordered strategies remain on the wave.
+- 733 tests green (was 731).
+
 ## 1.0.0 — W7.3: aux failover rungs + health TTLs (2026-11-09)
 
 - `providers::recovery` (§F, Hermes auxiliary_client): a 400-SHAPE error
