@@ -29,11 +29,13 @@ fn transcript() -> Vec<ChatMessage> {
                     id: "t1".into(),
                     name: "Read".into(),
                     arguments_json: r#"{"path":"a.txt"}"#.into(),
+                    thought_signature: None,
                 },
                 marfim_core::providers::ToolCall {
                     id: "t2".into(),
                     name: "Read".into(),
                     arguments_json: r#"{"path":"b.txt"}"#.into(),
+                    thought_signature: None,
                 },
             ],
             tool_call_id: None,

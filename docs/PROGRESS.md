@@ -5,9 +5,9 @@ Statuses: TODO / WIP / DONE / BLOCKED. Each row's commit is the commit that
 landed the work (the in-flight row says `this commit` and is back-filled by
 the next ledger update).
 
-**Live test count: 712** (`cargo test --workspace`, 0 failed — measured at
-the W6+W12 batch commit; every committed change re-lands it green). Historical
-counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687) were
+**Live test count: 722** (`cargo test --workspace`, 0 failed — measured at
+the W7.1 commit; every committed change re-lands it green). Historical
+counts in older CHANGELOG entries (475/491/578/603/627/631/636/642/656/665/687/712) were
 true at their commits.
 
 Owner inputs required: see docs/OWNER-INPUT.md. A row is BLOCKED only when
@@ -50,7 +50,7 @@ an owner input is missing; the reason and the exact ask live in that file.
 | W4.5 | BLOCKED | — | — | alpha gate needs: emulator run (CI), signing secrets (owner), live API key (owner) — see OWNER-INPUT.md; ships when W4.1–W4.4 land and CI runs |
 | W5.3 | TODO | — | — | tree-sitter frontends (feature treesitter) |
 | W5.6 | PARTIAL | this commit | the per-turn pure plan mechanics live via CodeMode plan-then-execute + the W5.5 per-turn budget; tool-declared approval tiers remain | remaining: tool-spec-declared approval tiers (codex/omp) |
-| W7.1 | TODO | — | — | model capability registry TOML + adaptive thinking + thought signatures |
+| W7.1 | DONE | this commit | `providers::capabilities` — committed TOML registry (capabilities.toml, include_str! + lazy parse, fail-closed row validation), longest-prefix-wins resolver; Anthropic wire: adaptive rows emit `{"type":"adaptive",budget_tokens}`, mandatory rows force the `high` budget when the user set nothing (unknown models byte-identical); Gemini wire: `thoughtSignature` parsed off functionCall parts, carried on ToolCall, replayed verbatim in build_body; 10 tests (6 registry + 2 anthropic goldens + gemini capture + round-trip); 722 green, clippy clean | thinking-replay fingerprint ledger stays QUEUED per its own spec (needs a live signature-400 to justify — §R); thinking is not yet stored in history, so nothing to filter today |
 | W7.2 | TODO | — | — | cache-TTL plumbing (retention, TTL-reject ladder, cachedContent, warming) |
 | W7.3 | TODO | — | — | aux failover ladder + health TTLs |
 | W7.4 | TODO | — | — | OAuth2 PKCE + credential pools |

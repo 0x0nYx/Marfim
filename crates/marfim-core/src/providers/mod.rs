@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod anthropic;
+pub mod capabilities;
 pub mod effort;
 pub mod gemini;
 pub mod openai;
@@ -21,6 +22,7 @@ pub mod responses;
 pub mod validate;
 
 pub use anthropic::Anthropic;
+pub use capabilities::{capability_for, ModelCaps, ThinkingMode};
 pub use effort::Effort;
 pub use gemini::Gemini;
 pub use openai::OpenAiCompat;
@@ -33,6 +35,10 @@ pub struct ToolCall {
     pub name: String,
     /// Raw JSON string of arguments as streamed (before parsing).
     pub arguments_json: String,
+    /// W7.1 (§R3): Gemini thought signatures ride functionCall parts and
+    /// MUST be replayed verbatim on later turns; `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 impl ToolCall {
@@ -344,6 +350,7 @@ impl MockProvider {
                 id: id.into(),
                 name: name.into(),
                 arguments_json: args.to_string(),
+                thought_signature: None,
             })],
             stop: Some(Stop::ToolUse),
             usage: Usage::default(),
@@ -501,18 +508,21 @@ mod tests {
             id: "a".into(),
             name: "T".into(),
             arguments_json: r#"{"x":1}"#.into(),
+            thought_signature: None,
         };
         assert!(ok.parse_args().is_ok());
         let empty = ToolCall {
             id: "b".into(),
             name: "T".into(),
             arguments_json: "  ".into(),
+            thought_signature: None,
         };
         assert_eq!(empty.parse_args().unwrap(), serde_json::json!({}));
         let bad = ToolCall {
             id: "c".into(),
             name: "T".into(),
             arguments_json: r#"{"x": "unclosed"#.into(),
+            thought_signature: None,
         };
         assert!(bad.parse_args().is_err());
     }

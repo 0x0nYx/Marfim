@@ -94,6 +94,7 @@ async fn every_faculty_hook_fires_at_least_once() {
                 id: "t1".into(),
                 name: "Read".into(),
                 arguments_json: r#"{"path":"a"}"#.into(),
+                thought_signature: None,
             })],
             stop: Some(Stop::ToolUse),
             usage: Usage {
@@ -142,6 +143,7 @@ async fn idle_proposal_after_drift_and_forget_resets() {
                 id: format!("t{i}"),
                 name: "Read".into(),
                 arguments_json: r#"{"path":"a"}"#.into(),
+                thought_signature: None,
             })],
             stop: Some(Stop::ToolUse),
             usage: Usage::default(),

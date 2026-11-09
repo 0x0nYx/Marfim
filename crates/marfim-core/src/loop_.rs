@@ -1643,6 +1643,7 @@ mod tests {
                 id: "bad1".into(),
                 name: "Bash".into(),
                 arguments_json: r#"{"command": "rm -rf /tmp/unc"#.into(),
+                thought_signature: None,
             })],
             stop: Some(Stop::MaxTokens),
             usage: Usage::default(),
@@ -1896,11 +1897,13 @@ mod tests {
                     id: "good1".into(),
                     name: "Read".into(),
                     arguments_json: r#"{"path": "x"}"#.into(),
+                    thought_signature: None,
                 }),
                 Block::ToolCall(ToolCall {
                     id: "bad1".into(),
                     name: "Bash".into(),
                     arguments_json: r#"{"command": "rm"#.into(),
+                    thought_signature: None,
                 }),
             ],
             stop: Some(Stop::MaxTokens),
@@ -2147,11 +2150,13 @@ mod tests {
                 id: "p1".into(),
                 name: "Read".into(),
                 arguments_json: r#"{"path":"a"}"#.into(),
+                thought_signature: None,
             },
             ToolCall {
                 id: "p2".into(),
                 name: "Read".into(),
                 arguments_json: r#"{"path":"b"}"#.into(),
+                thought_signature: None,
             },
         ];
         h.history.write().await.push(ChatMessage::user("go"));

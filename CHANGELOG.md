@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.0 — W7.1: model capability registry, adaptive thinking, thought signatures (2026-11-09)
+
+- `providers::capabilities`: the per-model compat registry is COMMITTED
+  TOML DATA (`capabilities.toml`), embedded at compile time, resolved by
+  longest-prefix match over the model id; unknown models keep today's
+  wire behavior byte-identical. A malformed row fails the registry tests
+  (and degrades to defaults at runtime, never a panic).
+- Anthropic wire: rows marked `adaptive` emit `{"type":"adaptive",
+  "budget_tokens"}`; rows marked `mandatory` force a default budget (the
+  `high` rung) even when the user set nothing — the Hermes
+  mandatory-thinking doctrine (§R: fable / opus-5.5).
+- Gemini wire (§R3): `thoughtSignature` is parsed off functionCall
+  parts, carried on `ToolCall`, and replayed VERBATIM on later turns —
+  the replay contract Gemini 3+ enforces.
+- 722 tests green (was 712).
+
 ## 1.0.0 — W2.3: three transports — unix socket, TLS (rustls), plain TCP (2026-11-08)
 
 - **unix socket** (`marfim serve --unix <path>`): the full protocol over

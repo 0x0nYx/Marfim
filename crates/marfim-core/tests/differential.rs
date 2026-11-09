@@ -422,6 +422,7 @@ async fn gemini_body_keeps_model_on_the_url_and_tools_in_declarations() {
                     id: "fc-0".into(),
                     name: "Bash".into(),
                     arguments_json: "{\"cmd\":\"ls\"}".into(),
+                    thought_signature: None,
                 }],
                 tool_call_id: None,
                 is_error: false,
@@ -637,6 +638,7 @@ async fn truncated_tool_call_json_is_rerequested_never_executed() {
                 id: "bad".into(),
                 name: "Write".into(),
                 arguments_json: r#"{"path": "x", "content": "unfin"#.into(),
+                thought_signature: None,
             })],
             stop: Some(marfim_core::providers::Stop::MaxTokens),
             usage: Usage::default(),
@@ -658,4 +660,87 @@ async fn truncated_tool_call_json_is_rerequested_never_executed() {
     let step2 = mock.chat_step(&ChatRequest::default()).await.unwrap();
     let args = step2.tool_calls()[0].parse_args().unwrap();
     assert_eq!(args["content"], "done");
+}
+
+// -------------------------------------------------- W7.1 capability registry
+
+#[test]
+fn anthropic_adaptive_thinking_rides_the_registry_row() {
+    // §R (Hermes): adaptive-thinking models emit {"type":"adaptive",
+    // budget_tokens} — decided by the committed registry, not the caller.
+    let req = ChatRequest {
+        messages: vec![ChatMessage::user("hi")],
+        thinking_budget: Some(4096),
+        ..Default::default()
+    };
+    let body = marfim_core::providers::anthropic::build_body(&req, "claude-opus-4-6");
+    assert_eq!(body["thinking"]["type"], "adaptive");
+    assert_eq!(body["thinking"]["budget_tokens"], 4096);
+    assert_eq!(body["temperature"], 1.0);
+
+    // An unknown model keeps the legacy shape byte-identical.
+    let body = marfim_core::providers::anthropic::build_body(&req, "mock-primary");
+    assert_eq!(body["thinking"]["type"], "enabled");
+}
+
+#[test]
+fn anthropic_mandatory_thinking_forces_a_default_budget() {
+    // §R (Hermes mandatory-thinking): with NO effort and NO budget the
+    // request still thinks — a default budget (the `high` rung) is forced.
+    let req = ChatRequest {
+        messages: vec![ChatMessage::user("hi")],
+        ..Default::default()
+    };
+    let body = marfim_core::providers::anthropic::build_body(&req, "claude-fable-5-1");
+    assert_eq!(body["thinking"]["type"], "enabled");
+    assert_eq!(
+        body["thinking"]["budget_tokens"],
+        marfim_core::providers::effort::anthropic_budget_tokens(
+            marfim_core::providers::Effort::High
+        )
+    );
+    // the max_tokens floor rides along
+    assert!(body["max_tokens"].as_u64().unwrap() >= 16000 + 4096);
+    assert_eq!(body["temperature"], 1.0);
+
+    // An unknown model without effort stays thinking-free (legacy).
+    let body = marfim_core::providers::anthropic::build_body(&req, "mock-primary");
+    assert!(body.get("thinking").is_none());
+}
+
+#[test]
+fn gemini_thought_signature_round_trips_verbatim() {
+    // §R3 (OMP google-shared): a thoughtSignature captured on a
+    // functionCall part rides the SAME part on replay.
+    let req = ChatRequest {
+        messages: vec![
+            ChatMessage::user("hi"),
+            ChatMessage {
+                role: "assistant".into(),
+                content: String::new(),
+                tool_calls: vec![ToolCall {
+                    id: "fc-0".into(),
+                    name: "Read".into(),
+                    arguments_json: r#"{"path":"a"}"#.into(),
+                    thought_signature: Some("sig-abc123".into()),
+                }],
+                tool_call_id: None,
+                is_error: false,
+            },
+            ChatMessage::tool_result("fc-0", "body", false),
+        ],
+        ..Default::default()
+    };
+    let body = marfim_core::providers::gemini::build_body(&req, "gemini-test");
+    let parts = &body["contents"][1]["parts"];
+    assert_eq!(parts[0]["functionCall"]["name"], "Read");
+    assert_eq!(parts[0]["thoughtSignature"], "sig-abc123");
+
+    // No signature → no field (byte-identical legacy body).
+    let mut plain = req.clone();
+    plain.messages[1].tool_calls[0].thought_signature = None;
+    let body = marfim_core::providers::gemini::build_body(&plain, "gemini-test");
+    assert!(body["contents"][1]["parts"][0]
+        .get("thoughtSignature")
+        .is_none());
 }

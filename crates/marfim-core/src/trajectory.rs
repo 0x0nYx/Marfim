@@ -209,6 +209,7 @@ mod tests {
             id: id.into(),
             name: "Read".into(),
             arguments_json: "{}".into(),
+            thought_signature: None,
         }];
         m
     }

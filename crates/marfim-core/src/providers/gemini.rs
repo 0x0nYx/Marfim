@@ -59,8 +59,15 @@ pub fn build_body(req: &ChatRequest, model_id: &str) -> serde_json::Value {
                 for tc in &m.tool_calls {
                     let args: serde_json::Value =
                         serde_json::from_str(&tc.arguments_json).unwrap_or(serde_json::json!({}));
-                    parts
-                        .push(serde_json::json!({"functionCall": {"name": tc.name, "args": args}}));
+                    let mut call =
+                        serde_json::json!({"functionCall": {"name": tc.name, "args": args}});
+                    // W7.1 (§R3): a signature captured on the way in rides
+                    // the SAME part on the way out — replay must be
+                    // byte-verbatim or the wire rejects the turn.
+                    if let Some(sig) = &tc.thought_signature {
+                        call["thoughtSignature"] = serde_json::json!(sig);
+                    }
+                    parts.push(call);
                 }
                 contents.push(serde_json::json!({"role": "model", "parts": parts}));
             }
@@ -171,6 +178,10 @@ pub(crate) struct GPart {
     pub thought: bool,
     #[serde(default, rename = "functionCall")]
     pub function_call: Option<GFunctionCall>,
+    /// W7.1 (§R3): Gemini 3+ thought signatures ride the functionCall
+    /// part and MUST be replayed verbatim when the call round-trips.
+    #[serde(default, rename = "thoughtSignature")]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -223,6 +234,7 @@ pub(crate) fn apply_event(ev: &GEvent, acc: &mut Step, call_n: &mut usize) -> Ve
                         id: synthetic_call_id(*call_n),
                         name: fc.name.clone(),
                         arguments_json: args,
+                        thought_signature: p.thought_signature.clone(),
                     }));
                     *call_n += 1;
                 } else if let Some(t) = &p.text {
@@ -387,6 +399,7 @@ mod tests {
                         id: "fc-0".into(),
                         name: "Read".into(),
                         arguments_json: r#"{"path":"a"}"#.into(),
+                        thought_signature: None,
                     }],
                     tool_call_id: None,
                     is_error: false,
@@ -522,5 +535,29 @@ mod tests {
         let calls = acc.tool_calls();
         assert_eq!(calls[0].id, "fc-0");
         assert_eq!(calls[1].id, "fc-1");
+    }
+
+    #[test]
+    fn thought_signature_captured_from_function_call_parts() {
+        // W7.1 (§R3): the signature rides the functionCall part on the
+        // wire and lands on the ToolCall block verbatim.
+        let part_json = serde_json::json!({
+            "functionCall": {"name": "Read", "args": {"path": "a"}},
+            "thoughtSignature": "sig-xyz"
+        });
+        let part: GPart = serde_json::from_value(part_json).unwrap();
+        let mut acc = Step::default();
+        let mut call_n = 0usize;
+        let ev = GEvent {
+            candidates: vec![GCandidate {
+                content: Some(GContent { parts: vec![part] }),
+                finish_reason: None,
+            }],
+            usage_metadata: None,
+        };
+        apply_event(&ev, &mut acc, &mut call_n);
+        let tcs = acc.tool_calls();
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].thought_signature.as_deref(), Some("sig-xyz"));
     }
 }

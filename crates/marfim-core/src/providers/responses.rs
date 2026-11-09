@@ -249,6 +249,7 @@ pub(crate) fn apply_event(ev: &REvent, st: &mut ResponsesAcc) -> Vec<StreamEvent
                         id: ev.item["call_id"].as_str().unwrap_or("").into(),
                         name: ev.item["name"].as_str().unwrap_or("").into(),
                         arguments_json: String::new(),
+                        thought_signature: None,
                     },
                 );
             }
@@ -446,6 +447,7 @@ mod tests {
                         id: "c1".into(),
                         name: "Read".into(),
                         arguments_json: r#"{"path":"a"}"#.into(),
+                        thought_signature: None,
                     }],
                     tool_call_id: None,
                     is_error: false,

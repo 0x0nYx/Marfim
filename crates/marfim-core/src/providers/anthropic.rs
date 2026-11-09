@@ -81,14 +81,27 @@ pub fn build_body(req: &ChatRequest, model: &str) -> serde_json::Value {
     let system_breakpoint = req.cache_breakpoints && !system_val.is_null();
     // Reasoning effort (distillation §R1): an explicit thinking budget
     // wins; the canonical ladder converts through the Hermes budget table.
+    // W7.1 capability registry (§R): the model row decides HOW thinking
+    // engages — adaptive models ride `{"type":"adaptive"}`, mandatory
+    // models get a default budget forced even when the user set nothing.
     // Anthropic requires temperature 1 and max_tokens >= budget + 4096
     // whenever thinking is enabled — enforce both here so the request is
     // well-formed by construction instead of failing on the wire.
+    let caps = super::capabilities::capability_for(model);
     let thinking_budget = req
         .thinking_budget
-        .or_else(|| req.effort.map(super::effort::anthropic_budget_tokens));
+        .or_else(|| req.effort.map(super::effort::anthropic_budget_tokens))
+        .or_else(|| {
+            matches!(caps.thinking, super::capabilities::ThinkingMode::Mandatory)
+                .then(|| super::effort::anthropic_budget_tokens(super::effort::Effort::High))
+        });
     if let Some(tb) = thinking_budget {
-        body["thinking"] = serde_json::json!({"type": "enabled", "budget_tokens": tb});
+        body["thinking"] = match caps.thinking {
+            super::capabilities::ThinkingMode::Adaptive => {
+                serde_json::json!({"type": "adaptive", "budget_tokens": tb})
+            }
+            _ => serde_json::json!({"type": "enabled", "budget_tokens": tb}),
+        };
         let floor = super::effort::anthropic_min_max_tokens(tb);
         if body["max_tokens"].as_u64().unwrap_or(0) < floor {
             body["max_tokens"] = serde_json::json!(floor);
@@ -175,6 +188,7 @@ pub(crate) fn parse_sse_event(
                         id: cb["id"].as_str().unwrap_or("").into(),
                         name: cb["name"].as_str().unwrap_or("").into(),
                         arguments_json: String::new(),
+                        thought_signature: None,
                     },
                 );
             }

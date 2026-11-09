@@ -285,6 +285,7 @@ impl OpenAiCompat {
                         id: String::new(),
                         name: String::new(),
                         arguments_json: String::new(),
+                        thought_signature: None,
                     }));
                 }
                 let Some(slot) = acc
