@@ -65,8 +65,24 @@ fn comment_prefix(lang: &str) -> &'static [&'static str] {
     }
 }
 
-/// Extract symbols from one source file with per-language patterns.
+/// Extract symbols from one source file. Default path: the regex
+/// extractor. With the `treesitter` feature (W5.3): AST-accurate
+/// extraction for py/rs/go/js/ts, with an honest per-file fallback to the
+/// regex path for languages without a grammar (java/c/rb), parse-less
+/// files, or unknown extensions. The token-budget binary search in the
+/// caller is untouched — only the extractor swaps.
 pub fn extract(path: &Path, text: &str) -> Vec<Symbol> {
+    #[cfg(feature = "treesitter")]
+    {
+        if let Ok(syms) = super::repomap_treesitter::extract_treesitter(path, text) {
+            return syms;
+        }
+    }
+    extract_regex(path, text)
+}
+
+/// Extract symbols from one source file with per-language patterns.
+fn extract_regex(path: &Path, text: &str) -> Vec<Symbol> {
     let Some(lang) = lang_of(path) else {
         return vec![];
     };

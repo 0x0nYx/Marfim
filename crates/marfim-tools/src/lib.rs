@@ -16,6 +16,10 @@ pub mod patch;
 pub mod rea_tool;
 pub mod registry;
 pub mod repomap;
+// W5.3: tree-sitter extractor, compiled only behind the `treesitter`
+// feature (default OFF — the regex extractor is the default path).
+#[cfg(feature = "treesitter")]
+pub mod repomap_treesitter;
 pub mod subagent;
 pub mod terminal;
 pub mod todo;

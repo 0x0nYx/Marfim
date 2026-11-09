@@ -17,6 +17,26 @@ serde_json.workspace = true
 regex.workspace = true
 rhai.workspace = true
 async-trait.workspace = true
+tree-sitter = { version = "0.25", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-go = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+
+# W5.3: tree-sitter symbol extraction — an OPTIONAL, default-off feature
+# (DISTILLATION §FORMER-REJECTS adoption form). The regex extractor stays
+# the default; enabling `treesitter` swaps in AST-accurate def extraction
+# for py/rs/go/js/ts with an honest per-file fallback.
+[features]
+treesitter = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+]
 
 [dev-dependencies]
 marfim-testkit = { path = "../marfim-testkit" }

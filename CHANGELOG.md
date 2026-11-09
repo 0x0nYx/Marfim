@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.0.0 — W5.3: tree-sitter frontends (feature `treesitter`, default off) (2026-11-09)
+
+- `marfim-tools` grows the `treesitter` feature (DISTILLATION
+  §FORMER-REJECTS adoption form): `repomap_treesitter` extracts
+  definitions from the AST for py/rs/go/js/ts — names come off grammar
+  fields (never re-parsed from text), lines come from node positions.
+  `.ts`/`.tsx` ride the TypeScript/TSX grammars (the JS grammar does not
+  model `interface` — the feature tests caught exactly that), and
+  languages without a compiled-in grammar (java/c/rb) fall back to the
+  regex extractor per file, honestly, via `ExtractMiss{reason}`.
+- `repomap::extract` dispatches: feature on → AST first with honest
+  fallback; feature off → byte-identical default behavior. PageRank and
+  the token-budget cap are untouched. Default release build contains no
+  tree-sitter code (G10 unaffected).
+- 745 tests green (114 default in marfim-tools, 120 with the feature);
+  clippy -D warnings clean in BOTH configurations.
+
+## 1.0.0 — W4.2+W4.3+W4.4: the mobile surface (2026-11-09)
+
+- `apps/flutter`: the Android project (AGP 8.5.2 pinned for 16KiB-page
+  .so packaging, Java-only MainActivity — no Kotlin toolchain, vector-
+  only adaptive icon, minSdk 26/targetSdk 35, arm64-v8a) and the Dart
+  shell: `ffi/bindings.dart` types the four W4.1 symbols with the
+  ownership contract mirrored (panic → envelope, never a crash),
+  `engine.dart` exposes a sealed `EngineState` so the UI can only render
+  what the engine actually answered, and the diagnostics screen shows
+  version + config-probe verdict. No placeholder chat surface (G7):
+  sessions ride the W2 gateway protocol and are the next increment,
+  named as such in docs/DESIGN.md.
+- `.github/workflows/mobile.yml`: ffi-android (G12's exact build + the
+  35MiB budget), dart-contracts (the W2.2 promise honored — the Dart
+  protocol contract tests run in CI), flutter-shell (analyze + widget
+  tests), apk (debug-sign fallback echoed honestly), emulator (dispatch-
+  only; G13's integration suite). docs/ANDROID-FINDINGS.md records the
+  pins, the CI provables, and the honest unknowns (no SDK locally).
+- applicationId `dev.marfim.app` is the OWNER-INPUT #1 documented
+  default; one-line change when the owner confirms.
+- 745 Rust tests green (unchanged — dart/gradle artifacts); gates
+  11/0/2 (G12/G13 SKIP until the CI artifacts exist — the workflow is
+  their activation path).
+
 ## 1.0.0 — W4.1: marfim-ffi, the C ABI boundary (2026-11-09)
 
 - New crate `marfim-ffi` (cdylib + rlib): the single sanctioned holder of
