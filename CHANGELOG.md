@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.0.0 — verification & maintenance pass (2026-11-09)
+
+An ultra-rigorous full audit: every mandate gate re-run from a clean
+tree, every documented number re-derived from the code, every CI
+workflow byte-validated. No behavior changes; the tree stays at 880
+tests / 0 failed (PROGRESS.md live count re-verified true).
+
+### Verified green (evidence re-run from clean)
+- `cargo build --workspace` clean; `cargo test --workspace` **880
+  passed / 0 failed** (the ledger's live count holds);
+  `cargo clippy --workspace --all-targets -- -D warnings` zero
+  warnings; `cargo fmt --all -- --check` clean.
+- Gates `scripts/gates.sh`: **11 PASS / 0 FAIL / 2 SKIP** (G12/G13 SKIP
+  honestly — no android toolchain or adb device here, per W0.3
+  semantics a SKIP is never a PASS).
+- Independent G1 re-scan (brace-matched `#[cfg(test)]` strip over all
+  12 crates, 128 src files): exactly one forbidden pattern — the
+  allowlisted `tools_host.rs` startup `expect`, justification and its
+  `every_builtin_registers_cleanly` test verified present.
+- Release artifact: 14,746,848 bytes (< 25 MB budget); `--version` =
+  workspace version (single source, docs-as-test enforced).
+
+### Fixed in this pass
+- **mobile.yml could not parse**: the step name
+  `Size budget (G12: <= 35 MiB)` carried an unquoted `: ` — YAML
+  rejects it, so GitHub refuses the whole workflow and the mobile CI
+  never ran. Quoted; the G12 size check made portable (`wc -c`).
+- **Docs truth sweep** (numbers re-derived from code, not copied):
+  tools are 41 (was "34" — the waves added Terminal/Code/Skill/
+  SessionSearch/Vault/Instinct/Rea); slash commands are 67 (was "~24");
+  presets are 13 with Bedrock/Vertex/Mistral (FEATURE-MATRIX said 20);
+  the models.dev snapshot is 13 providers / 788 models committed
+  offline — NOT "235 / 8,935 live sync + 24h cache" (the catalog never
+  touches the network at runtime, D11; `marfim models` is an offline
+  lister, there is no sync/free subcommand); ARCHITECTURE.md
+  contradicted itself ("six" vs "five" crates) and listed 5 of the 12
+  crates with a stale 6.2 MB size figure — now the full twelve-crate
+  diagram and the measured ≈14.1 MB; AGENTS.md said "six crates" and
+  pointed at unreachable fixture-regeneration scripts — now twelve
+  crates and the honest not-regenerable note (W0.2).
+- Ledger discipline: every number in this entry re-measured at this
+  commit; PROGRESS.md carries the audit row.
+
 ## 1.0.0 — W10.2: mandates + effect queue/outbox + source plugins + cron + delegation ledger (2026-11-09)
 
 - **Mandates** (`core::mandates`, dsh policy doctrine): versioned,

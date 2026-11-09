@@ -2,7 +2,7 @@
 
 ## Project
 Marfim 1.0.0 is a clean-room unified coding-agent harness in Rust (a
-Cargo workspace of six crates, `#![forbid(unsafe_code)]` everywhere,
+Cargo workspace of twelve crates, `#![forbid(unsafe_code)]` everywhere,
 MIT). Do not copy code from the projects analyzed in docs/forensic/ —
 implement from the behavioral specs only.
 
@@ -22,9 +22,10 @@ implement from the behavioral specs only.
   iteration order could leak.
 - Differential ports: a marfim-brain module counts as ported ONLY when
   node-generated JSONL fixtures replay through it
-  (docs/PORT-LEDGER.md). Regenerate fixtures with
-  /home/z scripts pattern: scripts/fixture-*.js against the preserved
-  oracle tree; never hand-write oracle outputs.
+  (docs/PORT-LEDGER.md). The committed fixtures are the contract; the
+  oracle tree is NOT currently reachable (no archive tag on origin —
+  docs/PROGRESS.md W0.2), so fixtures cannot be regenerated right now;
+  never hand-write oracle outputs.
 - Sealed eval sets are never used for tuning.
 - Every mutation flows through the PermissionEngine; the sandbox is
   fail-closed (an unenforceable sandbox REFUSES to spawn).

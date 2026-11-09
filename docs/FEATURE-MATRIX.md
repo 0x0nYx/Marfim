@@ -10,11 +10,11 @@ Every row is a Marfim capability. "Source" names the harness(es) whose *verified
 behavior* it synthesizes (clean-room; see CLEAN-ROOM.md). "Status" reflects what
 ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.md`.
 
-## 0. Rust parity snapshot (v0.3.0)
+## 0. Rust parity snapshot (v1.0.0, W10.2)
 
 | Surface | Rust status |
 |---|---|
-| 34 tools (Node v1.2.0 names) | 🦢✅ (`marfim-tools`, AstQuery/Eval/JsModuleGraph honestly gated on external binaries) |
+| 41 tools (Node v1.2.0 names + the wave additions: Terminal, Code, Skill, SessionSearch, Vault, Instinct, Rea) | 🦢✅ (`marfim-tools`, AstQuery/Eval/JsModuleGraph honestly gated on external binaries) |
 | 67 slash commands + aliases (65 Node + /why + /forget) | 🦢✅ (`marfim` REPL) |
 | Headless text/json/stream-json | 🦢✅ (e2e-tested against the binary) |
 | OpenAI-compat + Anthropic wires + mock | 🦢✅ (differential-tested vs Node goldens) |
@@ -37,10 +37,10 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 |---|---|---|
 | OpenAI-compatible wire protocol (SSE, tool calls, usage) | opencode (45 protocols), Codex `wire_api` | ✅ |
 | Anthropic Messages wire protocol (blocks, tool_use, cache tokens) | opencode, claude code | ✅ |
-| models.dev catalog sync + 24h disk cache + offline fallback | opencode v2 catalog/KV cache | ✅ (235 providers / 8,935 models) |
-| Free-model surfacing for onboarding | opencode free-model doctrine | ✅ (`marfim models free`) |
+| Offline models.dev catalog snapshot (versioned, committed; zero runtime network, D11) | opencode v2 catalog/KV cache doctrine (narrowed honestly) | ✅ (13 providers / 788 models curated pricing subset) |
+| Free-model surfacing for onboarding | opencode free-model doctrine | ◐ (snapshot carries per-model pricing; no dedicated free-surfacing command) |
 | Custom providers via `base_url` + `api_key_env` | Codex `model_providers` | ✅ |
-| 20 provider presets incl. local Ollama/LM Studio/vLLM | goose (~40 providers), omp | ✅ |
+| 13 provider presets incl. local Ollama/LM Studio/vLLM + Bedrock/Vertex/Mistral | goose (~40 providers), omp | ✅ |
 | Model roles (plan/commit/task/smol) routed per call | Oh My Pi 16 roles | ✅ (5 roles, task/plan routing live) |
 | Weak-model slots for summaries/commits | aider weak-model routing | ◐ (roles exist; auto-routing v0.2) |
 | Mock provider for deterministic tests | opencode `simulation` backend | ✅ |
@@ -117,10 +117,10 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | Capability | Source doctrine | Status |
 |---|---|---|
 | Interactive REPL, streaming markdown-lite rendering | all | ✅ |
-| ~24 slash commands | claude code (~50), omp (~100) subset chosen deliberately | ✅ |
+| 67 slash commands + aliases | claude code (~50), omp (~100) subset chosen deliberately | ✅ |
 | Headless `-p` with text/json/stream-json + honest exit codes | claude code headless | ✅ |
 | `marfim doctor` environment checks | hermes/claude code doctor | ✅ |
-| `marfim models sync/free/list` | opencode models UX | ✅ |
+| `marfim models` offline catalog list (+ `--provider <p>` detail) | opencode models UX | ✅ (offline snapshot; no network — D11) |
 | Guarded `/undo` (only Marfim-made commits) | aider | ✅ |
 | Config layering: defaults < global TOML < project TOML < env < CLI | codex/opencode/aider | ✅ |
 | Mobile surface: FFI engine facts + diagnostics (sessions via W2 gateway protocol next) | W4 wave (clean-room) | ✅ shell + FFI boundary (G12/G13 artifacts pending CI) |

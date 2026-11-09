@@ -98,11 +98,11 @@ defaultTimeoutMs = 120000
 
 ## Feature surface
 
-- **Providers** — OpenAI-compatible + Anthropic wire protocols (SSE streaming, tool calls,
+- **Providers** — OpenAI-compatible + Anthropic + Gemini + Bedrock wire protocols (SSE streaming, tool calls,
   usage accounting), 13 presets incl. local (Ollama/LM Studio/vLLM) and the W7.5 additions
-  (Mistral, Amazon Bedrock via vector-tested SigV4, Google Vertex via Bearer auth), live models.dev
-  catalog (235 providers / 8,935 models) with 24h cache and offline fallback, free-model
-  onboarding, custom `base_url` providers, mock provider for tests/CI.
+  (Mistral, Amazon Bedrock via vector-tested SigV4, Google Vertex via Bearer auth), offline models.dev
+  pricing snapshot (13 providers / 788 models, committed, zero runtime network), custom
+  `base_url` providers, mock provider for tests/CI.
 - **Agent loop** — streaming turns, tool dispatch with schema validation, exponential-backoff
   retries (auth errors never retried), reflection-capped failures, auto-compaction on turn
   boundaries (failed compaction keeps history), REAL mid-turn steering (turns run in a worker
@@ -125,10 +125,10 @@ defaultTimeoutMs = 120000
 - **Sessions** — JSONL date-sharded rollouts (0600), resume/fork/export/rm — compaction and
   /clear survive resume — checkpoints with `/rewind` (restores edits AND deletes files the
   agent created), usage + estimated cost per session.
-- **UX** — REPL with streaming output, markdown-lite rendering, ~24 slash commands,
+- **UX** — REPL with streaming output, markdown-lite rendering, 67 slash commands,
   headless mode with `text|json|stream-json`, `marfim doctor`, `marfim map`.
 
-## Security model (v0.2.0 — the safety wave)
+## Security model (the safety wave)
 
 A 34-finding forensic review was executed end-to-end; every finding has a regression test.
 
