@@ -207,6 +207,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             session_id: "t".into(),
             journal_path: Arc::new(std::sync::Mutex::new(None)),
+            instincts: Arc::new(Default::default()),
             board: Arc::new(Default::default()),
             evidence: Arc::new(Default::default()),
             memory: Arc::new(Default::default()),

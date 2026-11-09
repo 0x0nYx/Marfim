@@ -20,6 +20,11 @@ pub struct MemoryStore {
     pub entries: Vec<MemoryEntry>,
 }
 
+/// W10.1: the memory store persists at `<root>/.marfim/memory.json`.
+pub fn memory_path(root: &std::path::Path) -> PathBuf {
+    root.join(".marfim").join("memory.json")
+}
+
 const RELAX_WORDS: &[&str] = &[
     "allow all",
     "skip confirm",

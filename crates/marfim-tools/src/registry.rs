@@ -89,6 +89,9 @@ pub struct ToolCtx {
     /// §S session_search corpus: the CURRENT session journal path (set by
     /// the binary when a session opens; `None` → the tool says so).
     pub journal_path: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
+    /// W10.1: the instinct store (the Instinct tool mutates it; the
+    /// factory loads/saves it around the session).
+    pub instincts: std::sync::Arc<std::sync::Mutex<marfim_core::instincts::InstinctStore>>,
 }
 
 impl Default for ToolCtx {
@@ -110,6 +113,7 @@ impl Default for ToolCtx {
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
             journal_path: Arc::new(std::sync::Mutex::new(None)),
+            instincts: Arc::new(Default::default()),
         }
     }
 }

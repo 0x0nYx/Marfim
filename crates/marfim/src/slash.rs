@@ -643,8 +643,59 @@ pub async fn dispatch(
             run_tool_sync("RepoMap", ctx, &args)
         }
         "memory" => {
-            let args = serde_json::json!({"action": "recall"});
-            run_tool_sync("Memory", ctx, &args)
+            // W10.1: /memory review — the background review fork surface;
+            // /memory apply <id> — user-approved application of a
+            // proposal (propose-approve: nothing writes without it).
+            if rest == "review" {
+                let user_msgs: Vec<String> = journal_records(harness)
+                    .iter()
+                    .filter_map(|r| match r {
+                        JournalRecord::UserMessage { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let mut fork = marfim_core::review::ReviewFork::default();
+                marfim_core::review::fork_from_user_messages(&mut fork, &user_msgs);
+                if fork.proposals.is_empty() {
+                    "no memory candidates found in this session's journal".into()
+                } else {
+                    let mut out =
+                        String::from("memory candidates (approve with /memory apply <id>):\n");
+                    for p in &fork.proposals {
+                        out.push_str(&format!("  {} {}: {}\n", p.id, p.kind, p.text));
+                    }
+                    out
+                }
+            } else if let Some(id) = rest.strip_prefix("apply ") {
+                let user_msgs: Vec<String> = journal_records(harness)
+                    .iter()
+                    .filter_map(|r| match r {
+                        JournalRecord::UserMessage { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let mut fork = marfim_core::review::ReviewFork::default();
+                marfim_core::review::fork_from_user_messages(&mut fork, &user_msgs);
+                match fork.apply(id.trim(), true) {
+                    Some((_kind, text)) => {
+                        let id = ctx
+                            .memory
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .remember(&text, false);
+                        match ctx.memory.lock().unwrap_or_else(|p| p.into_inner()).save(
+                            &marfim_core::memory::memory_path(&ctx.cwd),
+                        ) {
+                            Ok(()) => format!("memory {id} saved: {text}"),
+                            Err(e) => format!("memory {id} stored, but save failed: {e}"),
+                        }
+                    }
+                    None => format!("no proposal {id} (run /memory review first)"),
+                }
+            } else {
+                let args = serde_json::json!({"action": "recall"});
+                run_tool_sync("Memory", ctx, &args)
+            }
         }
         "recall" => {
             let args = serde_json::json!({"action": "recall"});

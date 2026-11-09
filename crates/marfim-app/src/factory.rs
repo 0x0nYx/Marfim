@@ -408,7 +408,13 @@ pub async fn build_session(
         session_id: String::new(),
         board: Arc::new(Default::default()),
         evidence: Arc::new(Default::default()),
-        memory: Arc::new(Default::default()),
+        // W10.1: the memory store persists at <cwd>/.marfim/memory.json
+        // (the Memory tool saves on every mutation).
+        memory: Arc::new(std::sync::Mutex::new(
+            marfim_core::memory::MemoryStore::load(&marfim_core::memory::memory_path(
+                &settings.cwd,
+            )),
+        )),
         todos: Arc::new(Default::default()),
         plan_mode: Arc::new(Default::default()),
         background: Arc::new(Default::default()),
@@ -420,6 +426,12 @@ pub async fn build_session(
         subagent: subagents.clone(),
         bash_default_timeout_ms: settings.bash_default_timeout_ms,
         journal_path: Arc::new(std::sync::Mutex::new(None)),
+        // W10.1: instincts persist at <cwd>/.marfim/instincts.json.
+        instincts: Arc::new(std::sync::Mutex::new(
+            marfim_core::instincts::InstinctStore::load(&marfim_core::instincts::instincts_path(
+                &settings.cwd,
+            )),
+        )),
     };
     // W9.1: the exec policy table (when `[execpolicy]` is configured) —
     // attached to the PRODUCTION host only; subagent children inherit the
@@ -586,6 +598,26 @@ pub async fn build_session(
         .journal_path
         .lock()
         .unwrap_or_else(|p| p.into_inner()) = Some(paths.journal.clone());
+    // W10.1: the session-start prompt surfaces — capped memory render,
+    // active instincts, active skills (each None when empty; the base
+    // prompt stays byte-identical when all three are absent).
+    harness.surfaces = marfim_core::loop_::PromptSurfaces {
+        memory: {
+            let m = tool_ctx
+                .memory
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .render();
+            (!m.trim().is_empty()).then(|| marfim_core::memcaps::cap_memory(&m))
+        },
+        instincts: tool_ctx
+            .instincts
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .render_active(),
+        skills: marfim_core::curator::SkillBook::new(&settings.cwd.join(".marfim").join("skills"))
+            .render_active(),
+    };
     // P5/Step 5: the brain's LearningFaculty is attached to the production
     // harness — observational hooks + turn-scoped validated actuations
     // (model_select / permission_tighten), journaled end to end. The Arc

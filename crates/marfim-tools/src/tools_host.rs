@@ -353,13 +353,43 @@ pub fn register_builtins(reg: &mut ToolRegistry) {
     );
     tool!(
         "Memory",
-        "Persistent user model (remember/recall/forget).",
+        "Persistent user model (remember/recall/forget). Mutations persist to .marfim/memory.json; recall surfaces the capped memory.",
         TC::None_,
         true,
         false,
         5_000,
         serde_json::json!({"type":"object","required":["action"],"properties":{"action":{"type":"string"},"text":{"type":"string"},"id":{"type":"string"},"confirm":{"type":"boolean"},"safety":{"type":"boolean"}}}),
         crate::misc_tools::memory_tool
+    );
+    tool!(
+        "Instinct",
+        "Confidence-scored learned behaviors (W10.1): list/add/reinforce/decay/drop. High-confidence instincts inject at session start.",
+        TC::None_,
+        true,
+        false,
+        5_000,
+        serde_json::json!({"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["list","add","reinforce","decay","drop"]},"text":{"type":"string"},"id":{"type":"string"},"confidence":{"type":"number"},"reason":{"type":"string"},"now_ms":{"type":"integer"}}}),
+        crate::misc_tools::instinct_tool
+    );
+    tool!(
+        "Vault",
+        "Portable memory vault (ecc.memory.v1): import/export memories across harnesses. Imported content is validated untrusted data.",
+        TC::None_,
+        true,
+        false,
+        5_000,
+        serde_json::json!({"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["import","export"]},"json":{"type":"string","description":"the vault document (import)"}}}),
+        crate::misc_tools::vault_tool
+    );
+    tool!(
+        "Skill",
+        "Load a SKILL.md body from .marfim/skills (list|load). First load activates the skill; usage telemetry feeds the curator.",
+        TC::ReadOnly,
+        true,
+        false,
+        5_000,
+        serde_json::json!({"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["list","load"]},"name":{"type":"string"},"now_ms":{"type":"integer"}}}),
+        crate::misc_tools::skill_tool
     );
     tool!(
         "Compute",
@@ -942,6 +972,7 @@ mod tests {
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
             journal_path: Arc::new(std::sync::Mutex::new(None)),
+            instincts: Arc::new(Default::default()),
         };
         (
             Arc::new(HostTools::new(
@@ -1150,6 +1181,7 @@ mod tests {
             subagent: Arc::new(crate::subagent::UnwiredSubagents),
             bash_default_timeout_ms: 120_000,
             journal_path: Arc::new(std::sync::Mutex::new(None)),
+            instincts: Arc::new(Default::default()),
         };
         let h = HostTools::new(
             Arc::new(perm),

@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.0.0 — W10.1: memory caps + review fork + skills curator + instincts + vault (2026-11-09)
+
+- **Memory caps** (`core::memcaps`, Hermes memory stack): rendered memory
+  surfaces are HARD-CAPPED — project memory at 2200 chars, the user model
+  at 1375. Drop-oldest, whole lines only, the cut announced with an exact
+  marker; under-cap renders stay byte-identical (chars, not bytes).
+- **Memory persistence**: the Memory store now LOADS from
+  `<cwd>/.marfim/memory.json` at session start and SAVES on every mutation
+  (a failed save is visible in the tool result, never silent).
+- **Background review fork** (`core::review`): candidates must cite
+  VERBATIM evidence from the reviewed transcript (read-before-write) and
+  pass the do-not-capture corpus (API keys, bearer tokens, password
+  assignments, private-key blocks — a false refusal costs a memory, a
+  false capture leaks a secret). `/memory review` proposes; `/memory
+  apply <id>` applies ONLY the user-approved proposal.
+- **Skills curator** (`core::curator`): usage-telemetry sidecars
+  (`telemetry.json`, corrupt reads as zero), the Proposed → Active →
+  Retired lifecycle (first invoke activates; the curator retires Active
+  skills unused for 30 days with the reason recorded), and an append-only
+  audit ledger (`audit.jsonl`) with blob backups — a replaced SKILL.md is
+  backed up FIRST and the entry carries the backup name + byte length.
+  New `Skill` tool (list/load) drives the lifecycle.
+- **Instincts** (`core::instincts`, ECC continuous-learning-v2): atomic
+  confidence-scored behaviors — inject at session start (≥0.6),
+  reinforce +0.1 / decay −0.15, auto-retire under 0.2 (recorded, never
+  deleted), promote to a skill proposal at ≥5 hits and ≥0.8. New
+  `Instinct` tool; the store persists at `.marfim/instincts.json`.
+- **Portable memory vault** (`core::memvault`, ECC ecc.memory.v1): the
+  cross-harness import/export format. Untrusted by doctrine: version
+  check exact, size-capped (256 entries × 2000 chars, 256 KiB docs),
+  control-stripped, unknown kinds fail closed with the entry index; import
+  merges through the SAME `remember()` path (RELAX_WORDS promotion intact).
+  New `Vault` tool.
+- **Prompt surfaces** (`PromptSurfaces` on the harness): capped memory +
+  active instincts + active skills inject at session start, each only
+  when non-empty — an empty store keeps the base prompt byte-identical
+  (test-asserted).
+- 847 tests green (was 799).
+
 ## 1.0.0 — W9.1+W9.2: exec policy + network enforcement proxy (2026-11-09)
 
 - **`core::execpolicy`** (codex doctrine): allow/prompt/forbidden prefix

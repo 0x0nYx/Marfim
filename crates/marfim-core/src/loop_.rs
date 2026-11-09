@@ -231,6 +231,23 @@ pub struct Harness {
     pub allow_custom_tools: bool,
     /// W7.2: the warming ping fires at most once per session.
     cache_warmed: AtomicBool,
+    /// W10.1: the session-start prompt surfaces (capped memory render,
+    /// active instincts, active skills) — computed by the factory from
+    /// the stores, injected byte-identically-empty when unset.
+    pub surfaces: PromptSurfaces,
+}
+
+/// W10.1: the session-start prompt surfaces. Each section is `Some` only
+/// when its store has content — an empty store keeps the base prompt
+/// byte-identical (reversible, observable).
+#[derive(Debug, Clone, Default)]
+pub struct PromptSurfaces {
+    /// capped render of the project memory store (memcaps::MEMORY_CAP)
+    pub memory: Option<String>,
+    /// instincts::InstinctStore::render_active()
+    pub instincts: Option<String>,
+    /// curator::SkillBook::render_active()
+    pub skills: Option<String>,
 }
 
 /// Turn-scoped faculty overrides. Every field is optional and validated:
@@ -395,6 +412,7 @@ impl Harness {
             turn_overrides: std::sync::Mutex::new(TurnOverrides::default()),
             consecutive_denials: std::sync::Mutex::new(0),
             last_turn_aborted: AtomicBool::new(false),
+            surfaces: PromptSurfaces::default(),
         }
     }
 
@@ -693,13 +711,14 @@ impl Harness {
                 // W7.5: custom-grammar tools pass through only when the
                 // config turned the adoption form on.
                 allow_custom_tools: self.allow_custom_tools,
-                system: Some(system_prompt_with_nudge(
+                system: Some(system_prompt_with_surfaces(
                     &self.ctx,
                     // §S memory cadence: every Nth turn carries the
                     // one-line review reminder in the system surface.
                     turn_counter_local
                         .is_multiple_of(NUDGE_EVERY_TURNS)
                         .then_some(MEMORY_NUDGE),
+                    &self.surfaces,
                 )),
                 max_completion_tokens: self.sampling.max_completion_tokens,
                 temperature: self.sampling.temperature,
@@ -1670,6 +1689,33 @@ pub fn system_prompt(ctx: &LoopCtx) -> String {
     system_prompt_with_nudge(ctx, None)
 }
 
+/// W10.1: the full system surface — base prompt + optional nudge + the
+/// session-start sections (memory cap / instincts / skills). Every
+/// section is appended as its own block ONLY when present; an all-None
+/// surfaces (and no nudge) keeps the base prompt byte-identical.
+pub fn system_prompt_with_surfaces(
+    ctx: &LoopCtx,
+    nudge: Option<&str>,
+    surfaces: &PromptSurfaces,
+) -> String {
+    let mut out = system_prompt_with_nudge(ctx, nudge);
+    if let Some(m) = &surfaces.memory {
+        out.push_str("\n\nProject memory (persistent; the Memory tool manages it):\n");
+        out.push_str(m);
+    }
+    if let Some(i) = &surfaces.instincts {
+        out.push('\n');
+        out.push('\n');
+        out.push_str(i);
+    }
+    if let Some(s) = &surfaces.skills {
+        out.push('\n');
+        out.push('\n');
+        out.push_str(s);
+    }
+    out
+}
+
 /// W8 async compaction: the Small-role summarization as a FREE function
 /// over owned state (the router Arc + a history snapshot), so it can run
 /// in a background task started at the soft threshold. The prompt carries
@@ -1928,6 +1974,7 @@ mod tests {
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
             steer: Arc::new(Mutex::new(SteerQueues::default())),
+            surfaces: PromptSurfaces::default(),
         };
         (h, bus)
     }
@@ -2176,6 +2223,7 @@ mod tests {
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
             steer: Arc::new(Mutex::new(SteerQueues::default())),
+            surfaces: PromptSurfaces::default(),
         };
         let res = h.compact_via_small().await;
         assert!(res.is_err(), "empty summary must fail compaction");
@@ -2694,6 +2742,7 @@ mod tests {
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
             steer: Arc::new(Mutex::new(SteerQueues::default())),
+            surfaces: PromptSurfaces::default(),
         };
         let stop = h.run_turn("hang").await;
         assert_eq!(stop, StopReason::EndTurn, "timeout result feeds the model");
@@ -2798,6 +2847,7 @@ mod tests {
             stop_on_tool_error: false,
             executed_tools: AtomicU64::new(0),
             steer: Arc::new(Mutex::new(SteerQueues::default())),
+            surfaces: PromptSurfaces::default(),
         };
         let stop = h.run_turn("hi").await;
         assert_eq!(stop, StopReason::EndTurn, "failover completes the turn");
@@ -3369,5 +3419,68 @@ mod tests {
             .map(|(i, _)| i)
             .collect();
         assert_eq!(nudged, vec![9], "exactly turn 10 (0-based index 9)");
+    }
+
+    // ---------------------------------------------- W10.1 prompt surfaces
+
+    #[test]
+    fn surfaces_absent_keeps_base_prompt_byte_identical() {
+        let ctx = LoopCtx {
+            session_id: "s".into(),
+            cwd: "/tmp".into(),
+            cancel: CancelToken::default(),
+        };
+        let empty = PromptSurfaces::default();
+        assert_eq!(
+            system_prompt_with_surfaces(&ctx, None, &empty),
+            system_prompt(&ctx)
+        );
+        assert_eq!(system_prompt(&ctx), system_prompt_with_nudge(&ctx, None));
+    }
+
+    #[test]
+    fn surfaces_present_append_sections_in_order() {
+        let ctx = LoopCtx {
+            session_id: "s".into(),
+            cwd: "/tmp".into(),
+            cancel: CancelToken::default(),
+        };
+        let s = PromptSurfaces {
+            memory: Some("m1: likes rust".into()),
+            instincts: Some(
+                "Learned behaviors (instincts — follow unless the user overrides):\n1. run fmt"
+                    .into(),
+            ),
+            skills: Some("Available skills (Skill tool to load one):\n- tidy: tidy up".into()),
+        };
+        let full = system_prompt_with_surfaces(&ctx, None, &s);
+        let base = system_prompt(&ctx);
+        assert!(full.starts_with(&base));
+        let mi = full
+            .find("Project memory (persistent; the Memory tool manages it):")
+            .unwrap();
+        let ii = full.find("Learned behaviors").unwrap();
+        let si = full.find("Available skills").unwrap();
+        assert!(mi < ii && ii < si, "memory → instincts → skills order");
+        assert!(full.contains("m1: likes rust"));
+    }
+
+    #[test]
+    fn memory_surface_is_capped() {
+        let ctx = LoopCtx {
+            session_id: "s".into(),
+            cwd: "/tmp".into(),
+            cancel: CancelToken::default(),
+        };
+        let big = "x".repeat(5000);
+        let capped = crate::memcaps::cap_memory(&big);
+        let s = PromptSurfaces {
+            memory: Some(capped.clone()),
+            ..Default::default()
+        };
+        let full = system_prompt_with_surfaces(&ctx, None, &s);
+        assert!(capped.starts_with(crate::memcaps::CAP_MARKER));
+        assert!(full.contains(&capped));
+        assert!(capped.chars().count() <= crate::memcaps::MEMORY_CAP_CHARS);
     }
 }

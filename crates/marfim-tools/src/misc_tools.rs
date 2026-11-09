@@ -339,15 +339,30 @@ pub fn task_output(_ctx: &ToolCtx, args: &Value) -> ToolOutput {
 
 // --------------------------------------------------------- Memory (tool)
 
+/// W10.1: best-effort persistence of the memory store after a mutation.
+/// A failed save is visible in the tool result (never silent), never
+/// fatal (the in-memory truth stands).
+fn memory_save(ctx: &ToolCtx) -> Result<(), String> {
+    let store = ctx.memory.lock().unwrap_or_else(|p| p.into_inner());
+    store
+        .save(&marfim_core::memory::memory_path(&ctx.cwd))
+        .map_err(|e| format!("memory save failed: {e}"))
+}
+
 pub fn memory_tool(ctx: &ToolCtx, args: &Value) -> ToolOutput {
     match args["action"].as_str() {
         Some("remember") => {
             let Some(text) = args["text"].as_str() else {
                 return ToolOutput::err("missing `text`");
             };
-            let mut m = ctx.memory.lock().unwrap_or_else(|p| p.into_inner());
-            let id = m.remember(text, args["safety"].as_bool().unwrap_or(false));
-            ToolOutput::ok(format!("remembered as {id}"))
+            let id = {
+                let mut m = ctx.memory.lock().unwrap_or_else(|p| p.into_inner());
+                m.remember(text, args["safety"].as_bool().unwrap_or(false))
+            };
+            match memory_save(ctx) {
+                Ok(()) => ToolOutput::ok(format!("remembered as {id} (saved)")),
+                Err(e) => ToolOutput::err(format!("remembered as {id}, but {e}")),
+            }
         }
         Some("recall") => ToolOutput::ok(
             ctx.memory
@@ -360,17 +375,191 @@ pub fn memory_tool(ctx: &ToolCtx, args: &Value) -> ToolOutput {
                 return ToolOutput::err("missing `id`");
             };
             let confirm = args["confirm"].as_bool().unwrap_or(false);
-            match ctx
+            let res = ctx
                 .memory
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .forget(id, confirm)
-            {
-                Ok(_) => ToolOutput::ok(format!("forgot {id}")),
+                .forget(id, confirm);
+            match res {
+                Ok(_) => match memory_save(ctx) {
+                    Ok(()) => ToolOutput::ok(format!("forgot {id} (saved)")),
+                    Err(e) => ToolOutput::err(format!("forgot {id}, but {e}")),
+                },
                 Err(e) => ToolOutput::err(format!("{e}")),
             }
         }
         other => ToolOutput::err(format!("bad action {other:?} (remember|recall|forget)")),
+    }
+}
+
+// -------------------------------------------------------- Instinct (tool)
+
+/// W10.1: the Instinct tool — list / reinforce / decay / drop / add.
+/// Mutations persist to `<cwd>/.marfim/instincts.json`; the session
+/// prompt picks them up at the NEXT session start (injection is a
+/// session-start surface; this is stated in the tool output).
+pub fn instinct_tool(ctx: &ToolCtx, args: &Value) -> ToolOutput {
+    let path = marfim_core::instincts::instincts_path(&ctx.cwd);
+    let mut store = ctx.instincts.lock().unwrap_or_else(|p| p.into_inner());
+    let save = |s: &marfim_core::instincts::InstinctStore| -> Result<(), String> {
+        s.save(&path)
+            .map_err(|e| format!("instinct save failed: {e}"))
+    };
+    match args["action"].as_str() {
+        Some("list") => match store.render_active() {
+            Some(s) => ToolOutput::ok(s),
+            None => ToolOutput::ok("(no active instincts)"),
+        },
+        Some("add") => {
+            let Some(text) = args["text"].as_str() else {
+                return ToolOutput::err("missing `text`");
+            };
+            let conf = args["confidence"].as_f64().unwrap_or(0.6);
+            match store.add(text, conf, args["now_ms"].as_u64().unwrap_or(0), "session") {
+                Some(id) => match save(&store) {
+                    Ok(()) => ToolOutput::ok(format!(
+                        "instinct {id} recorded; it injects at the next session start"
+                    )),
+                    Err(e) => ToolOutput::err(format!("instinct {id} recorded, but {e}")),
+                },
+                None => ToolOutput::err("refused: empty or duplicate instinct text"),
+            }
+        }
+        Some("reinforce") | Some("decay") => {
+            let Some(id) = args["id"].as_str() else {
+                return ToolOutput::err("missing `id`");
+            };
+            let acted = if args["action"].as_str() == Some("reinforce") {
+                store.reinforce(id)
+            } else {
+                store.decay(id)
+            };
+            if !acted {
+                return ToolOutput::err(format!("no active instinct {id}"));
+            }
+            let i = store
+                .instincts
+                .iter()
+                .find(|i| i.id == id)
+                .map(|i| format!("confidence {:.2}", i.confidence))
+                .unwrap_or_default();
+            match save(&store) {
+                Ok(()) => ToolOutput::ok(format!("{id} updated ({i})")),
+                Err(e) => ToolOutput::err(format!("{id} updated, but {e}")),
+            }
+        }
+        Some("drop") => {
+            let Some(id) = args["id"].as_str() else {
+                return ToolOutput::err("missing `id`");
+            };
+            let reason = args["reason"].as_str().unwrap_or("user drop");
+            if store.retire(id, reason) {
+                match save(&store) {
+                    Ok(()) => ToolOutput::ok(format!("{id} dropped ({reason})")),
+                    Err(e) => ToolOutput::err(format!("{id} dropped, but {e}")),
+                }
+            } else {
+                ToolOutput::err(format!("no active instinct {id}"))
+            }
+        }
+        other => ToolOutput::err(format!(
+            "bad action {other:?} (list|add|reinforce|decay|drop)"
+        )),
+    }
+}
+
+// ----------------------------------------------------------- Vault (tool)
+
+/// W10.1: the vault tool — portable memory import/export (ecc.memory.v1).
+/// Imported content is UNTRUSTED: validated, capped, control-stripped,
+/// and merged through the same remember() path as local memory.
+pub fn vault_tool(ctx: &ToolCtx, args: &Value) -> ToolOutput {
+    match args["action"].as_str() {
+        Some("export") => {
+            let m = ctx.memory.lock().unwrap_or_else(|p| p.into_inner());
+            let doc = marfim_core::memvault::export(&m.entries);
+            match marfim_core::memvault::to_json(&doc) {
+                Ok(j) => ToolOutput::ok(j),
+                Err(e) => ToolOutput::err(format!("export failed: {e}")),
+            }
+        }
+        Some("import") => {
+            let Some(json) = args["json"].as_str() else {
+                return ToolOutput::err("missing `json` (the vault document)");
+            };
+            let doc = match marfim_core::memvault::import(json) {
+                Ok(d) => d,
+                Err(e) => return ToolOutput::err(format!("import refused: {e}")),
+            };
+            let mut m = ctx.memory.lock().unwrap_or_else(|p| p.into_inner());
+            let mut taken = 0usize;
+            for e in &doc.entries {
+                // merge through the SAME path as local memory: RELAX_WORDS
+                // promotion intact; duplicates refused by remember().
+                m.remember(&e.content, e.kind == "procedure");
+                taken += 1;
+            }
+            drop(m);
+            match memory_save(ctx) {
+                Ok(()) => ToolOutput::ok(format!("imported {taken} entr(y|ies) into memory")),
+                Err(e) => ToolOutput::err(format!("imported {taken}, but {e}")),
+            }
+        }
+        other => ToolOutput::err(format!("bad action {other:?} (import|export)")),
+    }
+}
+
+// ------------------------------------------------------------ Skill (tool)
+
+/// W10.1: the Skill tool — load a skill body from the skills root,
+/// recording telemetry + the Proposed→Active transition (the curator
+/// lifecycle). Retired skills refuse with an honest reason.
+pub fn skill_tool(ctx: &ToolCtx, args: &Value) -> ToolOutput {
+    let root = ctx.cwd.join(".marfim").join("skills");
+    let book = marfim_core::curator::SkillBook::new(&root);
+    match args["action"].as_str() {
+        Some("list") => match book.render_active() {
+            Some(s) => ToolOutput::ok(s),
+            None => ToolOutput::ok(
+                "(no active skills; discovered skills start Proposed and activate on first load)",
+            ),
+        },
+        Some("load") => {
+            let Some(name) = args["name"].as_str() else {
+                return ToolOutput::err("missing `name`");
+            };
+            if name.contains('"')
+                || name.contains("/")
+                || name.contains("\\")
+                || name.contains("..")
+            {
+                return ToolOutput::err("invalid skill name");
+            }
+            let md = root.join(name).join("SKILL.md");
+            if !md.is_file() {
+                return ToolOutput::err(format!("no skill named {name:?} under .marfim/skills"));
+            }
+            match marfim_core::skills::load_skill(&md) {
+                Ok(s) => {
+                    if book.state(name) == marfim_core::curator::SkillState::Retired {
+                        return ToolOutput::err(format!(
+                            "skill {name:?} is retired (see audit.jsonl); \
+                             the curator or the user must re-activate it"
+                        ));
+                    }
+                    match book.record_invoke(name, &md, args["now_ms"].as_u64().unwrap_or(0)) {
+                        Ok(n) => {
+                            ToolOutput::ok(format!("[skill {name}, invocation #{n}]\n{}", s.body))
+                        }
+                        Err(e) => {
+                            ToolOutput::err(format!("loaded {name} but telemetry failed: {e}"))
+                        }
+                    }
+                }
+                Err(e) => ToolOutput::err(format!("skill load failed: {e}")),
+            }
+        }
+        other => ToolOutput::err(format!("bad action {other:?} (list|load)")),
     }
 }
 
@@ -385,6 +574,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             session_id: "t".into(),
             journal_path: Arc::new(std::sync::Mutex::new(None)),
+            instincts: Arc::new(Default::default()),
             board: Arc::new(Default::default()),
             evidence: Arc::new(Default::default()),
             memory: Arc::new(Default::default()),
@@ -768,6 +958,7 @@ mod tests_extra {
             cwd: marfim_testkit::unique_dir("marfim-extra"),
             session_id: "t".into(),
             journal_path: Arc::new(std::sync::Mutex::new(None)),
+            instincts: Arc::new(Default::default()),
             board: Arc::new(Default::default()),
             evidence: Arc::new(Default::default()),
             memory: Arc::new(Default::default()),
@@ -817,5 +1008,128 @@ mod tests_extra {
             "= 0.5"
         );
         assert!(compute_tool(&serde_json::json!({"expression": "bad)"})).is_error);
+    }
+
+    // ------------------------------------------------- W10.1 tool tests
+
+    #[test]
+    fn memory_tool_persists_to_disk() {
+        let c = ctx();
+        let out = memory_tool(
+            &c,
+            &serde_json::json!({"action": "remember", "text": "likes rust"}),
+        );
+        assert!(!out.is_error, "{}", out.output);
+        let path = marfim_core::memory::memory_path(&c.cwd);
+        assert!(path.is_file(), "memory.json written");
+        let store = marfim_core::memory::MemoryStore::load(&path);
+        assert_eq!(store.entries[0].text, "likes rust");
+        // forget persists too
+        let out = memory_tool(
+            &c,
+            &serde_json::json!({"action": "forget", "id": "m1", "confirm": true}),
+        );
+        assert!(!out.is_error, "{}", out.output);
+        assert!(marfim_core::memory::MemoryStore::load(&path)
+            .entries
+            .is_empty());
+    }
+
+    #[test]
+    fn instinct_tool_full_cycle() {
+        let c = ctx();
+        let add = instinct_tool(
+            &c,
+            &serde_json::json!({"action": "add", "text": "prefer rg over grep", "confidence": 0.7, "now_ms": 5}),
+        );
+        assert!(!add.is_error, "{}", add.output);
+        assert!(add.output.contains("next session start"));
+        // persisted
+        let store = marfim_core::instincts::InstinctStore::load(
+            &marfim_core::instincts::instincts_path(&c.cwd),
+        );
+        assert_eq!(store.instincts.len(), 1);
+        // reinforce
+        let r = instinct_tool(&c, &serde_json::json!({"action": "reinforce", "id": "i1"}));
+        assert!(!r.is_error, "{}", r.output);
+        assert!(r.output.contains("0.80"));
+        // duplicate refused
+        let dup = instinct_tool(
+            &c,
+            &serde_json::json!({"action": "add", "text": "prefer rg over grep"}),
+        );
+        assert!(dup.is_error);
+        // list shows it
+        let list = instinct_tool(&c, &serde_json::json!({"action": "list"}));
+        assert!(list.output.contains("prefer rg over grep"));
+        // drop
+        let d = instinct_tool(
+            &c,
+            &serde_json::json!({"action": "drop", "id": "i1", "reason": "wrong"}),
+        );
+        assert!(!d.is_error, "{}", d.output);
+        let after = instinct_tool(&c, &serde_json::json!({"action": "reinforce", "id": "i1"}));
+        assert!(after.is_error, "retired instinct is gone");
+    }
+
+    #[test]
+    fn vault_tool_import_export_round_trip() {
+        let c = ctx();
+        // export of an empty store
+        let exp = vault_tool(&c, &serde_json::json!({"action": "export"}));
+        assert!(!exp.is_error, "{}", exp.output);
+        assert!(exp.output.contains("ecc.memory.v1"));
+        // import a valid doc
+        let doc = r#"{"version":"ecc.memory.v1","entries":[{"id":"e1","content":"deploys on tuesdays","type":"fact"},{"id":"e2","content":"never force-push main","type":"procedure"}]}"#;
+        let imp = vault_tool(&c, &serde_json::json!({"action": "import", "json": doc}));
+        assert!(!imp.is_error, "{}", imp.output);
+        // entries merged into memory (procedure → safety constraint)
+        let store =
+            marfim_core::memory::MemoryStore::load(&marfim_core::memory::memory_path(&c.cwd));
+        assert_eq!(store.entries.len(), 2);
+        assert!(store.entries[1].safety_constraint);
+        // hostile import refused
+        let bad = vault_tool(
+            &c,
+            &serde_json::json!({"action": "import", "json": r#"{"version":"ecc.memory.v9","entries":[]}"#}),
+        );
+        assert!(bad.is_error);
+        assert!(bad.output.contains("unsupported vault version"));
+    }
+
+    #[test]
+    fn skill_tool_load_activates_and_records_telemetry() {
+        let c = ctx();
+        std::fs::create_dir_all(c.cwd.join(".marfim/skills/tidy")).unwrap();
+        std::fs::write(
+            c.cwd.join(".marfim/skills/tidy/SKILL.md"),
+            "---\nname: tidy\ndescription: tidy up\n---\nRun cargo fmt.",
+        )
+        .unwrap();
+        // list before activation: nothing active
+        let l0 = skill_tool(&c, &serde_json::json!({"action": "list"}));
+        assert!(l0.output.contains("no active skills"));
+        // load activates
+        let l1 = skill_tool(
+            &c,
+            &serde_json::json!({"action": "load", "name": "tidy", "now_ms": 42}),
+        );
+        assert!(!l1.is_error, "{}", l1.output);
+        assert!(l1.output.contains("[skill tidy, invocation #1]"));
+        assert!(l1.output.contains("Run cargo fmt."));
+        // telemetry sidecar written
+        let tel: marfim_core::curator::SkillTelemetry = serde_json::from_str(
+            &std::fs::read_to_string(c.cwd.join(".marfim/skills/tidy/telemetry.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tel.invocations, 1);
+        assert_eq!(tel.last_used_ms, Some(42));
+        // traversal names refused
+        let bad = skill_tool(&c, &serde_json::json!({"action": "load", "name": "../x"}));
+        assert!(bad.is_error);
+        // missing skill refused honestly
+        let missing = skill_tool(&c, &serde_json::json!({"action": "load", "name": "nope"}));
+        assert!(missing.is_error);
+        assert!(missing.output.contains("no skill named"));
     }
 }
