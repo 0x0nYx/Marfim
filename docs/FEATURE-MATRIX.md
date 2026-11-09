@@ -123,6 +123,7 @@ ships in v0.1.0. Forensic evidence for each source claim: `docs/forensic/<name>.
 | `marfim models sync/free/list` | opencode models UX | ✅ |
 | Guarded `/undo` (only Marfim-made commits) | aider | ✅ |
 | Config layering: defaults < global TOML < project TOML < env < CLI | codex/opencode/aider | ✅ |
+| Mobile surface: FFI engine facts + diagnostics (sessions via W2 gateway protocol next) | W4 wave (clean-room) | ✅ shell + FFI boundary (G12/G13 artifacts pending CI) |
 
 ## 7. Deliberately deferred (documented in ROADMAP.md)
 

@@ -1,0 +1,9 @@
+include: package:flutter_lints/flutter.yaml
+
+# Marfim mobile surface: the app is a shell over the engine, so the lints
+# stay at the stock flutter_lints set plus two hygiene lines.
+analyzer:
+  language:
+    strict-casts: true
+  errors:
+    invalid_use_of_internal: error

@@ -1,0 +1,127 @@
+# Mobile CI (W4.4): the jobs the local machine could not run. Mirrors the
+# G12/G13 gate shapes exactly — a workflow failure is a gate failure.
+name: mobile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/marfim-ffi/**"
+      - "apps/flutter/**"
+      - "contracts/dart/**"
+      - ".github/workflows/mobile.yml"
+  pull_request:
+    paths:
+      - "crates/marfim-ffi/**"
+      - "apps/flutter/**"
+      - "contracts/dart/**"
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ffi-android:
+    # G12's environment: cargo-ndk + android target + apps/flutter.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: aarch64-linux-android
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Build libmarfim_ffi.so (arm64-v8a)
+        run: cargo ndk -t arm64-v8a -o apps/flutter/android/app/src/main/jniLibs build --release -p marfim-ffi
+      - name: Size budget (G12: <= 35 MiB)
+        run: |
+          SO=apps/flutter/android/app/src/main/jniLibs/arm64-v8a/libmarfim_ffi.so
+          SIZE=$(stat -c%s "$SO")
+          echo "libmarfim_ffi.so = $SIZE bytes"
+          [ "$SIZE" -gt 0 ] && [ "$SIZE" -le 36700160 ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libmarfim_ffi-arm64-v8a
+          path: apps/flutter/android/app/src/main/jniLibs/arm64-v8a/libmarfim_ffi.so
+
+  dart-contracts:
+    # The W2.2 promise: Dart contract tests run where an SDK exists — here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Protocol contract tests (same fixtures as G11)
+        working-directory: contracts/dart
+        run: dart pub get && dart test
+
+  flutter-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Pub get
+        working-directory: apps/flutter
+        run: flutter pub get
+      - name: Analyze
+        working-directory: apps/flutter
+        run: flutter analyze --fatal-infos
+      - name: Widget tests
+        working-directory: apps/flutter
+        run: flutter test
+
+  apk:
+    # Debug-signed unless the owner's signing secrets exist (OWNER-INPUT #2);
+    # the fallback is echoed — documented, not silent.
+    runs-on: ubuntu-latest
+    needs: [ffi-android, flutter-shell]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: aarch64-linux-android
+      - run: cargo install cargo-ndk --locked
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Build .so into jniLibs
+        run: cargo ndk -t arm64-v8a -o apps/flutter/android/app/src/main/jniLibs build --release -p marfim-ffi
+      - name: Signing mode
+        run: |
+          if [ -z "${ANDROID_KEYSTORE_B64:-}" ]; then
+            echo "no ANDROID_KEYSTORE_B64 secret -> DEBUG-SIGNING (documented fallback, OWNER-INPUT #2)"
+          fi
+      - name: Build APK (debug-signed when secrets absent)
+        working-directory: apps/flutter
+        run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marfim-apk
+          path: apps/flutter/build/app/outputs/flutter-apk/app-release.apk
+
+  emulator:
+    # G13's environment — dispatch-only so emulators never run on pushes.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: [apk]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: aarch64-linux-android
+      - run: cargo install cargo-ndk --locked
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Build .so into jniLibs
+        run: cargo ndk -t arm64-v8a -o apps/flutter/android/app/src/main/jniLibs build --release -p marfim-ffi
+      - name: Emulator (API 34, x86_64)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          script: cd apps/flutter && flutter test integration_test
