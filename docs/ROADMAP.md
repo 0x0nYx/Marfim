@@ -93,6 +93,16 @@ to the progress ledger.
   as untrusted data) (W10.1). Mandates, effect queue + ordered outbox,
   source plugins, cron (5 NL forms, catch-up, per-job pinning), async
   delegation ledger, PR-burst-guard as repo automation (W10.2).
+- **Community packs (owner design, unscheduled)**: skill/memory packs
+  the agent *pulls* on explicit update — never silent, never
+  default-on; a per-session, user-visible diff before anything is
+  shared; an automated eval gate (no regression on benchmark tasks)
+  then spot review, curated like filter-list repos (uBlock/EasyList),
+  not FedAvg. Packs would ride the memory-vault format (treated as
+  untrusted data); numeric export artifacts can reuse the Laplace noise
+  in `marfim-brain::intel::dp`. Weight-level learning (LoRA deltas under
+  DP) is an open research area with no training path in this repo and
+  is not scheduled.
 
 ## v1.x — surfaces + evidence (W11/W12, from DISTILLATION §H/§CC/§G)
 
@@ -102,6 +112,30 @@ to the progress ledger.
   backgrounding (opt-in); remaining wire breadth (W11).
 - Evidence records (confidence/coverage), obligation ledger as
   definition-of-done gate, unknowns ledger, REA bridge (W12).
+
+## Android device-control surface (unscheduled — spec: docs/DESIGN.md "Later increment")
+
+Origin: the owner's pre-Marfim on-device-agent plan. The Android MVP is
+the whole project until it is adopted — do not parallelize it with
+desktop hands or the pack channel.
+
+1. Validate demand with a working demo in the LineageOS / crDroid /
+   Evolution X communities (a demo gets faster signal than a feature
+   request).
+2. **Android MVP**: AccessibilityService hands + 5–10 hand-picked tools
+   (settings toggle, app launch, a couple of real multi-step tasks); no
+   telemetry, no pack channel. Distribution: APK via GitHub Releases
+   (F-Droid after); works on any Android, no root, no ROM cooperation.
+3. Prove retention and usefulness; only then the opt-in pack channel
+   (v0.9 "Community packs").
+4. Gate-2 root module (Magisk/KernelSU) for users who already root.
+5. Approach ROM teams (LineageOS extras, /e/, Evolution X, crDroid) for
+   optional bundling once there is a track record. GrapheneOS is not a
+   target: zero-telemetry-by-identity users are the worst fit for any
+   reporting channel.
+6. Desktop hands — UIAutomation (Windows), AX (macOS), AT-SPI (Linux) —
+   as thin plugins under the same core, only after Android hands are
+   adopted.
 
 ## Continuous
 
