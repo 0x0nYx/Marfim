@@ -54,6 +54,12 @@ below exist.
 - `flutter pub get` lockfile: `pubspec.lock` is generated on the first
   CI pub get and committed from that run forward (Flutter convention
   for apps; there was no SDK here to produce it truthfully).
+- Idle drain for the device-control increment (DESIGN.md "Later
+  increment"): a foreground service plus accessibility-tree polling is
+  the profile mid-tier-phone users already complain about. No battery or
+  thermal budget exists and none is invented here; it needs an
+  idle-suspend design and a measured row in DESIGN's budget table once
+  the 6 GB device profile (OWNER-INPUT #5) exists.
 
 ## Deliberate non-goals recorded
 
