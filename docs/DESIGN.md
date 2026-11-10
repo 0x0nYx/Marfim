@@ -50,6 +50,56 @@ tests in `contracts/dart` are the drift guard. This split keeps the
 mobile .so small (no provider stack in the app process) and the
 permission surface authoritative on one side.
 
+## Later increment: device-control hands (Android)
+
+Unscheduled — recorded so the shell is not designed into a corner.
+Origin: the owner's pre-Marfim on-device-agent plan; platform facts
+re-checked 2026-11-10 (sources at the end of this section).
+
+The agent acts for the user across other apps (the "employee" model).
+OS tuning is one gated tool it can call, never the product.
+
+- **Control layer: Android AccessibilityService**, hosted by the Java
+  shell. Works unrooted on stock and custom ROMs; the Rust core stays
+  platform-agnostic and `forbid(unsafe)`. The platform-native route is
+  closed to us: `ACCESS_COMPUTER_CONTROL` (virtual-display Computer
+  Control) is described as going only to allowlisted, Google/OEM-signed
+  apps, and the QPR3 "Screen automation" special-access toggle was
+  reported on Pixel 10 only. AppFunctions (Android 16) is the
+  structured alternative where target apps publish functions: prefer
+  it when present, fall back to the accessibility tree.
+- **Hands are tools.** Each device action is a `ToolDef` call through
+  the PermissionEngine (every mutation flows through it); the shell
+  never acts on its own initiative. The engine-to-shell transport is
+  chosen when the row is scheduled; it must not move a provider stack
+  or keys into the app process.
+- **Two consent gates, never conflated.** Gate 1, "I want the agent to
+  operate apps": enabling the accessibility service, unprivileged.
+  Gate 2, "I want it to touch system settings": separate, root-gated
+  (Magisk/KernelSU module, or a privileged-app signature on ROMs that
+  allow it), optional, shipped after Gate 1 is proven. Gate-2 actions
+  are explicit per invocation — never cron- or mandate-driven, never
+  automatic.
+- **Invocation model (our choice, stricter than the platform's):**
+  explicit start, visible running state, stoppable at any moment,
+  never scheduled. The platform's own permission text allows work
+  while apps are in the background; we do not inherit that.
+- **No on-device model in this surface.** The 35 MiB `.so` budget and
+  the no-provider-stack-in-the-app-process rule stand; a local model,
+  if ever used, is a provider behind the gateway, not linked into
+  `libmarfim_ffi`.
+- **Prior art:** DroidRun/Mobilerun Portal (MIT per its READMEs) is an
+  accessibility-service APK with a local HTTP/WebSocket API, driven
+  from a host over ADB. Adoption form is clean-room per
+  docs/CLEAN-ROOM.md unless a vendoring decision is logged in
+  docs/PORT-LEDGER.md.
+
+Sources (secondary reporting, partly from pre-release code analysis —
+verify against AOSP before relying):
+9to5google.com/2026/01/15/android-16-qpr3-screen-automation ;
+helentech.jp/news-75642 ; aospbooks.github.io/aosp-internal-book/
+50-ai-appfunctions.
+
 ## Performance targets
 
 Budgets that gate CI (G12 mirrors the .so budget):
@@ -73,3 +123,7 @@ first runs — recorded honestly, not estimated twice.
   fallback echoed in the workflow log (documented, not silent).
 - The app holds no provider keys. Credentials stay server-side behind
   the gateway token; the W1.3 credential chain never reaches Dart.
+- No reporting channel by default (device-control increment): anything
+  shared moves only per session, after the user sees the exact diff of
+  what would leave the device. Trust, not features, decides adoption in
+  the ROM/F-Droid audience; one vague opt-in toggle is enough to sink it.
