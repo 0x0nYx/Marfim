@@ -1,0 +1,26 @@
+{
+  "events": {
+    "actuation": "{\"after\":{\"model\":\"b\"},\"before\":{\"model\":\"a\"},\"event\":\"actuation\",\"evidence\":{\"regret\":3},\"faculty\":\"learning\",\"kind\":\"model_select\",\"type\":\"actuation\"}",
+    "approval_requested": "{\"approval_id\":\"a1\",\"event\":\"approval_requested\",\"summary\":\"echo hi\",\"tool\":\"Bash\",\"type\":\"approval_requested\"}",
+    "approval_resolved": "{\"approval_id\":\"a1\",\"decision\":\"allow\",\"event\":\"approval_resolved\",\"type\":\"approval_resolved\"}",
+    "assistant_message": "{\"event\":\"assistant_message\",\"text\":\"Done.\",\"type\":\"assistant_message\"}",
+    "cache_warm": "{\"event\":\"cache_warm\",\"model\":\"claude-sonnet-4-5\",\"ok\":false,\"type\":\"cache_warm\"}",
+    "compaction": "{\"after_tokens\":21000,\"before_tokens\":90000,\"event\":\"compaction\",\"type\":\"compaction\"}",
+    "compaction_started": "{\"background\":true,\"event\":\"compaction_started\",\"type\":\"compaction_started\"}",
+    "error": "{\"event\":\"error\",\"fatal\":false,\"message\":\"provider unreachable\",\"type\":\"error\"}",
+    "faculty_hook": "{\"detail\":{\"drift\":0.01},\"event\":\"faculty_hook\",\"faculty\":\"learning\",\"hook\":\"post_step\",\"type\":\"faculty_hook\"}",
+    "model_selected": "{\"event\":\"model_selected\",\"model\":\"claude-sonnet-4-5\",\"role\":\"primary\",\"type\":\"model_selected\",\"why\":\"chain head\"}",
+    "session_started": "{\"cwd\":\"/workspace\",\"event\":\"session_started\",\"session_id\":\"s1762531200000\",\"type\":\"session_started\"}",
+    "stream_delta": "{\"event\":\"stream_delta\",\"kind\":\"text\",\"text\":\"he\",\"type\":\"stream_delta\"}",
+    "thinking": "{\"event\":\"thinking\",\"text\":\"considering\",\"type\":\"thinking\"}",
+    "tool_call_result": "{\"duration_ms\":12,\"event\":\"tool_call_result\",\"id\":\"t1\",\"is_error\":false,\"output\":\"hi\",\"tool\":\"Bash\",\"type\":\"tool_call_result\"}",
+    "tool_call_started": "{\"args\":{\"command\":\"echo hi\"},\"event\":\"tool_call_started\",\"id\":\"t1\",\"tool\":\"Bash\",\"type\":\"tool_call_started\"}",
+    "turn_end": "{\"event\":\"turn_end\",\"stop_reason\":\"end_turn\",\"turn\":1,\"type\":\"turn_ended\"}",
+    "turn_started": "{\"event\":\"turn_started\",\"turn\":1,\"type\":\"turn_started\"}",
+    "usage": "{\"cache_creation_tokens\":0,\"cache_read_tokens\":0,\"cost_usd\":null,\"event\":\"usage\",\"input_tokens\":120,\"model\":\"claude-sonnet-4-5\",\"output_tokens\":45,\"role\":\"primary\",\"type\":\"usage\"}",
+    "verify_finished": "{\"event\":\"verify_finished\",\"output\":\"test result: ok\",\"passed\":true,\"type\":\"verify_finished\"}",
+    "verify_started": "{\"commands\":[\"cargo test\"],\"event\":\"verify_started\",\"type\":\"verify_started\"}"
+  },
+  "note": "every bus event kind, serialized by the real Event::to_json_line(); these lines are what /v1/events delivers inside SSE data frames",
+  "protocol": "1"
+}

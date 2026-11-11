@@ -1,0 +1,19 @@
+[package]
+name = "marfim-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP client and server (JSON-RPC over stdio)"
+
+[dependencies]
+marfim-core = { path = "../marfim-core" }
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+marfim-testkit = { path = "../marfim-testkit" }
+serde_json.workspace = true

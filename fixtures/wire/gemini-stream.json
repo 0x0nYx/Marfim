@@ -1,0 +1,29 @@
+{
+  "comment": "Gemini streamGenerateContent?alt=sse goldens: thought:true parts, functionCall parts with deterministic fc-N ids, usageMetadata thought-token folding (docs/DISTILLATION.md §R3, OMP google-shared.ts)",
+  "sse": [
+    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"plan\",\"thought\":true}]}}]}",
+    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}]}",
+    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"Bash\",\"args\":{\"cmd\":\"ls\"}}}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":100,\"candidatesTokenCount\":30,\"thoughtsTokenCount\":12,\"cachedContentTokenCount\":60}}"
+  ],
+  "golden": {
+    "stop": "tool_use",
+    "stop_note": "tool-call presence wins over the raw STOP finish reason so the harness executes the batch",
+    "usage": {
+      "input_tokens": 100,
+      "output_tokens": 42,
+      "cache_read_tokens": 60,
+      "cache_creation_tokens": 0,
+      "usage_note": "thoughtsTokenCount folds into output_tokens (30 + 12) so cost math is honest"
+    },
+    "tool_calls": [
+      {
+        "id": "fc-0",
+        "name": "Bash",
+        "arguments_json": "{\"cmd\":\"ls\"}",
+        "id_note": "Gemini v1beta functionCall parts carry no id; deterministic fc-N synthesis round-trips results"
+      }
+    ],
+    "text": "Hi",
+    "thinking": "plan"
+  }
+}

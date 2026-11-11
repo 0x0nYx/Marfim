@@ -1,0 +1,16 @@
+[package]
+name = "marfim-term"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "PTY sessions + terminal screen model (vt100) for the Terminal surface"
+
+[dependencies]
+portable-pty.workspace = true
+vt100.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+marfim-testkit = { path = "../marfim-testkit" }

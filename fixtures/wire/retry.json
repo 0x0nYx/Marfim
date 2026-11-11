@@ -1,0 +1,16 @@
+{
+  "comment": "Node v1.2.0 goldens: base.js:32-48 — retry 429/408/409/5xx with Retry-After; never 4xx",
+  "cases": [
+    {"status": 429, "retryable": true,  "honor_retry_after": true},
+    {"status": 408, "retryable": true,  "honor_retry_after": true},
+    {"status": 409, "retryable": true,  "honor_retry_after": true},
+    {"status": 500, "retryable": true,  "honor_retry_after": true},
+    {"status": 503, "retryable": true,  "honor_retry_after": true},
+    {"status": 400, "retryable": false, "honor_retry_after": false},
+    {"status": 401, "retryable": false, "honor_retry_after": false},
+    {"status": 403, "retryable": false, "honor_retry_after": false},
+    {"status": 404, "retryable": false, "honor_retry_after": false},
+    {"status": 422, "retryable": false, "honor_retry_after": false}
+  ],
+  "backoff_ms": [500, 1000, 2000]
+}

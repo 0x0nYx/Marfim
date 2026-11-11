@@ -1,0 +1,35 @@
+[package]
+name = "marfim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Marfim CLI (Rust)"
+
+[[bin]]
+name = "marfim"
+path = "src/main.rs"
+
+[dependencies]
+marfim-app = { path = "../marfim-app" }
+marfim-core = { path = "../marfim-core" }
+marfim-brain = { path = "../marfim-brain" }
+marfim-tools = { path = "../marfim-tools" }
+marfim-mcp = { path = "../marfim-mcp" }
+marfim-gateway = { path = "../marfim-gateway" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+async-trait.workspace = true
+toml.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+
+# SIGINT wiring tests need a real signal send; nix's safe API matches
+# marfim-core's no-unsafe stance.
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.29", default-features = false, features = ["signal"] }
+
+[dev-dependencies]
+marfim-testkit = { path = "../marfim-testkit" }

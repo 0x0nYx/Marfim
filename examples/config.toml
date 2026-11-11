@@ -1,0 +1,71 @@
+# Marfim example configuration — copy to ~/.marfim/config.toml (global)
+# or .marfim/config.toml (project). Precedence: defaults < global < project < env < CLI.
+#
+# Every key below is validated against the canonical key set (docs follow
+# the validator, never the other way round): unknown keys are hard errors.
+# Bare keys live ABOVE any [section] header — TOML assigns trailing bare
+# keys to the last section otherwise.
+
+provider = "openrouter"                  # any preset name or custom provider id
+model = "deepseek/deepseek-chat-v3.1:free"
+smallModel = "groq/llama-3.3-70b-versatile"   # compaction + cheap tasks
+architectModel = "openai/o4-mini"        # used by /plan and plan subagents
+reviewModel = "groq/llama-3.3-70b-versatile"  # used by review subagents
+
+# --- sampling + context knobs (config truth: they reach the wire) --------
+maxTokens = 8192                         # max_completion_tokens on every request
+temperature = 0.7
+thinkingBudget = 16384                   # anthropic thinking / openai reasoning effort
+autoCompactThreshold = 120000            # per-step context tokens before compaction
+stream = true                            # SSE deltas in TUI/REPL
+verbose = false                          # full tool results in headless/REPL output
+theme = "cyan"                           # TUI accent; NO_COLOR forces monochrome
+
+# failover chain: tried in order when the primary transport fails (D11)
+failover = ["groq:llama-3.3-70b-versatile"]
+
+# cost ceiling for a session ("100m" = $0.10, "2.5" = $2.50)
+# budget = "2.5"
+
+# model-chain routing: "chain" (strict order) or "bandit" (UCB1)
+# routing = "chain"
+
+[providers.ollama-local]                 # custom provider (preset name works as provider id)
+baseUrl = "http://localhost:11434/v1"
+wire = "openai"                          # openai | anthropic
+model = "qwen3-coder:30b"
+apiKeyEnv = "OLLAMA_LOCAL_KEY"           # env var read at request time
+
+[permissions]                            # Claude Code rule syntax
+mode = "default"                         # default | plan | accept-edits | bypass
+allow = [
+    "Bash(git *)",
+    "Bash(pytest *)",
+    "Bash(ls *)",
+]
+ask = []                                 # rules that force a prompt
+deny = [
+    "Bash(sudo *)",
+    "Bash(rm -rf *)",
+    "Bash(curl * | bash)",
+]
+workingGlobs = []                        # restrict file edits to these globs
+
+[bash]
+defaultTimeoutMs = 120000                # Bash tool default; per-call wins
+envAllowlist = ["PATH", "HOME", "LANG", "TERM"]
+
+[mcpServers.context7]                    # MCP over stdio (claude code / goose doctrine)
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+
+[mcpServers.filesystem]                  # MCP over stdio
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+[hooks]                                  # claude code hook events; exit 2 = veto
+PreToolUse = ["./examples/hooks/pre-tool-use-secret-guard.sh"]
+PostToolUse = []
+
+[verify]                                 # verify armed by mutations (D7): run in sandbox
+commands = ["cargo test"]

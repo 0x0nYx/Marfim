@@ -1,0 +1,16 @@
+[package]
+name = "marfim-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "C ABI boundary for Marfim (W4.1) — the ONLY crate allowed unsafe; every unsafe block carries a SAFETY comment and every extern fn wraps catch_unwind."
+
+[lib]
+name = "marfim_ffi"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+marfim-core = { path = "../marfim-core" }
+marfim-app = { path = "../marfim-app" }
+serde_json = { workspace = true }

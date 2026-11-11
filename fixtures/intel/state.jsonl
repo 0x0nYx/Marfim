@@ -1,0 +1,298 @@
+{"fn":"_probe_pyFloatRepr","input":[0.1],"output":"0.1"}
+{"fn":"_probe_pyFloatRepr","input":[1.5],"output":"1.5"}
+{"fn":"_probe_pyFloatRepr","input":[-2.25],"output":"-2.25"}
+{"fn":"_probe_pyFloatRepr","input":[3],"output":"3.0"}
+{"fn":"_probe_pyFloatRepr","input":[-3],"output":"-3.0"}
+{"fn":"_probe_pyFloatRepr","input":[0],"output":"0.0"}
+{"fn":"_probe_pyFloatRepr","input":[100],"output":"100.0"}
+{"fn":"_probe_pyFloatRepr","input":[123.456],"output":"123.456"}
+{"fn":"_probe_pyFloatRepr","input":[0.5],"output":"0.5"}
+{"fn":"_probe_pyFloatRepr","input":[-0.5],"output":"-0.5"}
+{"fn":"_probe_pyFloatRepr","input":[1000000000000000],"output":"1000000000000000.0"}
+{"fn":"_probe_pyFloatRepr","input":[10000000000000000],"output":"1e+16"}
+{"fn":"_probe_pyFloatRepr","input":[100000000000000000],"output":"1e+17"}
+{"fn":"_probe_pyFloatRepr","input":[999999999999999.9],"output":"999999999999999.9"}
+{"fn":"_probe_pyFloatRepr","input":[123456789012345.6],"output":"123456789012345.6"}
+{"fn":"_probe_pyFloatRepr","input":[0.0001],"output":"0.0001"}
+{"fn":"_probe_pyFloatRepr","input":[0.00001],"output":"1e-05"}
+{"fn":"_probe_pyFloatRepr","input":[0.0001],"output":"0.0001"}
+{"fn":"_probe_pyFloatRepr","input":[0.00001],"output":"1e-05"}
+{"fn":"_probe_pyFloatRepr","input":[0.0001],"output":"0.0001"}
+{"fn":"_probe_pyFloatRepr","input":[0.00009999],"output":"9.999e-05"}
+{"fn":"_probe_pyFloatRepr","input":[0.30000000000000004],"output":"0.30000000000000004"}
+{"fn":"_probe_pyFloatRepr","input":[0.3333333333333333],"output":"0.3333333333333333"}
+{"fn":"_probe_pyFloatRepr","input":[0.6666666666666666],"output":"0.6666666666666666"}
+{"fn":"_probe_pyFloatRepr","input":[3.141592653589793],"output":"3.141592653589793"}
+{"fn":"_probe_pyFloatRepr","input":[1.4142135623730951],"output":"1.4142135623730951"}
+{"fn":"_probe_pyFloatRepr","input":[5e-324],"output":"5e-324"}
+{"fn":"_probe_pyFloatRepr","input":[2.2250738585072014e-308],"output":"2.2250738585072014e-308"}
+{"fn":"_probe_pyFloatRepr","input":[1.7976931348623157e+308],"output":"1.7976931348623157e+308"}
+{"fn":"_probe_pyFloatRepr","input":[123456789.123456],"output":"123456789.123456"}
+{"fn":"_probe_pyFloatRepr","input":[-0.1],"output":"-0.1"}
+{"fn":"_probe_pyFloatRepr","input":[42],"output":"42.0"}
+{"fn":"_probe_pyFloatRepr","input":[1e+21],"output":"1e+21"}
+{"fn":"_probe_pyFloatRepr","input":[1e-7],"output":"1e-07"}
+{"fn":"_probe_pyFloatRepr","input":[6.02e+23],"output":"6.02e+23"}
+{"fn":"_probe_pyFloatRepr","input":[-6.02e+23],"output":"-6.02e+23"}
+{"fn":"_probe_pyFloatRepr","input":[0.644],"output":"0.644"}
+{"fn":"_probe_pyFloatRepr","input":[1.0000000000000002],"output":"1.0000000000000002"}
+{"fn":"_probe_pyFloatRepr","input":[0.615],"output":"0.615"}
+{"fn":"_probe_pyFloatRepr","input":[9.5e-8],"output":"9.5e-08"}
+{"fn":"pyJsonStringify","input":[null,{"indent":null,"sortKeys":false}],"output":"null"}
+{"fn":"pyJsonStringify","input":[null,{"indent":null,"sortKeys":true}],"output":"null"}
+{"fn":"pyJsonStringify","input":[null,{"indent":2,"sortKeys":true}],"output":"null"}
+{"fn":"pyJsonStringify","input":[null,{"indent":2,"sortKeys":false}],"output":"null"}
+{"fn":"pyJsonStringify","input":[null,{"indent":4,"sortKeys":true}],"output":"null"}
+{"fn":"pyJsonStringify","input":[null,{"indent":0,"sortKeys":true}],"output":"null"}
+{"fn":"pyJsonStringify","input":[null,{"indent":0,"sortKeys":false}],"output":"null"}
+{"fn":"pyJsonStringify","input":[null,{"indent":-1,"sortKeys":true}],"output":"null"}
+{"fn":"pyJsonStringify","input":[null,{"indent":1,"sortKeys":false}],"output":"null"}
+{"fn":"pyJsonStringify","input":[true,{"indent":null,"sortKeys":false}],"output":"true"}
+{"fn":"pyJsonStringify","input":[true,{"indent":null,"sortKeys":true}],"output":"true"}
+{"fn":"pyJsonStringify","input":[true,{"indent":2,"sortKeys":true}],"output":"true"}
+{"fn":"pyJsonStringify","input":[true,{"indent":2,"sortKeys":false}],"output":"true"}
+{"fn":"pyJsonStringify","input":[true,{"indent":4,"sortKeys":true}],"output":"true"}
+{"fn":"pyJsonStringify","input":[true,{"indent":0,"sortKeys":true}],"output":"true"}
+{"fn":"pyJsonStringify","input":[true,{"indent":0,"sortKeys":false}],"output":"true"}
+{"fn":"pyJsonStringify","input":[true,{"indent":-1,"sortKeys":true}],"output":"true"}
+{"fn":"pyJsonStringify","input":[true,{"indent":1,"sortKeys":false}],"output":"true"}
+{"fn":"pyJsonStringify","input":[false,{"indent":null,"sortKeys":false}],"output":"false"}
+{"fn":"pyJsonStringify","input":[false,{"indent":null,"sortKeys":true}],"output":"false"}
+{"fn":"pyJsonStringify","input":[false,{"indent":2,"sortKeys":true}],"output":"false"}
+{"fn":"pyJsonStringify","input":[false,{"indent":2,"sortKeys":false}],"output":"false"}
+{"fn":"pyJsonStringify","input":[false,{"indent":4,"sortKeys":true}],"output":"false"}
+{"fn":"pyJsonStringify","input":[false,{"indent":0,"sortKeys":true}],"output":"false"}
+{"fn":"pyJsonStringify","input":[false,{"indent":0,"sortKeys":false}],"output":"false"}
+{"fn":"pyJsonStringify","input":[false,{"indent":-1,"sortKeys":true}],"output":"false"}
+{"fn":"pyJsonStringify","input":[false,{"indent":1,"sortKeys":false}],"output":"false"}
+{"fn":"pyJsonStringify","input":[1,{"indent":null,"sortKeys":false}],"output":"1"}
+{"fn":"pyJsonStringify","input":[1,{"indent":null,"sortKeys":true}],"output":"1"}
+{"fn":"pyJsonStringify","input":[1,{"indent":2,"sortKeys":true}],"output":"1"}
+{"fn":"pyJsonStringify","input":[1,{"indent":2,"sortKeys":false}],"output":"1"}
+{"fn":"pyJsonStringify","input":[1,{"indent":4,"sortKeys":true}],"output":"1"}
+{"fn":"pyJsonStringify","input":[1,{"indent":0,"sortKeys":true}],"output":"1"}
+{"fn":"pyJsonStringify","input":[1,{"indent":0,"sortKeys":false}],"output":"1"}
+{"fn":"pyJsonStringify","input":[1,{"indent":-1,"sortKeys":true}],"output":"1"}
+{"fn":"pyJsonStringify","input":[1,{"indent":1,"sortKeys":false}],"output":"1"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":null,"sortKeys":false}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":null,"sortKeys":true}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":2,"sortKeys":true}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":2,"sortKeys":false}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":4,"sortKeys":true}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":0,"sortKeys":true}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":0,"sortKeys":false}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":-1,"sortKeys":true}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[-3,{"indent":1,"sortKeys":false}],"output":"-3"}
+{"fn":"pyJsonStringify","input":[0,{"indent":null,"sortKeys":false}],"output":"0"}
+{"fn":"pyJsonStringify","input":[0,{"indent":null,"sortKeys":true}],"output":"0"}
+{"fn":"pyJsonStringify","input":[0,{"indent":2,"sortKeys":true}],"output":"0"}
+{"fn":"pyJsonStringify","input":[0,{"indent":2,"sortKeys":false}],"output":"0"}
+{"fn":"pyJsonStringify","input":[0,{"indent":4,"sortKeys":true}],"output":"0"}
+{"fn":"pyJsonStringify","input":[0,{"indent":0,"sortKeys":true}],"output":"0"}
+{"fn":"pyJsonStringify","input":[0,{"indent":0,"sortKeys":false}],"output":"0"}
+{"fn":"pyJsonStringify","input":[0,{"indent":-1,"sortKeys":true}],"output":"0"}
+{"fn":"pyJsonStringify","input":[0,{"indent":1,"sortKeys":false}],"output":"0"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":null,"sortKeys":false}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":null,"sortKeys":true}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":2,"sortKeys":true}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":2,"sortKeys":false}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":4,"sortKeys":true}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":0,"sortKeys":true}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":0,"sortKeys":false}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":-1,"sortKeys":true}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[1.5,{"indent":1,"sortKeys":false}],"output":"1.5"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":null,"sortKeys":false}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":null,"sortKeys":true}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":2,"sortKeys":true}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":2,"sortKeys":false}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":4,"sortKeys":true}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":0,"sortKeys":true}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":0,"sortKeys":false}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":-1,"sortKeys":true}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[-2.25,{"indent":1,"sortKeys":false}],"output":"-2.25"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":null,"sortKeys":false}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":null,"sortKeys":true}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":2,"sortKeys":true}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":2,"sortKeys":false}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":4,"sortKeys":true}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":0,"sortKeys":true}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":0,"sortKeys":false}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":-1,"sortKeys":true}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":[0.1,{"indent":1,"sortKeys":false}],"output":"0.1"}
+{"fn":"pyJsonStringify","input":["plain",{"indent":null,"sortKeys":false}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["plain",{"indent":null,"sortKeys":true}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["plain",{"indent":2,"sortKeys":true}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["plain",{"indent":2,"sortKeys":false}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["plain",{"indent":4,"sortKeys":true}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["plain",{"indent":0,"sortKeys":true}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["plain",{"indent":0,"sortKeys":false}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["plain",{"indent":-1,"sortKeys":true}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["plain",{"indent":1,"sortKeys":false}],"output":"\"plain\""}
+{"fn":"pyJsonStringify","input":["",{"indent":null,"sortKeys":false}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["",{"indent":null,"sortKeys":true}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["",{"indent":2,"sortKeys":true}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["",{"indent":2,"sortKeys":false}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["",{"indent":4,"sortKeys":true}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["",{"indent":0,"sortKeys":true}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["",{"indent":0,"sortKeys":false}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["",{"indent":-1,"sortKeys":true}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["",{"indent":1,"sortKeys":false}],"output":"\"\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":null,"sortKeys":false}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":null,"sortKeys":true}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":2,"sortKeys":true}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":2,"sortKeys":false}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":4,"sortKeys":true}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":0,"sortKeys":true}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":0,"sortKeys":false}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":-1,"sortKeys":true}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["héllo ☕ 𝄞!",{"indent":1,"sortKeys":false}],"output":"\"h\\u00e9llo \\u2615 \\ud834\\udd1e!\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":null,"sortKeys":false}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":null,"sortKeys":true}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":2,"sortKeys":true}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":2,"sortKeys":false}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":4,"sortKeys":true}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":0,"sortKeys":true}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":0,"sortKeys":false}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":-1,"sortKeys":true}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":["line\nbreak\ttab\rcr\bback\fform\\\"quote\\slash",{"indent":1,"sortKeys":false}],"output":"\"line\\nbreak\\ttab\\rcr\\bback\\fform\\\\\\\"quote\\\\slash\""}
+{"fn":"pyJsonStringify","input":[[],{"indent":null,"sortKeys":false}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[[],{"indent":null,"sortKeys":true}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[[],{"indent":2,"sortKeys":true}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[[],{"indent":2,"sortKeys":false}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[[],{"indent":4,"sortKeys":true}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[[],{"indent":0,"sortKeys":true}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[[],{"indent":0,"sortKeys":false}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[[],{"indent":-1,"sortKeys":true}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[[],{"indent":1,"sortKeys":false}],"output":"[]"}
+{"fn":"pyJsonStringify","input":[{},{"indent":null,"sortKeys":false}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[{},{"indent":null,"sortKeys":true}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[{},{"indent":2,"sortKeys":true}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[{},{"indent":2,"sortKeys":false}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[{},{"indent":4,"sortKeys":true}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[{},{"indent":0,"sortKeys":true}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[{},{"indent":0,"sortKeys":false}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[{},{"indent":-1,"sortKeys":true}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[{},{"indent":1,"sortKeys":false}],"output":"{}"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":null,"sortKeys":false}],"output":"[1, 2.5, \"x\", null, true]"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":null,"sortKeys":true}],"output":"[1, 2.5, \"x\", null, true]"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":2,"sortKeys":true}],"output":"[\n  1,\n  2.5,\n  \"x\",\n  null,\n  true\n]"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":2,"sortKeys":false}],"output":"[\n  1,\n  2.5,\n  \"x\",\n  null,\n  true\n]"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":4,"sortKeys":true}],"output":"[\n    1,\n    2.5,\n    \"x\",\n    null,\n    true\n]"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":0,"sortKeys":true}],"output":"[\n1,\n2.5,\n\"x\",\nnull,\ntrue\n]"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":0,"sortKeys":false}],"output":"[\n1,\n2.5,\n\"x\",\nnull,\ntrue\n]"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":-1,"sortKeys":true}],"output":"[\n1,\n2.5,\n\"x\",\nnull,\ntrue\n]"}
+{"fn":"pyJsonStringify","input":[[1,2.5,"x",null,true],{"indent":1,"sortKeys":false}],"output":"[\n 1,\n 2.5,\n \"x\",\n null,\n true\n]"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":null,"sortKeys":false}],"output":"{\"a\": 1, \"b\": 2.5, \"c\": \"z\"}"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":null,"sortKeys":true}],"output":"{\"a\": 1, \"b\": 2.5, \"c\": \"z\"}"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":2,"sortKeys":true}],"output":"{\n  \"a\": 1,\n  \"b\": 2.5,\n  \"c\": \"z\"\n}"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":2,"sortKeys":false}],"output":"{\n  \"a\": 1,\n  \"b\": 2.5,\n  \"c\": \"z\"\n}"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":4,"sortKeys":true}],"output":"{\n    \"a\": 1,\n    \"b\": 2.5,\n    \"c\": \"z\"\n}"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":0,"sortKeys":true}],"output":"{\n\"a\": 1,\n\"b\": 2.5,\n\"c\": \"z\"\n}"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":0,"sortKeys":false}],"output":"{\n\"a\": 1,\n\"b\": 2.5,\n\"c\": \"z\"\n}"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":-1,"sortKeys":true}],"output":"{\n\"a\": 1,\n\"b\": 2.5,\n\"c\": \"z\"\n}"}
+{"fn":"pyJsonStringify","input":[{"a":1,"b":2.5,"c":"z"},{"indent":1,"sortKeys":false}],"output":"{\n \"a\": 1,\n \"b\": 2.5,\n \"c\": \"z\"\n}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":null,"sortKeys":false}],"output":"{\"empty_arr\": [], \"empty_obj\": {}, \"list\": [1, {\"nested\": [true, null]}]}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":null,"sortKeys":true}],"output":"{\"empty_arr\": [], \"empty_obj\": {}, \"list\": [1, {\"nested\": [true, null]}]}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":2,"sortKeys":true}],"output":"{\n  \"empty_arr\": [],\n  \"empty_obj\": {},\n  \"list\": [\n    1,\n    {\n      \"nested\": [\n        true,\n        null\n      ]\n    }\n  ]\n}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":2,"sortKeys":false}],"output":"{\n  \"empty_arr\": [],\n  \"empty_obj\": {},\n  \"list\": [\n    1,\n    {\n      \"nested\": [\n        true,\n        null\n      ]\n    }\n  ]\n}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":4,"sortKeys":true}],"output":"{\n    \"empty_arr\": [],\n    \"empty_obj\": {},\n    \"list\": [\n        1,\n        {\n            \"nested\": [\n                true,\n                null\n            ]\n        }\n    ]\n}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":0,"sortKeys":true}],"output":"{\n\"empty_arr\": [],\n\"empty_obj\": {},\n\"list\": [\n1,\n{\n\"nested\": [\ntrue,\nnull\n]\n}\n]\n}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":0,"sortKeys":false}],"output":"{\n\"empty_arr\": [],\n\"empty_obj\": {},\n\"list\": [\n1,\n{\n\"nested\": [\ntrue,\nnull\n]\n}\n]\n}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":-1,"sortKeys":true}],"output":"{\n\"empty_arr\": [],\n\"empty_obj\": {},\n\"list\": [\n1,\n{\n\"nested\": [\ntrue,\nnull\n]\n}\n]\n}"}
+{"fn":"pyJsonStringify","input":[{"empty_arr":[],"empty_obj":{},"list":[1,{"nested":[true,null]}]},{"indent":1,"sortKeys":false}],"output":"{\n \"empty_arr\": [],\n \"empty_obj\": {},\n \"list\": [\n  1,\n  {\n   \"nested\": [\n    true,\n    null\n   ]\n  }\n ]\n}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":null,"sortKeys":false}],"output":"{\"learner\": {\"alpha\": 1.5, \"beta\": 2, \"counts\": {\"a\": 2, \"b\": 1}}, \"version\": 3}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":null,"sortKeys":true}],"output":"{\"learner\": {\"alpha\": 1.5, \"beta\": 2, \"counts\": {\"a\": 2, \"b\": 1}}, \"version\": 3}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":2,"sortKeys":true}],"output":"{\n  \"learner\": {\n    \"alpha\": 1.5,\n    \"beta\": 2,\n    \"counts\": {\n      \"a\": 2,\n      \"b\": 1\n    }\n  },\n  \"version\": 3\n}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":2,"sortKeys":false}],"output":"{\n  \"learner\": {\n    \"alpha\": 1.5,\n    \"beta\": 2,\n    \"counts\": {\n      \"a\": 2,\n      \"b\": 1\n    }\n  },\n  \"version\": 3\n}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":4,"sortKeys":true}],"output":"{\n    \"learner\": {\n        \"alpha\": 1.5,\n        \"beta\": 2,\n        \"counts\": {\n            \"a\": 2,\n            \"b\": 1\n        }\n    },\n    \"version\": 3\n}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":0,"sortKeys":true}],"output":"{\n\"learner\": {\n\"alpha\": 1.5,\n\"beta\": 2,\n\"counts\": {\n\"a\": 2,\n\"b\": 1\n}\n},\n\"version\": 3\n}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":0,"sortKeys":false}],"output":"{\n\"learner\": {\n\"alpha\": 1.5,\n\"beta\": 2,\n\"counts\": {\n\"a\": 2,\n\"b\": 1\n}\n},\n\"version\": 3\n}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":-1,"sortKeys":true}],"output":"{\n\"learner\": {\n\"alpha\": 1.5,\n\"beta\": 2,\n\"counts\": {\n\"a\": 2,\n\"b\": 1\n}\n},\n\"version\": 3\n}"}
+{"fn":"pyJsonStringify","input":[{"learner":{"alpha":1.5,"beta":2,"counts":{"a":2,"b":1}},"version":3},{"indent":1,"sortKeys":false}],"output":"{\n \"learner\": {\n  \"alpha\": 1.5,\n  \"beta\": 2,\n  \"counts\": {\n   \"a\": 2,\n   \"b\": 1\n  }\n },\n \"version\": 3\n}"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":null,"sortKeys":false}],"output":"[[1, 2], [3, 4]]"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":null,"sortKeys":true}],"output":"[[1, 2], [3, 4]]"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":2,"sortKeys":true}],"output":"[\n  [\n    1,\n    2\n  ],\n  [\n    3,\n    4\n  ]\n]"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":2,"sortKeys":false}],"output":"[\n  [\n    1,\n    2\n  ],\n  [\n    3,\n    4\n  ]\n]"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":4,"sortKeys":true}],"output":"[\n    [\n        1,\n        2\n    ],\n    [\n        3,\n        4\n    ]\n]"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":0,"sortKeys":true}],"output":"[\n[\n1,\n2\n],\n[\n3,\n4\n]\n]"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":0,"sortKeys":false}],"output":"[\n[\n1,\n2\n],\n[\n3,\n4\n]\n]"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":-1,"sortKeys":true}],"output":"[\n[\n1,\n2\n],\n[\n3,\n4\n]\n]"}
+{"fn":"pyJsonStringify","input":[[[1,2],[3,4]],{"indent":1,"sortKeys":false}],"output":"[\n [\n  1,\n  2\n ],\n [\n  3,\n  4\n ]\n]"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":null,"sortKeys":false}],"output":"{\"a\": 2, \"m\": 3, \"z\": 1}"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":null,"sortKeys":true}],"output":"{\"a\": 2, \"m\": 3, \"z\": 1}"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":2,"sortKeys":true}],"output":"{\n  \"a\": 2,\n  \"m\": 3,\n  \"z\": 1\n}"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":2,"sortKeys":false}],"output":"{\n  \"a\": 2,\n  \"m\": 3,\n  \"z\": 1\n}"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":4,"sortKeys":true}],"output":"{\n    \"a\": 2,\n    \"m\": 3,\n    \"z\": 1\n}"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":0,"sortKeys":true}],"output":"{\n\"a\": 2,\n\"m\": 3,\n\"z\": 1\n}"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":0,"sortKeys":false}],"output":"{\n\"a\": 2,\n\"m\": 3,\n\"z\": 1\n}"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":-1,"sortKeys":true}],"output":"{\n\"a\": 2,\n\"m\": 3,\n\"z\": 1\n}"}
+{"fn":"pyJsonStringify","input":[{"a":2,"m":3,"z":1},{"indent":1,"sortKeys":false}],"output":"{\n \"a\": 2,\n \"m\": 3,\n \"z\": 1\n}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":null,"sortKeys":false}],"output":"{\"key_a\": [1, 2], \"key_b\": {\"x\": \"y\"}, \"key_c\": null}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":null,"sortKeys":true}],"output":"{\"key_a\": [1, 2], \"key_b\": {\"x\": \"y\"}, \"key_c\": null}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":2,"sortKeys":true}],"output":"{\n  \"key_a\": [\n    1,\n    2\n  ],\n  \"key_b\": {\n    \"x\": \"y\"\n  },\n  \"key_c\": null\n}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":2,"sortKeys":false}],"output":"{\n  \"key_a\": [\n    1,\n    2\n  ],\n  \"key_b\": {\n    \"x\": \"y\"\n  },\n  \"key_c\": null\n}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":4,"sortKeys":true}],"output":"{\n    \"key_a\": [\n        1,\n        2\n    ],\n    \"key_b\": {\n        \"x\": \"y\"\n    },\n    \"key_c\": null\n}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":0,"sortKeys":true}],"output":"{\n\"key_a\": [\n1,\n2\n],\n\"key_b\": {\n\"x\": \"y\"\n},\n\"key_c\": null\n}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":0,"sortKeys":false}],"output":"{\n\"key_a\": [\n1,\n2\n],\n\"key_b\": {\n\"x\": \"y\"\n},\n\"key_c\": null\n}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":-1,"sortKeys":true}],"output":"{\n\"key_a\": [\n1,\n2\n],\n\"key_b\": {\n\"x\": \"y\"\n},\n\"key_c\": null\n}"}
+{"fn":"pyJsonStringify","input":[{"key_a":[1,2],"key_b":{"x":"y"},"key_c":null},{"indent":1,"sortKeys":false}],"output":"{\n \"key_a\": [\n  1,\n  2\n ],\n \"key_b\": {\n  \"x\": \"y\"\n },\n \"key_c\": null\n}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":null,"sortKeys":false}],"output":"{\"u\": \"\\u00e9\", \"v\": \"\\ud834\\udd1e\", \"w\": \"\\u0001ctl\"}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":null,"sortKeys":true}],"output":"{\"u\": \"\\u00e9\", \"v\": \"\\ud834\\udd1e\", \"w\": \"\\u0001ctl\"}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":2,"sortKeys":true}],"output":"{\n  \"u\": \"\\u00e9\",\n  \"v\": \"\\ud834\\udd1e\",\n  \"w\": \"\\u0001ctl\"\n}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":2,"sortKeys":false}],"output":"{\n  \"u\": \"\\u00e9\",\n  \"v\": \"\\ud834\\udd1e\",\n  \"w\": \"\\u0001ctl\"\n}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":4,"sortKeys":true}],"output":"{\n    \"u\": \"\\u00e9\",\n    \"v\": \"\\ud834\\udd1e\",\n    \"w\": \"\\u0001ctl\"\n}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":0,"sortKeys":true}],"output":"{\n\"u\": \"\\u00e9\",\n\"v\": \"\\ud834\\udd1e\",\n\"w\": \"\\u0001ctl\"\n}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":0,"sortKeys":false}],"output":"{\n\"u\": \"\\u00e9\",\n\"v\": \"\\ud834\\udd1e\",\n\"w\": \"\\u0001ctl\"\n}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":-1,"sortKeys":true}],"output":"{\n\"u\": \"\\u00e9\",\n\"v\": \"\\ud834\\udd1e\",\n\"w\": \"\\u0001ctl\"\n}"}
+{"fn":"pyJsonStringify","input":[{"u":"é","v":"𝄞","w":"\u0001ctl"},{"indent":1,"sortKeys":false}],"output":"{\n \"u\": \"\\u00e9\",\n \"v\": \"\\ud834\\udd1e\",\n \"w\": \"\\u0001ctl\"\n}"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":null,"sortKeys":false}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":null,"sortKeys":true}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":2,"sortKeys":true}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":2,"sortKeys":false}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":4,"sortKeys":true}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":0,"sortKeys":true}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":0,"sortKeys":false}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":-1,"sortKeys":true}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[3.5,{"indent":1,"sortKeys":false}],"output":"3.5"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":null,"sortKeys":false}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":null,"sortKeys":true}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":2,"sortKeys":true}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":2,"sortKeys":false}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":4,"sortKeys":true}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":0,"sortKeys":true}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":0,"sortKeys":false}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":-1,"sortKeys":true}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[-0.75,{"indent":1,"sortKeys":false}],"output":"-0.75"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":null,"sortKeys":false}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":null,"sortKeys":true}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":2,"sortKeys":true}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":2,"sortKeys":false}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":4,"sortKeys":true}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":0,"sortKeys":true}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":0,"sortKeys":false}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":-1,"sortKeys":true}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":[1000000,{"indent":1,"sortKeys":false}],"output":"1000000"}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":null,"sortKeys":false}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":null,"sortKeys":true}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":2,"sortKeys":true}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":2,"sortKeys":false}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":4,"sortKeys":true}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":0,"sortKeys":true}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":0,"sortKeys":false}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":-1,"sortKeys":true}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":["trailing ",{"indent":1,"sortKeys":false}],"output":"\"trailing \""}
+{"fn":"pyJsonStringify","input":[{"z":1,"a":2,"m":3},{"indent":null,"sortKeys":true}],"output":"{\"a\": 2, \"m\": 3, \"z\": 1}"}
+{"fn":"pyJsonStringify","input":[{"z":1,"a":2,"m":3},{"indent":2,"sortKeys":true}],"output":"{\n  \"a\": 2,\n  \"m\": 3,\n  \"z\": 1\n}"}
+{"fn":"dumpsSorted","input":[{}],"output":"{}"}
+{"fn":"dumpsSorted","input":[{"a":1}],"output":"{\n  \"a\": 1\n}"}
+{"fn":"dumpsSorted","input":[{"learner":{"alpha":1.5,"counts":{"x":2}},"note":"é State"}],"output":"{\n  \"learner\": {\n    \"alpha\": 1.5,\n    \"counts\": {\n      \"x\": 2\n    }\n  },\n  \"note\": \"\\u00e9 State\"\n}"}
+{"fn":"dumpsSorted","input":[{"list":[3,1,2],"map":{"b":1,"a":2}}],"output":"{\n  \"list\": [\n    3,\n    1,\n    2\n  ],\n  \"map\": {\n    \"a\": 2,\n    \"b\": 1\n  }\n}"}
+{"fn":"dumpsSorted","input":[{"deep":{"deeper":{"deepest":[1.5,null,true]}}}],"output":"{\n  \"deep\": {\n    \"deeper\": {\n      \"deepest\": [\n        1.5,\n        null,\n        true\n      ]\n    }\n  }\n}"}
+{"fn":"emptyState","input":[],"output":{}}
+{"fn":"DEFAULT_STATE_PATH","input":["/home/z"],"output":"/home/z/.local/state/marfim-brain/state.json"}
+{"fn":"resolveStatePath","input":["/explicit/state.json",null,"/home/z"],"output":"/explicit/state.json"}
+{"fn":"resolveStatePath","input":[null,"/tmp/env-state.json","/home/z"],"output":"/tmp/env-state.json"}
+{"fn":"resolveStatePath","input":[null,"","/home/z"],"output":"/home/z/.local/state/marfim-brain/state.json"}
+{"fn":"resolveStatePath","input":[null,null,"/home/z"],"output":"/home/z/.local/state/marfim-brain/state.json"}
+{"fn":"resolveStatePath","input":[null,"relative-env.json","/home/z"],"output":"relative-env.json"}
+{"fn":"resolveStatePath","input":["/only/explicit","/tmp/ignored.json","/home/z"],"output":"/only/explicit"}

@@ -1,0 +1,27 @@
+name: marfim
+description: >-
+  The Marfim mobile surface. The app is a thin Dart shell over the SAME
+  core the CLI runs: libmarfim_ffi.so (built by cargo-ndk from
+  crates/marfim-ffi, gate G14 hygiene) for engine facts, and the W2
+  gateway protocol (contracts/dart, fixtures shared with gate G11) for
+  sessions. Zero behavior drift doctrine (W1.1).
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

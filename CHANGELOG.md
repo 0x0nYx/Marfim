@@ -1,0 +1,1111 @@
+# Changelog
+
+## 1.0.0 — ultra-heavy distillation wave: opencode v2 + OMP(2) + dsh + ECC (2026-11-11)
+
+Four ultra-deep distillation passes over the remaining surveyed harnesses,
+completing the "nothing exclusively available to the source repos" mandate:
+every section of every forensic doc now maps to a decisioned ledger row.
+**303 new decision rows** in `docs/DISTILLATION.md`; script-audited
+completeness (structure + keyword coverage map, audit PASS). No behavior
+change — the tree stays at **880 tests / 0 failed**.
+
+**FINAL-1 hardening wave (same release):** the flood-overflow test in
+`marfim-term` was a real flake — the pending ring re-trips its overflow
+flag under a live flood between `drain()` and the flag check; the test
+now quiesces first. The release workflow was repaired (retired
+`macos-13` replaced by `macos-latest` cross-compiling
+`x86_64-apple-darwin`, `x86_64-pc-windows-msvc` added, unique artifact
+staging fixing the basename collision that made the multi-asset publish
+impossible, `SHA256SUMS` now covers 5 binaries). Supply chain:
+**RUSTSEC-2026-0459** cleared by rusqlite 0.41 (bundled SQLite 3.54.1),
+**RUSTSEC-2025-0134** cleared by migrating the gateway TLS PEM boot to
+`rustls-pki-types::pem::PemObject` (rustls-pemfile removed); the
+unmaintained rhai-transitive `smartstring` carries the tree's ONE
+documented advisory ignore. Gate **G16** (tag == workspace version ==
+CHANGELOG top == README banner) joined the battery.
+
+- **§OC opencode v2 (2.2.5, `1bf08ae`) — 105 rows** (§OC-A…§OC-J): the
+  closest architectural cousin, so much was already held (durable inbox
+  W6.2 lineage, output bounding W5.4, offline catalog snapshot, worktree
+  isolation, hooks, unattended rulesets, CodeMode-off, PTY server).
+  Newly captured: Location layering rule; Safe-Step-Boundary delivery
+  modes with control-item boundaries; settleStale crash recovery;
+  MAX_STEPS forced toolChoice:none; interrupted-stream continuation
+  message; finish=length ×2 continuations; parallel tool dispatch (M);
+  three-trigger compaction with `precompute` head-start + `keep` tail;
+  per-step content-addressed snapshots + staged revert (L — top opencode
+  item left); auth matrix (device/browser/PKCE/azure-cli vs held PKCE+
+  pools); saved "always" replies; managed-settings tier; custom
+  commands/agents markdown discovery; formatters; themes/keymap;
+  `opencode api`; cassette testkit; the v1-removal (LSP/share) lesson.
+- **§OMP2 Oh My Pi second sweep — 87 rows** (§OMP2-A…§OMP2-G): everything
+  the first §R–§X pass did not row — live in-flight steering (M), soft
+  abort signal, aside COMMIT/DISCARD contracts, harmony/DSML leak
+  recovery (M), model-role lattice, auth broker/gateway doctrine,
+  restricted folders, reversible `$$HASH$$` redaction (M), internal URL
+  space, foreign-session import (REJECTED — clean-room), cost gates,
+  prompt-cache sibling-prefix sharing, deferred LSP diagnostics with
+  staleness counters (M — "cheapest high-value IDE-wired-in feature"),
+  DAP 28 actions (L), persistent eval kernels (REJECTED for now),
+  file-mutation queue, tool-choice queue, vibe mode (L), seance (M),
+  advisor/Watchdog reviewers (L), TTSR rulebook, magic keywords
+  (REJECTED — OMP's own "avoid hidden magic" lesson), marketplaces
+  (REJECTED — no runtime network).
+- **§DSH dsh-superagent (`6337fc8`) — 55 rows** (§DSH-A…§DSH-D): beyond
+  the W10.2 adoptions (mandates/effects/outbox/sources/cron/delegation):
+  admission table with explicit-beats-follow-up precedence (S), observe
+  mode "would-accept" recording (S), MasterAssessor read-only assessment
+  tools (M), router no-wait discipline (S), worker slots + human
+  priority lane (S), input read-tracking (S), ticket-end by source
+  reality `followsDone` (M), worker env binding by shims (M), prompt
+  versioning bound to sessions (M), versioned-kv families, paging-stable
+  cursors, panel three-questions + honesty rules (doctrine), SETUP as
+  agent playbook (S), the source-plugin cookbook (S).
+- **§ECC full depth — 56 rows** (§ECC-A…§ECC-D): beyond W10.1
+  (instincts/vault/curator/caps/review) and the §CC delta: hooks as the
+  enforcement layer (held, INV-09); hooks metadata sidecar +
+  fingerprints + drift test (S); GateGuard deny→force→allow first-write
+  fact-forcing (S — highest-value ECC row left, A/B +2.25);
+  config-protection floors (S — "the agent may not weaken its own
+  guardrails"); hookify trust rules (git-tracked rules default-off, 25ms
+  regex timeout); AgentShield harness self-scan (M); santa-loop
+  dual-model + verifier-defaults-refuted (M); pass@k eval kernels (M);
+  research-first + TDD + delegation-completion-contract doctrines;
+  honest capability matrix + curation profile (held as FEATURE-MATRIX/
+  PORT-LEDGER).
+- **Completeness audit**: workspace-side script (G8 keeps the tree
+  single-language) re-walks all four forensic docs §1–§12 against the
+  ledger — 303 rows, 0 missing keyword groups, 0 malformed rows,
+  0 rows without a decision. The DISTILLATION header now lists every
+  source with its section map.
+
+## 1.0.0 — verification & maintenance pass (2026-11-09)
+
+An ultra-rigorous full audit: every mandate gate re-run from a clean
+tree, every documented number re-derived from the code, every CI
+workflow byte-validated. No behavior changes; the tree stays at 880
+tests / 0 failed (PROGRESS.md live count re-verified true).
+
+### Verified green (evidence re-run from clean)
+- `cargo build --workspace` clean; `cargo test --workspace` **880
+  passed / 0 failed** (the ledger's live count holds);
+  `cargo clippy --workspace --all-targets -- -D warnings` zero
+  warnings; `cargo fmt --all -- --check` clean.
+- Gates `scripts/gates.sh`: **11 PASS / 0 FAIL / 2 SKIP** (G12/G13 SKIP
+  honestly — no android toolchain or adb device here, per W0.3
+  semantics a SKIP is never a PASS).
+- Independent G1 re-scan (brace-matched `#[cfg(test)]` strip over all
+  12 crates, 128 src files): exactly one forbidden pattern — the
+  allowlisted `tools_host.rs` startup `expect`, justification and its
+  `every_builtin_registers_cleanly` test verified present.
+- Release artifact: 14,746,848 bytes (< 25 MB budget); `--version` =
+  workspace version (single source, docs-as-test enforced).
+
+### Fixed in this pass
+- **mobile.yml could not parse**: the step name
+  `Size budget (G12: <= 35 MiB)` carried an unquoted `: ` — YAML
+  rejects it, so GitHub refuses the whole workflow and the mobile CI
+  never ran. Quoted; the G12 size check made portable (`wc -c`).
+- **Docs truth sweep** (numbers re-derived from code, not copied):
+  tools are 41 (was "34" — the waves added Terminal/Code/Skill/
+  SessionSearch/Vault/Instinct/Rea); slash commands are 67 (was "~24");
+  presets are 13 with Bedrock/Vertex/Mistral (FEATURE-MATRIX said 20);
+  the models.dev snapshot is 13 providers / 788 models committed
+  offline — NOT "235 / 8,935 live sync + 24h cache" (the catalog never
+  touches the network at runtime, D11; `marfim models` is an offline
+  lister, there is no sync/free subcommand); ARCHITECTURE.md
+  contradicted itself ("six" vs "five" crates) and listed 5 of the 12
+  crates with a stale 6.2 MB size figure — now the full twelve-crate
+  diagram and the measured ≈14.1 MB; AGENTS.md said "six crates" and
+  pointed at unreachable fixture-regeneration scripts — now twelve
+  crates and the honest not-regenerable note (W0.2).
+- Ledger discipline: every number in this entry re-measured at this
+  commit; PROGRESS.md carries the audit row.
+
+## 1.0.0 — W10.2: mandates + effect queue/outbox + source plugins + cron + delegation ledger (2026-11-09)
+
+- **Mandates** (`core::mandates`, dsh policy doctrine): versioned,
+  revocable authorization objects for autonomous work. The gate is
+  DETERMINISTIC with a pinned refusal order (revoked → expired → tool
+  scope → path scope → budget); an advisory LLM assessment is recorded
+  on the outcome and NEVER flips the gate (both directions
+  test-asserted). Amendments create new versions (history preserved);
+  revocation is monotonic and blocks future amendments.
+- **Durable ordered effect queue/outbox** (`marfim-state::effects`,
+  dsh effects/outbox doctrine): STORE-FIRST effects in sqlite (schema
+  v2), STRICT insertion-order execution — nothing runs past a
+  dead-lettered head (the queue stalls honestly); crash recovery
+  replays a claimed head with the attempt count recorded; at 8 attempts
+  a head dead-letters with a receipt-bearing transition; `advance` is
+  the recorded human stall-breaker.
+- **Source plugins** (`core::sources`, dsh architecture): GitHub
+  webhooks (issues/pull_request/push) + Feishu (im.message.receive_v1)
+  normalized into `SourceEvent`s, routed to per-ticket worker specs
+  carrying the UNTRUSTED-WEBHOOK toolset (web_search/web_extract/
+  vision/clarify — never shell/edit); (source, delivery_id) dedupe with
+  a bounded 1024-entry drop-oldest window; unknown sources/kinds fail
+  closed.
+- **Cron** (`core::cronjobs`, Hermes doctrine): the FIVE natural-
+  language schedule forms (`every N minutes|hours`, `daily at HH:MM`,
+  `weekdays at HH:MM`, `weekly on <day> at HH:MM`; everything else
+  fails closed with the forms hint); deterministic UTC civil-date math
+  (Hinnant, no wall clock, no TZ db — documented); paused_reason audit;
+  missed-run catch-up capped at ONE per open; per-job model pinning;
+  `[SILENT]`/`[CRON_FAILURE]` markers. The real `/cron` surface
+  (list/add/pause/resume/run) replaces the old honest stub.
+- **Async delegation ledger** (`marfim-state::delegation`, Hermes
+  async_delegation doctrine): dispatch rows with a 48h replay window
+  (from creation), ≤8 attempts, orphan sweep returning expired leases
+  to the queue, exactly-once settle (a second settle is refused — the
+  result already entered as a turn upstream), honest expiry for
+  unrunnable rows.
+- 880 tests green (was 847).
+## 1.0.0 — W10.1: memory caps + review fork + skills curator + instincts + vault (2026-11-09)
+
+- **Memory caps** (`core::memcaps`, Hermes memory stack): rendered memory
+  surfaces are HARD-CAPPED — project memory at 2200 chars, the user model
+  at 1375. Drop-oldest, whole lines only, the cut announced with an exact
+  marker; under-cap renders stay byte-identical (chars, not bytes).
+- **Memory persistence**: the Memory store now LOADS from
+  `<cwd>/.marfim/memory.json` at session start and SAVES on every mutation
+  (a failed save is visible in the tool result, never silent).
+- **Background review fork** (`core::review`): candidates must cite
+  VERBATIM evidence from the reviewed transcript (read-before-write) and
+  pass the do-not-capture corpus (API keys, bearer tokens, password
+  assignments, private-key blocks — a false refusal costs a memory, a
+  false capture leaks a secret). `/memory review` proposes; `/memory
+  apply <id>` applies ONLY the user-approved proposal.
+- **Skills curator** (`core::curator`): usage-telemetry sidecars
+  (`telemetry.json`, corrupt reads as zero), the Proposed → Active →
+  Retired lifecycle (first invoke activates; the curator retires Active
+  skills unused for 30 days with the reason recorded), and an append-only
+  audit ledger (`audit.jsonl`) with blob backups — a replaced SKILL.md is
+  backed up FIRST and the entry carries the backup name + byte length.
+  New `Skill` tool (list/load) drives the lifecycle.
+- **Instincts** (`core::instincts`, ECC continuous-learning-v2): atomic
+  confidence-scored behaviors — inject at session start (≥0.6),
+  reinforce +0.1 / decay −0.15, auto-retire under 0.2 (recorded, never
+  deleted), promote to a skill proposal at ≥5 hits and ≥0.8. New
+  `Instinct` tool; the store persists at `.marfim/instincts.json`.
+- **Portable memory vault** (`core::memvault`, ECC ecc.memory.v1): the
+  cross-harness import/export format. Untrusted by doctrine: version
+  check exact, size-capped (256 entries × 2000 chars, 256 KiB docs),
+  control-stripped, unknown kinds fail closed with the entry index; import
+  merges through the SAME `remember()` path (RELAX_WORDS promotion intact).
+  New `Vault` tool.
+- **Prompt surfaces** (`PromptSurfaces` on the harness): capped memory +
+  active instincts + active skills inject at session start, each only
+  when non-empty — an empty store keeps the base prompt byte-identical
+  (test-asserted).
+- 847 tests green (was 799).
+
+## 1.0.0 — W9.1+W9.2: exec policy + network enforcement proxy (2026-11-09)
+
+- **`core::execpolicy`** (codex doctrine): allow/prompt/forbidden prefix
+  rules over child argv — longest matching prefix wins, equal-length
+  ties fail closed (forbidden > prompt > allow), no match leaves the
+  decision to the engine floor. Amendment rules apply at load in
+  declaration order; SELF-TESTS pin argv→decision expectations and a
+  policy that cannot prove them refuses to load. Wired into the
+  production host: the policy tightens the engine verdict (deny floor
+  absolute; `prompt` denies an engine-ALLOW — allow rules never clear a
+  prompt). The feature-`starlark` predicate layer is honestly queued:
+  the repo doctrine requires third-party APIs verified from vendored
+  source first.
+- **`core::netproxy`** (codex doctrine): the LOCAL allowlist enforcement
+  proxy — HTTP CONNECT tunnels, absolute-form GET/POST, SOCKS5, all
+  deny-closed against an exact-host/host:port allowlist. Config
+  `sandbox.networkProxy` + `sandbox.networkAllow`; the factory binds
+  before the tools exist (bind failure refuses the start) and injects
+  HTTP(S)_PROXY into every sandboxed child via `Sandbox.extra_env`.
+  Loopback only; tunnels, never inspects.
+- 786 tests green (was 777).
+
+## 1.0.0 — W8 complete: async compaction + ordered strategies (2026-11-09)
+
+- **Ordered strategies** (§C): the compaction stages run in a CONFIGURED
+  order — `[compaction] strategies = ["promote", "micro", "summarize"]`
+  (the default is byte-identical to the pre-W8 hardwired ladder).
+  Unknown stage names and the empty list fail closed; a stage loop
+  reports honestly when nothing reduced.
+- **Async compaction** (§C): past the soft threshold (70% of the
+  trigger) the Small-role summarization pre-starts in the BACKGROUND
+  (one bounded task; lock-free around awaits); the hard-trigger Summarize
+  stage consumes it — usually already complete, zero added latency. A
+  failed background run falls back to the synchronous path. Turns that
+  ran during the background window survive as a protected tail, snapped
+  past orphaned tool results so the wire never sees a tool_result
+  without its call.
+- New `CompactionStarted{background}` bus event (protocol fixtures
+  regenerated byte-identically; TUI why-panel row). The summarizer is
+  extracted as `summarize_via_small(router, history)` over owned state.
+- 777 tests green (was 775).
+
+## 1.0.0 — W7.5: wire breadth — Bedrock, Vertex, Mistral, custom grammar (2026-11-09)
+
+- **Amazon Bedrock** (`providers/bedrock.rs`): clean-room SigV4 signing
+  proven against the LITERAL AWS-documentation vector (the exact
+  Authorization header, signature `5d672d79…` — which caught the
+  canonical-URI slash-encoding bug and pinned single-encoding of the
+  model id). Non-streaming `invoke` reusing the Anthropic Messages body
+  with `stream:false`; the binary AWS event-stream decoder is the honest
+  limitation (one buffered emission, never a fake stream). Credentials
+  ride the W1.3 chain; missing keys fail visibly at build.
+- **Google Vertex** (the FORMER-REJECTS adoption form, OFF until
+  selected): the same Gemini wire with `Authorization: Bearer`;
+  `google-vertex` preset on the regional endpoint; the access token
+  comes from the W1.3 chain or the W7.4 OAuth refresh flow.
+- **Mistral**: one preset on the OpenAI chat-completions dialect — no
+  second wire.
+- **Custom-grammar tools** (the FORMER-REJECTS adoption form):
+  `responses.customTools = true` passes `type:"custom"` tool definitions
+  through the Responses wire verbatim; default OFF keeps the function
+  fallback (byte-identical bodies).
+- Every new wire is cassette-tested against LOCAL mock endpoints only —
+  the suite never touches a vendor host. 775 tests green (was 766).
+
+## 1.0.0 — W7.4: OAuth2 PKCE + credential pools (2026-11-09)
+
+- New `core::oauth`: PKCE per RFC 7636 (verifier/challenge verified
+  against the RFC's own test vector), authorize-URL and token-exchange/
+  refresh builders, a token store with the 60s refresh skew, and a REAL
+  refresh grant against a token endpoint (RFC 6749 §6 refresh-token
+  carry-forward). `OAuthSource` is a W1.3 `CredentialSource`: a seeded
+  refresh token in `[credentials.oauth.<NAME>]` keeps an access token
+  fresh machine-side — a failed refresh never blanks a working token,
+  and no seed + no refresh resolves to nothing (never fabricated). The
+  browser dance is honestly out of scope for a headless harness.
+- Credential pools (the FORMER-REJECT adoption form for in-place key
+  rotation): `[credentialPools.<NAME>] values` (≥ 2, empties refused)
+  expands to one IMMUTABLE snapshot per chain entry — rotation IS the
+  failover walk, no published context ever mutates. Chain precedence:
+  pool snapshot → oauth → env → config → memory.
+- The factory prepares chain materials once, refreshes OAuth tokens in
+  the async context, then builds every chain (primary + small).
+- 766 tests green (was 756).
+
+## 1.0.0 — W7.2: cache-TTL plumbing (2026-11-09)
+
+- New `providers::cache`: `CacheTtl` ("5m"/"1h", wire-string serde,
+  fail-closed parsing), `CacheSettings::from_config` over the new
+  `[cache]` section (`ttl`, `cachedContentName`, `warm` — registered in
+  every config-consumption gate the docs-as-tests enforce).
+- Anthropic wire: `cache.ttl = "1h"` rides the SYSTEM breakpoint only;
+  tools keep plain ephemeral markers; `5m` is omitted (it is the wire
+  default), so bodies without the section stay byte-identical.
+- Gemini wire: `cache.cachedContentName` is sent verbatim as
+  `cachedContent` — the wire carries the reference, the caller owns the
+  cache.
+- TTL-reject ladder: a 400 that names the ttl classifies conservatively;
+  the loop retries the SAME model once with the ttl stripped, then once
+  with every cache marker stripped, before the failover walk (the
+  W7.3 shape rung still fires for non-cache errors — one rung per
+  attempt, ambiguous errors never classify).
+- Bounded warming: `cache.warm = true` fires a 1-token, no-tools,
+  one-try warming ping at most once per session before the first
+  provider step; the outcome lands on the new `CacheWarm` bus event
+  (protocol fixture regenerated byte-identically; TUI why-panel row).
+- 756 tests green (was 745).
+
+## 1.0.0 — W5.3: tree-sitter frontends (feature `treesitter`, default off) (2026-11-09)
+
+- `marfim-tools` grows the `treesitter` feature (DISTILLATION
+  §FORMER-REJECTS adoption form): `repomap_treesitter` extracts
+  definitions from the AST for py/rs/go/js/ts — names come off grammar
+  fields (never re-parsed from text), lines come from node positions.
+  `.ts`/`.tsx` ride the TypeScript/TSX grammars (the JS grammar does not
+  model `interface` — the feature tests caught exactly that), and
+  languages without a compiled-in grammar (java/c/rb) fall back to the
+  regex extractor per file, honestly, via `ExtractMiss{reason}`.
+- `repomap::extract` dispatches: feature on → AST first with honest
+  fallback; feature off → byte-identical default behavior. PageRank and
+  the token-budget cap are untouched. Default release build contains no
+  tree-sitter code (G10 unaffected).
+- 745 tests green (114 default in marfim-tools, 120 with the feature);
+  clippy -D warnings clean in BOTH configurations.
+
+## 1.0.0 — W4.2+W4.3+W4.4: the mobile surface (2026-11-09)
+
+- `apps/flutter`: the Android project (AGP 8.5.2 pinned for 16KiB-page
+  .so packaging, Java-only MainActivity — no Kotlin toolchain, vector-
+  only adaptive icon, minSdk 26/targetSdk 35, arm64-v8a) and the Dart
+  shell: `ffi/bindings.dart` types the four W4.1 symbols with the
+  ownership contract mirrored (panic → envelope, never a crash),
+  `engine.dart` exposes a sealed `EngineState` so the UI can only render
+  what the engine actually answered, and the diagnostics screen shows
+  version + config-probe verdict. No placeholder chat surface (G7):
+  sessions ride the W2 gateway protocol and are the next increment,
+  named as such in docs/DESIGN.md.
+- `.github/workflows/mobile.yml`: ffi-android (G12's exact build + the
+  35MiB budget), dart-contracts (the W2.2 promise honored — the Dart
+  protocol contract tests run in CI), flutter-shell (analyze + widget
+  tests), apk (debug-sign fallback echoed honestly), emulator (dispatch-
+  only; G13's integration suite). docs/ANDROID-FINDINGS.md records the
+  pins, the CI provables, and the honest unknowns (no SDK locally).
+- applicationId `dev.marfim.app` is the OWNER-INPUT #1 documented
+  default; one-line change when the owner confirms.
+- 745 Rust tests green (unchanged — dart/gradle artifacts); gates
+  11/0/2 (G12/G13 SKIP until the CI artifacts exist — the workflow is
+  their activation path).
+
+## 1.0.0 — W4.1: marfim-ffi, the C ABI boundary (2026-11-09)
+
+- New crate `marfim-ffi` (cdylib + rlib): the single sanctioned holder of
+  `unsafe` in the workspace (DISTILLATION §FORMER-REJECTS, panic-
+  containment adoption form). Every other crate root — including
+  marfim-testkit, which was missing it — carries the crate-level
+  unsafe-forbid attribute, and that invariant is now TEST-enforced.
+- Hygiene is structural, not aspirational (tests/ffi_hygiene.rs = gate
+  G14, now ACTIVATED): every `extern "C"` fn wraps its body in
+  `catch_unwind` (a panic surfaces as a recorded last error + null —
+  never crosses the boundary), every `unsafe` block carries a `// SAFETY:`
+  comment in its preceding comment run (scanner cuts at line starts so
+  mid-line matches are checked against the reachable comment run), and
+  doc prose can never satisfy the scan (comment lines are dropped before
+  the extern-fn segment scan).
+- Honest, small surface: `marfim_version` (the single version source,
+  static, never freed), `marfim_config_probe` (validates a config TOML
+  through the SAME core loader + consumed-sections validator the CLI uses
+  — fail-closed, JSON envelope `{"ok":…}`), `marfim_last_error`,
+  `marfim_string_free`. Null and non-UTF8 inputs are honest errors; the
+  probe refuses to be stricter or looser than the binary.
+- 745 tests green (was 737). Gates 11 PASS / 0 FAIL / 2 SKIP (G14
+  activated and green; G12/G13 wait on the W4.2/W4.4 artifacts).
+
+## 1.0.0 — W5.6 complete: tool-declared approval tiers (2026-11-09)
+
+- `permissions::ApprovalTier {Default, AlwaysAsk, NeverAsk}`: the TOOL
+  SPEC declares its own approval contract. `AlwaysAsk` escalates an
+  Allow to an Ask even in Yolo (and fails closed with no listener);
+  `NeverAsk` downgrades a plain mode-based Ask to an Allow. Ordering is
+  pinned by tests: the deny floor is absolute, the W1.4 AppUid
+  force-ask re-escalates AFTER a NeverAsk downgrade (a sandbox
+  attestation is not the tool's to waive), and privacy denies fire
+  first as before.
+- `ToolDef.approval` rides the registry into the host dispatch
+  (`check_with_tier`); the old `check`/`check_with_input` signatures
+  stay as Default-tier wrappers — zero behavior change for every
+  existing builtin.
+- 737 tests green (was 733).
+
+## 1.0.0 — W8 (partial): defrag ledger + context promotion (2026-11-09)
+
+- Defrag ledger (§C, Hermes micro_compaction): a micro-compaction sweep
+  that reclaims <2000 tokens is a FAILURE; at 3 consecutive failures the
+  micro stage is skipped for the rest of the session and the skip is
+  published on the bus. In a two-stage loop every micro failure is
+  immediately followed by full summarization, so the only honest reset is
+  a sweep that actually reclaims ≥2000 tokens — not "any summarization".
+- Context promotion (§C, OMP trigger order): past the trigger math's 85%
+  ceiling with a REAL overflow of the current model's window, a chain
+  sibling with a strictly larger catalog context window takes the next
+  step instead of compacting (promotion is lossless, summarization is
+  not). `catalog::context_of` resolves windows from the committed
+  snapshot; the override rides the existing turn-scoped actuation
+  channel and is validated like any faculty model_select.
+- Cut-point rule noted MOOT for Marfim's architecture (stage 2 replaces
+  the history wholesale — no prefix cut exists); skill-prune markers,
+  shake, async compaction and ordered strategies remain on the wave.
+- 733 tests green (was 731).
+
+## 1.0.0 — W7.3: aux failover rungs + health TTLs (2026-11-09)
+
+- `providers::recovery` (§F, Hermes auxiliary_client): a 400-SHAPE error
+  classifies to the offending parameter — only exact, vendor-documented
+  rejections classify; anything ambiguous NEVER invents a retry — and the
+  loop retries the SAME model once with that parameter stripped
+  (temperature → reasoning → max_tokens) before the failover walk moves
+  on. The rung publishes a bus event naming the stripped retry.
+- Router health TTLs (§F, Hermes auxiliary_health): a success is TRUSTED
+  for 600s then goes stale; every failure carries a 60s transient
+  quarantine floor (a short provider Retry-After cannot shorten it; the
+  ladder still escalates beyond). `health()` / `health_line()` surface
+  trusted/quarantined/unknown per chain entry for the /why surface.
+- Credential-refresh + key-rotation rungs stay QUEUED for W7.4 (no
+  credential pool to refresh against yet); strict-tool capability
+  recovery is MOOT (Marfim never sends `strict: true`).
+- 731 tests green (was 722).
+
+## 1.0.0 — W7.1: model capability registry, adaptive thinking, thought signatures (2026-11-09)
+
+- `providers::capabilities`: the per-model compat registry is COMMITTED
+  TOML DATA (`capabilities.toml`), embedded at compile time, resolved by
+  longest-prefix match over the model id; unknown models keep today's
+  wire behavior byte-identical. A malformed row fails the registry tests
+  (and degrades to defaults at runtime, never a panic).
+- Anthropic wire: rows marked `adaptive` emit `{"type":"adaptive",
+  "budget_tokens"}`; rows marked `mandatory` force a default budget (the
+  `high` rung) even when the user set nothing — the Hermes
+  mandatory-thinking doctrine (§R: fable / opus-5.5).
+- Gemini wire (§R3): `thoughtSignature` is parsed off functionCall
+  parts, carried on `ToolCall`, and replayed VERBATIM on later turns —
+  the replay contract Gemini 3+ enforces.
+- 722 tests green (was 712).
+
+## 1.0.0 — W2.3: three transports — unix socket, TLS (rustls), plain TCP (2026-11-08)
+
+- **unix socket** (`marfim serve --unix <path>`): the full protocol over
+  a `0600` unix socket. A stale SOCKET is reused; a non-socket file at
+  the path is NEVER removed (explicit error). The bearer token stays
+  mandatory — defense in depth on top of filesystem permissions. Proven
+  by unit tests (permissions, refusal, stale reuse, 401/200) and a CLI
+  e2e against the real binary.
+- **optional TLS** (`--tls-cert <pem> --tls-key <pem>`): rustls 0.23
+  with the ring provider (no aws-lc-sys C build), TLS 1.3 + 1.2, ALPN
+  `h2`/`http/1.1`. Boot fails closed on any PEM problem (missing file,
+  empty chain, bad key). A REAL TLS 1.3 handshake e2e (self-signed cert
+  via `openssl req`, client via `openssl s_client`) proves HTTPS serving
+  end to end — skipped honestly when the openssl CLI is absent.
+  Handshake failures kill only their own connection. Release binary
+  11.1 MB with TLS compiled in (< 25 MB budget).
+- Flag registration hygiene: `--unix`/`--tls-cert`/`--tls-key` are in
+  `CONSUMED_FLAGS` (the parsed-but-unread test stays absolute).
+- W2 phase ends: 642 tests green, clippy -D warnings clean, gates
+  10 PASS / 0 FAIL / 3 SKIP, docs/PROTOCOL.md documents all transports.
+
+## 1.0.0 — W2.2: protocol contract — PROTOCOL.md, byte-checked fixtures, Dart tests (2026-11-08)
+
+- **docs/PROTOCOL.md**: the prose contract — security posture (bearer
+  token, Host/Origin gate, 1 MiB caps, timeouts), the SSE envelope (seq
+  semantics, Last-Event-ID resume, pings, terminal markers, the
+  contiguous-seq lag contract), the full route table, config redaction
+  and versioning rules.
+- **fixtures/protocol/{frames,events,routes,errors}.json** — the
+  canonical machine-readable contract, regenerated byte-identically from
+  `marfim_gateway::protocol::fixture_bytes()` (BTreeMap ordering, pretty
+  JSON, no wall-clock). Gate **G11 activated**: the regen test fails on
+  any drift, and a second test proves every fixture error body exists
+  verbatim in the serve source. The serve loop's `sse_data` now
+  delegates to `protocol::sse_data_frame`, so live bytes and fixture
+  bytes share one source by construction.
+- **Dart contract tests** (`contracts/dart`, 12 tests): SSE frame parser,
+  Last-Event-ID resume window semantics, per-kind event catalogue
+  coverage (18 kinds), route/error shape pins, and a structural scan
+  proving the config view carries no credential material. They consume
+  the same fixture files — client and server cannot drift apart. Honest
+  note: no Dart SDK exists in the environment that landed this, so the
+  Dart suite has not been executed here; it runs wherever a SDK exists
+  and in the mobile CI job (W4.4).
+- 636 workspace tests green (was 631); clippy -D warnings clean; gates
+  10 PASS / 0 FAIL / 3 SKIP.
+
+## 1.0.0 — W2.1: protocol routes + SSE envelope (2026-11-08)
+
+### Gateway surface (Protocol v1, first half — W2.2 finishes the contract)
+- **Session command routes** on `marfim serve`: `POST /v1/sessions`
+  (create), `DELETE /v1/sessions/:id` (close), and `POST
+  /v1/sessions/:id/{steer,cancel,undo,rewind,fork,prompt}` + `GET
+  /v1/sessions/:id/events`. Every command flows through the actor's REAL
+  command channel — the HTTP surface never touches harness internals
+  (steer 202 queued, cancel/undo/rewind/fork bounded by a 10s reply
+  timeout, unknown action 404, missing session 404).
+- **SSE envelope**: every data frame on every stream carries `id: <seq>`.
+  Per-session `EventRing` (cap 4096) — a single pump task per hosted
+  session subscribes to the bus, assigns the session's monotonic seqs,
+  retains the replay window and broadcasts to live subscribers, so replay
+  and live delivery share one sequence space. `Last-Event-ID` (header or
+  `?lastEventId=`) replays exactly the missed entries; a bus lag becomes
+  an explicit `ring_lagged` marker (no silent gaps, no duplicates — the
+  resuming client's seq space is contiguous).
+- **Injected route behavior** (`RouteHandlers`): fs/git/mcp routes are
+  wired by the embedding surface, never fabricated by the transport. The
+  gateway answers 501 for an unwired route (honest, fail-closed) instead
+  of pretending. `marfim serve` wires: fs read/list/write through the
+  FULL tool-host path (hooks → permission → sandbox → dispatch), git
+  status/diff/log through the real read-only GitBackend on a blocking
+  thread, mcp listing of actually connected servers. The route
+  permission engine runs asks through the D14 fail-closed denier — an
+  unattended surface can never hang on an approval.
+- **GET /v1/config**: redacted config view (provider/model/routing/
+  sandbox/mcp names). Credential material is structurally absent —
+  redaction happens at the app layer, the gateway never holds secrets.
+- Prompt streams keep their turn-scoped semantics (per-stream seqs;
+  resume belongs to the ring-backed `/v1/events`).
+
+### Tests
+- 631 workspace tests green (was 627): session lifecycle + Last-Event-ID
+  replay against a REAL hosted actor, session command routes, ring
+  seq/cap/replay unit battery, injected-handler 200/400/501 matrix, and
+  the serve e2e now proves fs/list end-to-end + the `id:` envelope on a
+  real turn. clippy -D warnings clean; gates 9 PASS / 0 FAIL / 4 SKIP
+  (G11-G14 await their activating packages).
+
+## 1.0.0 — CI-green: MSRV 1.89, supply-chain clean, race-free tests (2026-11-07)
+
+### Supply chain (cargo audit + cargo deny now exit 0, zero ignores)
+- `cargo update` + targeted bumps clear all 7 advisories without a single
+  documented ignore: quinn-proto 0.11.3→0.11.19 (RUSTSEC-2024-0373,
+  2026-0037/0338/0339/0340/0342), tokio 1.43.1→1.54.1 (RUSTSEC-2026-0386),
+  reqwest 0.12.9→0.12.28 (drops unmaintained rustls-pemfile), lru
+  0.12.5→0.18.5 (RUSTSEC-2026-0253/0002), ratatui 0.29→0.30.2 +
+  crossterm 0.28→0.29 (drops unmaintained `paste` from the tree
+  entirely).
+- **MSRV 1.78 → 1.89**: the advisory-clean tree floors above the old
+  target at every level — quinn-proto ≥0.11.17 (the only builds that fix
+  RUSTSEC-2026-*) declares rust ≥ 1.85, its cluster
+  (rand 0.10 → chacha20 0.10 → cpufeatures 0.3) ships manifests cargo
+  1.78 cannot parse, and the current locked set floors at 1.89
+  (uuid 1.29; ratatui 0.30 and the ICU 2.x chain floor at 1.88).
+  Downgrading any of these would regress a security fix. Security wins
+  over the older floor. CI's MSRV job, `rust-version`, and clippy `msrv`
+  all moved to 1.89; the pinned build toolchain stays 1.99.1.
+
+### Test infrastructure (three CI flake/failure classes fixed at the root)
+- **Race-free temp dirs**: the `temp_dir/{tag}-{pid}` scheme gave every
+  test thread in one process the SAME directory — a parallel test's
+  `remove_dir_all` deleted a sibling's fixtures mid-run (the MSRV-runner
+  failure class). New `marfim-testkit` dev-dependency (pid + per-process
+  monotonic counter) migrated into every test fixture across all six
+  crates; two tests that shared the same tag can no longer collide.
+- **D8 concurrency test is scheduler-proof**: the wall-clock assertion
+  (two 150ms tools must finish under 280ms) failed on loaded CI runners
+  (observed 535ms). Replaced with observed-overlap detection — an atomic
+  high-water mark of concurrent executions inside `ScriptedTools` —
+  which asserts exactly the property under test, independent of machine
+  speed.
+- **Portable Read fixture**: the MCP permission-path e2e read
+  `/etc/hostname` (Linux-only; macOS runners fail). The target is now a
+  test-created file with a portable absolute path.
+- `inv05` now reads the harness's journal path directly instead of
+  scanning a formerly-shared temp directory; `session_host` scratch
+  journals use a file-static counter (the old local `AtomicU64::new(0)`
+  reset on every call, leaving uniqueness to wall-clock nanos).
+
+## 1.0.0 — ECC + Claude Code latest-build distillation (2026-11-07)
+
+Deep-extraction loop against the latest builds (ECC d2ef2680, claude-code
+0ed9469 / npm 2.1.319); every number computed from the artifacts
+(`docs/DISTILLATION.md` §CC, forensic delta sections). Three specs adopted
+clean-room, three+ queued, rejections ledgered.
+
+### Permission engine
+- **Outbound privacy guard** (`core::privacy`, clean-room from the claude
+  code `privacy` mod): a Bash call that BOTH holds the configured
+  `accountEmail` AND names a User-Agent (word family, client-flag pairs,
+  unicode dashes) is refused with no prompt — the address counts
+  as-written, quote-stripped, case-insensitive and one-pass
+  percent-decoded; the address is excised before the UA test; an explicit
+  deny beneath keeps its own reason; allow rules do not clear it. 10
+  new tests (module + engine + end-to-end settings wiring).
+- **`permissions.denyInsteadOfPrompting`** (2.1.319): asks — from rules or
+  mode defaults — become denies and the turn continues; test-asserted no
+  prompt job is queued.
+- Raw shell command text now reaches the engine (`check_with_input`)
+  alongside parsed argv.
+
+### Config integrity
+- Layered config parse errors now name the failing file path; regression
+  test asserts the damaged file is never rewritten (2.1.318 doctrine).
+
+### Docs / evidence
+- `docs/forensic/ecc.md` + `docs/forensic/claude-code.md` delta sections,
+  REA evidence refresh note; FEATURE-MATRIX rows; computed metrics
+  (CHANGELOG entry-type entropy, sdk/binary digests, CLI flag diff).
+
+## 1.0.0 — wires + repomap batch (2026-11-07)
+
+The last two v0.2 roadmap gaps closed with fixture-backed evidence.
+
+### Providers / wires
+- End-to-end SSE goldens for the two remaining wires: native Gemini
+  (`fixtures/wire/gemini-stream.json` — thought parts, functionCall
+  synthesis `fc-N`, tool-call-wins-over-finishReason, thought-token
+  usage folding) and OpenAI Responses
+  (`fixtures/wire/responses-stream.json` — reasoning deltas,
+  output_index-keyed item assembly, terminal-arguments-wins, cached
+  input details). Both replayed over a loopback canned server by
+  `tests/differential.rs` (now 14 tests, 4 new); G4 gate label updated.
+
+### Repo map
+- Symbol extractor precision wave (aider doctrine, still deterministic
+  and dependency-free): Rust modifier ladder (`pub async const unsafe
+  fn`, `pub(crate)`, `extern`) now lands on the keyword; commented
+  declarations (`// fn ghost()`) no longer become symbols; Python
+  `async def`; Go receiver methods (`func (s *Server) Start`) and
+  `type X struct|interface`; TypeScript `interface`/`type`/`export
+  const`/`export default class`. Five new regression tests
+  (marfim-tools: 85 green).
+- Personalized-PageRank ranking + token-budget binary search were
+  already live; tree-sitter grammars stay an honestly-open frontend
+  upgrade (ROADMAP).
+
+### Docs
+- ROADMAP v0.2 status block and FEATURE-MATRIX rows made truthful
+  (gemini/responses wires, repo map PageRank).
+
+## 1.0.0 — distillation batch 2 (2026-11-07)
+
+Hermes v0.23.0 + Oh My Pi v18.18.0 QUEUED specs promoted to ADOPTED
+(ledger: docs/DISTILLATION.md), all wired, bounded, observable,
+reversible, and tested.
+
+### Providers / wires
+- Stream watchdogs in ALL four SSE loops: first-event + idle deadlines
+  (300s each), `PI_STREAM_FIRST_MS`/`PI_STREAM_IDLE_MS` overrides —
+  unparsable or zero values keep the defaults (the watchdog never
+  disables itself). A silent stream is now a hard transport error that
+  the single retry layer can fail over on.
+- Usage de-dup math (OMP openai-shared.ts:526): chat-completions
+  `prompt_tokens` INCLUDES cache components — DeepSeek's
+  hit/miss pair splits exactly, OpenRouter `cache_write_tokens` and
+  OpenAI `cached_tokens` are subtracted from the billed input. The Node
+  golden fixture is updated to the corrected semantics (note recorded
+  in the fixture itself).
+- Anthropic hard cap of 4 cache_control breakpoints (system + last 3
+  tools, deterministic suffix placement) — counting happens at body
+  build, not on the wire's rejection.
+- `prompt_cache_key` reaches the Responses wire (`pc_` + session id,
+  ≤64 chars).
+
+### Loop / harness
+- Denial circuit breaker: 3 consecutive permission denials in a turn
+  inject an anti-retry STOP addendum (once per trip, journaled, reset
+  on success / turn end).
+- Interrupt placeholder healing: an aborted turn closes with the
+  structural `[interrupt: aborted]` marker at the next turn start
+  (echo-poisoning impossible by construction).
+- Memory nudge cadence: every 10th turn the system surface carries a
+  one-line review checkpoint (base prompt byte-identical otherwise).
+- Compaction: token-budget protected tail (2.5% window, clamp
+  [10k, 25k]) EXPANDS the message-count tail; verbatim user-request
+  section (24k/4k caps, newest-first) + recovery footer into the
+  summarizer prompt.
+
+### Permissions / tools
+- Hardline floor corpus (`ShellRisk::Hardline`): recursive protected-
+  root deletes, mkfs, dd to raw devices, fork bombs, shutdown family,
+  chmod 777 on system roots, raw-device redirects — denied BEFORE any
+  rule/mode (floor-before-bypass), per-argv-segment so sequencing
+  cannot smuggle it.
+- Approval provenance: allow-rule-approved executions carry
+  `[auto-approved: allowlist entry rules[N]]`; provenance never decides.
+- `SessionSearch` tool: BM25-lite + quoted-phrase search over the
+  newest 300 journal records (2k-char snippets, deterministic ranking).
+- Read selector grammar: `file:A-B` (1-lead/3-trail `[ctx]` lines),
+  `file:-N`, `file:raw`; non-matching suffixes stay part of the path.
+- Edit ladder rung 4 `fuzzy-dominant`: banded Levenshtein windows,
+  auto-apply only at ≥0.97 similarity AND ≥+0.08 dominance; weaker
+  bands refuse (fail-closed — no mid-edit confirm surface exists).
+
+### TUI
+- `token_rate` header segment: bounded 64-sample ring, chars→tokens,
+  shown only while streaming.
+
+### Step 5 completion (brain → harness)
+- `LearningFaculty` implements the trait `actuations` surface with two
+  Hoeffding-gated powers: `model_select` (candidate must beat the
+  baseline's pessimistic LCB with its own LCB + strictly higher mean —
+  lucky UCB streaks can never promote a worse model) and
+  `permission_tighten` (error-rate LCB > 0.5 over ≥20 attempts, ≤4
+  tools per round). Every actuation is validated/clamped by the loop,
+  journaled with its disposition, and turn-scoped.
+- Trait `why`/`forget` overrides wired; `/why` prints every attached
+  faculty's inspectable state, `/forget` resets them (reversible).
+- Faculty `observe_tool` hook feeds per-tool (attempts, errors) — the
+  tighten evidence stream; the production harness attaches the brain
+  faculty at session build.
+- CancelToken deadline audit documented on the type (OMP split
+  semantics held by construction).
+
+### Step 5 / subagents (batch 3)
+- §G blocked-tool contract: child agents run with whole-tool DENY rules
+  on {Task, TaskOutput, Memory, SessionSearch, Monitor, MonitorKill} —
+  no recursive delegation, no writes to the parent's user model, no
+  reads of the parent's journal, no long-lived monitors. The child's
+  ONE PermissionEngine now serves both the approval queue (asks fail
+  closed) and the tool path (previously two disconnected engines).
+
+### Gates
+- 578 tests green; fmt + clippy -D warnings + scripts/gates.sh (9/9)
+  green. COMMANDS 65 → 67 (docs updated in lockstep).
+
+## 1.0.0 — engineering round 2 (2026-11-06)
+
+### Step 2: MCP wired end-to-end
+- `McpClient` connects per config `mcpServers` — stdio AND streamable
+  HTTP (JSON-RPC POSTs; plain-JSON and SSE-framed responses) — behind
+  the trust gate at session start (config layers are trust-gated, so an
+  untrusted cwd can never contribute servers). Servers that fail to
+  connect are skipped with a warning, never silently.
+- stdio MCP servers spawn with a SCRUBBED environment: an explicit
+  keep-list (PATH/HOME/...) plus config-declared `env` entries —
+  provider keys and ambient secrets never leak into tool servers.
+- Tools register as `mcp__<server>__<tool>` (registry entries with the
+  server's schema) and dispatch through the SAME PermissionEngine path
+  as builtin tools (Execute-class: Ask verdicts surface as approvals).
+- `marfim mcp` serves the builtin catalog and routes EVERY tools/call
+  through the permission engine — the old "requires marfim run"
+  read-only refusal is GONE. Ask verdicts fail closed (stdin is the
+  protocol, so no interactive approver). Server surfaces never make
+  outbound mcpServers connections (self-referencing configs would
+  recurse); sessions compose namespaces.
+- Fail-closed approvers (headless, ACP) now deny through the actor's
+  authoritative Approve command — answering the forwarded job's
+  tombstone responder was a silent no-op that hung every Ask-class tool
+  call (caught by the new e2e).
+- Tests: stub streamable-HTTP server on a loopback socket (connect →
+  tools/list → tools/call), config-shape + env-scrub units, real-binary
+  e2e: Bash denied (permission path), Read executed, and a session
+  connecting a self-hosted `marfim mcp` child (denied without rule,
+  full roundtrip with allow rule).
+
+### Step 1: gateway hardening + SessionHost (security-blocking)
+- `marfim serve` rewritten from a hand-rolled HTTP parser onto hyper 1.x
+  (hyper-util auto connection builder, HTTP/1.1 + SSE). Every gate is
+  fail-closed and covered by tests on a real socket: bearer token
+  MANDATORY (`--token` or auto-generated 128-bit token printed once),
+  constant-time comparison; Origin/Host validation (DNS-rebinding
+  guard, 403 before any body read); 1 MiB header buffer + 1 MiB body
+  cap (declared oversize → 413 unread); header-phase timeout
+  (`header_read_timeout` + `timer`), time-boxed body collection, SSE
+  pings + hard stream lifetime. Content-Length 10^12, slowloris
+  dribbles, and malformed binary garbage are proven to kill only their
+  own connection — the listener keeps serving.
+- `SessionHost` added in `marfim-core`: owns every SessionActor
+  (create/get/list/close, snapshots), construction injected by the
+  binary crate. serve, acp, headless text/json/stream-json and tui all
+  build their sessions through it. The REPL keeps direct actor
+  ownership (documented decision: slash dispatch needs the concrete
+  `ToolCtx`, which core's host cannot type without inverting the tools
+  dependency).
+- serve endpoints are REAL: `/v1/prompt` streams a real turn (SSE, ends
+  with the actor's true StopReason), `/v1/approvals` + `POST
+  /v1/approvals/:id` resolve REAL pending approvals (routed through the
+  actor's authoritative Approve command; ApprovalRequested/Resolved are
+  now published on the session bus), `/v1/sessions`, `/v1/sessions/:id`
+  and `/v1/tools` (real registry catalog) are live.
+- ACP: the `marfim received:` echo is DELETED. `marfim acp` runs real
+  journaled turns on per-ACP-session SessionActors, streaming
+  session/update notifications (agent_message_chunk, tool_call,
+  tool_call_update) and answering with real stop reasons.
+- e2e per surface: real-binary healthz + 401 assertions; gateway e2e
+  drives a scripted mock-provider tool call through the permission
+  engine → pending approval on /v1/approvals → HTTP resolution → tool
+  executes → turn ends over SSE; a real-binary ACP stdio session runs a
+  mock-provider turn end-to-end.
+- `spawn_session` now returns `(SessionHandle, approval receiver)` so
+  hosts own approval intake explicitly; SessionSnapshot gained
+  denied_tools/executed_tools (D12 exit codes work through the actor).
+
+### Step 0: baseline
+- `rust-toolchain.toml` pins the workspace to 1.99.1 (clippy + rustfmt
+  components included); CI installs exactly this toolchain for the main
+  gate job.
+- CI repaired and extended: the `push` trigger was `branches: ain]` (a
+  malformed literal), so CI had never run on main pushes — now
+  `branches: [main]`; new jobs: pinned-toolchain gate (ubuntu+macos:
+  fmt, clippy -D warnings, tests, release size budget), MSRV(1.78)
+  job (`cargo +1.78 test --all` + binary build), `cargo deny check`
+  (deny.toml: licenses/bans/RustSec v2, yanked=deny), `cargo audit`.
+- `crates/marfim-tools/src/patch.rs`: `find_offset` rewritten with
+  `find_map`/`find` (clippy `manual_find`), behavior identical.
+- Deleted `marfim-core::compact::summarize_via` and its private runtime
+  bridge — no production callers, and the nested
+  `block_on`-inside-runtime construction can panic under an outer
+  runtime. (Compaction runs through the loop's own async path.)
+- MSRV(1.78) made real: the lockfile was un-buildable on 1.78 (several
+  transitive crates moved to edition 2024 / rustc 1.82-1.89). Pinned
+  to the newest 1.78-compatible versions: clap 4.5.23, reqwest 0.12.9,
+  quinn 0.11.3 (drops the cpufeatures 0.3 chain), rand 0.8.8, zeroize
+  1.8.1, indexmap 2.7.1, toml 0.8.20, toml_edit 0.22.24, winnow
+  0.7.11, serde 1.0.219, serde_json 1.0.140, proc-macro2 1.0.94,
+  quote 1.0.40, hyper-util 0.1.10, hyper-rustls 0.27.5, instability
+  0.3.7, tokio 1.43.1, tokio-util 0.7.13, unicode-segmentation 1.12.0,
+  utf8_iter 1.0.4, uuid 1.11.0.
+- `marfim-brain` code brought back onto 1.78: `LazyLock` ->
+  `OnceLock` (confusables), `is_none_or` -> `match` (sketch, spellfix),
+  `as_chunks::<4>` -> index math (dp SHA-256 message schedule). All
+  semantics unchanged; differential fixtures still replay byte-exact.
+- `clippy.toml` sets `msrv = "1.78"` for the toolchains that honor it.
+- Decision (inputs): ORACLE_NODE = the Node marfim v1.2.0 tree,
+  preserved locally (`preserved/oracle`, also fetchable as tag
+  `archive/node-v1.2.0` from the preservation bundle in
+  `0x0nYx/marfim-archive`). PY_INTEL = https://github.com/0x0nYx/caelestia-assistant
+  (public; 478 Python files; `assistant/core/*.py` matches the
+  `Python origin:` headers embedded in the oracle's `src/intel`).
+
+### 1.0.0 baseline — one binary, one brain (2026-11-05)
+
+The terminal 1.0.0: a single Rust workspace, a single static `marfim`
+binary, and the intelligence modules ported differentially from the Node
+oracle. 501 tests green across 6 crates. This hardening pass also made
+the P1 gateway contract real (hyper + SessionHost + token auth), applied
+config truth to the wire, and replaced doc claims with docs-as-tests. The
+Python harness and its test suite are gone
+(the porting reference lives in git history under the `archive/` tags
+and in the preservation bundles).
+
+### The brain (P4)
+- `marfim-brain`: 18 intelligence modules ported 1:1 from the Node
+  oracle (adwin, conformal, abers, conservative, ensemble, dp,
+  confusables, dedupe, fts, phonetics; minhash, pooling, ranking,
+  regret, sketch, spellfix, state; blake2b per RFC 7693) — every module
+  validated by JSONL fixtures generated by RUNNING the oracle under
+  node; byte-exact ints/strings, <=1 ulp floats. 17 differential suites.
+- Faculty hooks in the loop: pre_model / pre_tool (may deny with a
+  verbatim reason) / post_step (ADWIN drift + conformal risk + regret
+  audit) / pre_compaction (bounded salience protection) / idle_propose
+  (propose-approve — never silent execution). Every hook call is
+  published as a faculty_hook event (the /why surface). Learning state
+  is local, bounded, inspectable, and /forget-reversible.
+
+### Session actor (P2)
+- One task per session owns the harness; Prompt/Steer/Cancel/Approve/
+  Undo/Rewind/Fork/Snapshot commands; journal-backed turn-level
+  undo/rewind with audit tails; fork with provenance records on both
+  journals; --resume rebuilds history from the journal.
+
+### Provider mesh (P3)
+- Gemini preset (OpenAI-compatible endpoint); 9 presets total.
+- Offline models.dev catalog snapshot (versioned, committed; zero
+  runtime network) pricing every known model honestly.
+- UCB1 bandit routing (--routing bandit) over observed per-model
+  outcomes; chain order remains the default.
+- ACP handshake fixtures; fs errors name the path.
+
+### Sandbox (P5)
+- Landlock (Linux) fail-closed filesystem containment via the safe-API
+  crate: reads+exec everywhere, writes only under configured roots; an
+  unsupported kernel REFUSES to run the child (exit 84) instead of
+  running it free. Seatbelt profile generator (macOS).
+- Symlink-aware path containment; deny>ask>allow order-independence and
+  per-shell-segment policy regression battery.
+
+### TUI (P6)
+- `marfim tui`: the session actor's first real UI — streaming
+  transcript with tool cards, approval modal with risk badge, session/
+  context meters, why panel, NO_COLOR, 12 TestBackend snapshots.
+
+### Hygiene (P1 remainder, P7)
+- Real Ctrl-C graceful cancel (the dropped-future deadlock found by the
+  new e2e), per-step compaction semantics pinned by tests, TurnEnded
+  exactly-once on every stop path.
+- Workspace version 1.0.0, MIT everywhere, Python deleted, CI on
+  ubuntu+macos (fmt, clippy -D warnings, tests, 25 MB size gate),
+  release workflow ships static binaries + SHA256SUMS.
+
+
+## 0.3.0 — the Rust wave (2026-11-05)
+
+The Marfim core is rewritten in Rust: a Cargo workspace of five crates
+(`marfim-core`, `marfim-tools`, `marfim-mcp`, `marfim-gateway`, `marfim`),
+`#![forbid(unsafe_code)]` in every crate. **170 tests green** across the
+workspace, including a differential suite replaying Node v1.2.0 wire
+goldens (see `PARITY.md` for the item-by-item checkpoint). The Python
+harness remains in this release and keeps working; deletion is gated on
+the owner sign-off (Phase 5).
+
+### marfim-core (Phase 1)
+- Event bus (broadcast, JSON-serializable — drives stream-json + SSE).
+- Append-only session journal: fsync per record, crash-recovery replay,
+  rewind with `.pre-rewind` audit tail.
+- Agent loop with the invariant set: steering drains only after a full
+  tool-result batch (INV-02); verify fires only on no-tool-call steps
+  after mutations with a feedback budget (INV-01); unparseable
+  tool-call JSON is re-requested, never executed (INV-03); a single
+  retry layer at the transport — 429/408/409/5xx + network errors,
+  `Retry-After` honored, other 4xx never retried (INV-06); per-role
+  router with failover, real-model usage ledger, unknown pricing fails
+  closed (INV-05); compaction failure is an explicit stop (INV-07).
+- Permission engine: deny > ask > allow then mode; argv-level shell
+  analysis (quote-aware tokenizer; heredoc/`$()`/backticks/process
+  substitution can NEVER ride an allow past ask; compound/`&&`/`;`/`|`
+  segments checked individually); single serialized approval queue with
+  fail-closed when no listener; env allowlist for subprocesses.
+- Hooks: PreToolUse fail-closed (spawn error, non-zero exit, timeout and
+  bad JSON all block the tool), PostToolUse best-effort.
+- Sandbox: `unshare(1)` availability PROBED by running it (containers
+  EPERM it), process-group spawn + TERM→KILL tree teardown, sanitized env.
+- Strict config: unknown keys error with Levenshtein did-you-mean.
+- Skills (SKILL.md frontmatter, `.marfim/skills` + `.claude/skills`),
+  memory store whose entries can only TIGHTEN safety (relaxation
+  attempts are stored AS constraints; deletion needs explicit confirm),
+  Guardian rule engine with denial cap + kill-switch, evidence ledger,
+  TTL message board, trust store (longest-prefix).
+
+### marfim-tools (Phase 2)
+All 34 Node v1.2.0 tool names (PARITY §4): Read/Write/Edit (exact →
+line-anchored → whitespace-flexible ladder; identifier-fuzzy matching
+rejected, bug-compat #3)/MultiEdit (all-or-nothing)/Glob/Grep/LS/Bash
+(timeout, process-group kill, output cap)/BashOutput/KillShell/
+ApplyPatch/ApplyDiff (unified diff parser with ±1/2/4/8 fuzz and
+trim-matched fallback)/TodoWrite/Think/EnterPlanMode/ExitPlanMode/
+NotebookEdit/RepoMap (heuristic symbol extractor: py/rs/go/js/ts/java/c/
+cpp/rb; reference-count ranking)/Memory/Compute (recursive-descent
+evaluator)/ToolSearch/Task/TaskOutput/WebFetch (SSRF guard: DNS resolve
+→ block loopback/private/link-local/CGNAT/metadata IPs; https-only;
+redirect re-validation; 2 MiB cap)/WebSearch (honest error without an
+API key)/Monitor/MonitorKill/BinInfo/BinStrings/BinHexdump/BinSqlite/
+AstQuery/Eval/JsModuleGraph.
+
+### marfim-mcp (Phase 2)
+MCP client (stdio, initialize handshake, tools/list → `server__tool`
+namespacing, tools/call) and MCP server (exposes the marfim catalog;
+read-only tools execute, execution-class tools refuse without the
+interactive host).
+
+### marfim-gateway (Phase 2)
+- `serve`: hand-rolled HTTP/1.1 + SSE — /healthz, /v1/events,
+  /v1/prompt, /v1/sessions, /v1/approvals/:id, /v1/tools.
+- ACP agent over stdio (initialize, session/new, session/prompt with
+  session/update notifications, session/set_mode, fs/read_file,
+  fs/write_file) accepting both Content-Length and newline framing.
+- ACP client + external agent catalog (`opencode` → `opencode acp`,
+  `hermes` → `hermes-agent acp`): per the no-invention rule every
+  profile ships `enabled=false verified=false` until the owner runs the
+  binaries.
+- LSP server (initialize, didOpen/didChange, completion with the full
+  slash-command set, publishDiagnostics TODO/FIXME + long lines).
+
+### marfim (CLI, Phase 2)
+`marfim -p "..." --output-format text|json|stream-json` (claude-code
+compatible contracts), interactive REPL with the full 65-command slash
+surface + `q`/`?` aliases + `.marfim/commands/*.md` discovery, subcommands
+`serve` `acp` `lsp` `mcp` `doctor` `agents` `sessions`, Node v1.2.0 flag
+parity (`--model/-m --provider --resume --permission-mode --cwd/-C
+--title --profile --budget --failover --glob --on-fail --debounce
+--port --host --token --max-mode --var --days`).
+
+### Performance
+Release binary: **6.4 MB** (budget <25 MB). tokio runtime idles well
+under the 80 MB core RAM budget.
+
+### Dependencies (workspace) — justification per the minimal-deps rule
+- `tokio` — async runtime: every surface (providers, gateway, sandbox,
+  MCP) is IO-bound; the de-facto standard, no fork risk.
+- `reqwest` (default-features off, `rustls-tls`) — provider HTTP +
+  WebFetch; rustls avoids the OpenSSL toolchain dependency.
+- `serde` + `serde_json` — wire/session/config serialization; non-negotiable.
+- `clap` (derive) — CLI arg surface with Node-flag parity; hand-rolling
+  an arg parser invites drift.
+- `thiserror` — error enums without boilerplate; proc-macro only at
+  compile time.
+- `futures-util` — SSE byte-stream consumption (`bytes_stream`).
+- `regex` — Grep tool + lint diagnostics + html stripping; a regex
+  engine is part of the product surface (Node used ripgrep internally).
+- `async-trait` — `Provider`/`ToolHost` async traits (pre-1.75-stable
+  AFIT ergonomics; revisit when RPITIT covers object-safety needs).
+- Tree-sitter was evaluated for RepoMap/AstQuery and DEFERRED: the
+  grammars cost ~30 MB of binary size against the 25 MB budget; the
+  heuristic extractor covers 9 languages and AstQuery stays honestly
+  disabled (see PARITY §4).
+
+### Intentional divergences (bug-compat rejected — PARITY §10)
+1. Truncated tool-call JSON is never handed to tools (Node recorded a
+   `{__parseError}` sentinel into transcripts; Rust re-requests).
+2. Steer-handoff aborts journal the partial assistant message with
+   `stop_reason: aborted` (Node dropped it; accounting stayed exact).
+3. Edit ladder stops at line-anchored matching (Node's ApplyDiff could
+   fuzzy-match across identifier casing; unsafe).
+
+
+## 0.2.0 — the safety wave (2026-11-03)
+
+Full 34-finding security & correctness review executed. Every finding has a
+regression test (`python3 -m unittest discover -s tests`, 115+ tests).
+
+### P0 — the safety system now works
+1. **CLI bypass fixed**: `approve_all: False` no longer flips bypass on every
+   invocation; `--mode` and `-y` are honored independently.
+2. **Project-config trust gate** (`marfim trust add|list|revoke`): an
+   untrusted repo's `.marfim/config.toml` may only TIGHTEN (deny/ask rules);
+   its hooks, mcp_servers, providers, mode, allow, sandbox, protect_configs
+   and project skill dirs are ignored until the user trusts the file
+   (sha256-keyed trust store at `~/.marfim/trust.json`). Ported from the
+   archived Node tree's `trust.js` design.
+3. **patch/multi_edit under protection**: paths are parsed out of the patch
+   DSL and every target is permission-checked; prompts show every path.
+4. **Plan-mode bash is actually read-only**: real shell-lexer check, shell
+   operators and substitutions rejected, per-command flag allowlists,
+   `find`/`git branch`/`echo`/`python -c` removed.
+5. **Background bash** goes through execpolicy + sandbox, is capped (8 jobs),
+   and logs to 0600 files.
+6. **"Always allow" grants are exact commands** (no prefix globs), compound
+   commands must match EVERY segment, and interpreters/shells/sudo/curl/git
+   are never auto-granted.
+7. **grep option injection closed**: `rg -e <pattern> -- <path>`; rg errors
+   (exit 2) surface instead of "(no matches)".
+8. **bypass respects deny rules and config protection**.
+9. **Path containment**: secret-like paths (.ssh, .env, .aws, .git/config,
+   the Marfim home, the session dir) are denied in every mode; writes must
+   stay inside the workspace; the global Marfim config is protected.
+10. **Sandbox fails closed**: a requested-but-missing backend is a hard error
+    (`sandbox_required=false` is the explicit opt-out); self-defense ro-binds
+    for `.git/hooks`, `.git/config`, `.marfim/`, `MARFIM.md`; children run
+    with a scrubbed environment; the `network` config key is wired.
+11. **Malformed configs refuse to run** (loud error, exit 2) instead of
+    silently dropping the safety settings.
+
+### P1 — data loss, silent edits, loop & session
+12. outdent strategy applies the replacement (re-based indentation).
+13. the destructive `nearest` fuzzy strategy is REMOVED — near-misses are
+    reported as hints, never applied; no fuzzy application with replace_all.
+14. ambiguous `old_string` errors with the match count.
+15. `write` validates arguments against the tool schema, requires read
+    evidence for existing files, and is atomic (temp + os.replace, mode kept).
+16. stale-read rejection is real: (mtime_ns, sha256) evidence per file.
+17. encoding/newline round-trip: CRLF stays CRLF, latin-1 files survive
+    byte-for-byte, mixed-endings files are refused.
+18. glob/repomap prune ignored dirs during the walk (a project path
+    containing `build` no longer returns "(no matches)").
+19. tool-call JSON parses leniently (raw newlines, trailing commas); parse
+    failures surface as parse errors.
+20. interrupts leave NO dangling tool calls (synthetic results on every exit
+    path).
+21. compaction and /clear survive resume (single `compact` record, replayed).
+22. compaction cuts on turn boundaries; failed/empty summaries keep history.
+23. context windows are provider-qualified, cached, network-free in the loop.
+24. provider layer: `reasoning_content` separated from answers, mid-stream
+    errors raise, no-index tool-call deltas keyed by id, transport errors
+    wrapped, Anthropic prompt-cache breakpoints + cache-write accounting,
+    configurable max_tokens, volatile env moved out of the system prompt.
+25. subagents: spawn cwd honored, worktrees live outside the repo and are
+    removed with a mergeable diff, role prompts + memory injected,
+    role-restricted permission engines (bypass cannot leak), shared
+    stop_event.
+26. todo state updates memory and file together.
+27. repomap: no None-group crashes, indented symbols visible, .kt/.dart/
+    .cc/.cxx/.hpp/.mjs supported.
+28. REPL has ONE input owner; five prompts sent 1s apart in a real pty get
+    five replies (regression-tested).
+29. mid-turn steering and Ctrl-C actually work (turns run in a worker thread;
+    SIGINT sets stop_event instead of killing the REPL).
+30. `marfim mcp add` works (TOML-escaped, duplicate-safe, auto-trusts the
+    user's own edit).
+31. dead bits revived: SessionStart/Stop hooks fire, home MARFIM.md is used,
+    --session-name honored, exit code 2 returned on permission denial,
+    Tool.readonly drives the engine, /undo matches only Marfim-authored
+    commits, /model only treats known providers as providers, session rm
+    cleans snapshots, rewind handles absolute paths and DELETES files the
+    agent created, session files are 0600.
+
+### P2 — MCP, hooks, web
+32. MCP: server-initiated requests answered (ping/roots/list), stderr drained
+    in a thread, dead servers marked dead, pagination followed with a
+    loop-guard, tools/list_changed honored, parallel startup, per-call
+    timeouts, provider-safe tool names, structuredContent preserved, scrubbed
+    child env, thread-safe pending map. **New: streamable-HTTP transport**
+    with per-server auth headers.
+33. PreToolUse hooks fail CLOSED (timeout ⇒ deny) and run with scrubbed env.
+34. webfetch: SSRF guard (private/loopback/link-local/metadata ranges denied,
+    re-checked per redirect hop, credentials in URLs refused).
+
+### §4 — unified intelligence
+- **Model router**: role → ordered provider/model candidates with 429/5xx
+  failover, per-role dollar budgets, and a capabilities record (tools are
+  never sent to a model that cannot take them).
+- **MCP as universal adapter**: HTTP transport + readOnlyHint-driven
+  permission tier.
+- **External agents as backends**: `[external_agents]` runs opencode / codex
+  / claude-code / hermes headlessly inside their own worktree with a
+  stream-json normalizer; the Marfim loop stays the control plane.
+- **Parallel subagents**: consecutive `task` calls run in a bounded thread
+  pool with cancellation.
+- **Verify tool**: `verify.commands` from the trusted config run in the
+  sandbox; failures feed a reflection loop bounded by `reflection_cap`.
+
+## 0.1.0 — initial clean-room release
+
+Unified harness synthesized from forensic analysis of opencode v2, Codex,
+Goose, Aider, Claude Code, Hermes, Oh My Pi, dsh-superagent, REA and ECC.
+Python 3.11+, stdlib-only core.

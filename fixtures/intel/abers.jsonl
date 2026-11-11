@@ -1,0 +1,55 @@
+{"input":{"op":"abers.isotonic_fit","name":"already-monotone","pairs":[[0.1,0.1],[0.2,0.2],[0.3,0.3],[0.4,0.4]],"weights":null},"output":[[0.1,0.1],[0.2,0.2],[0.3,0.3],[0.4,0.4]]}
+{"input":{"op":"abers.isotonic_fit","name":"violator","pairs":[[0.1,0.8],[0.2,0.2],[0.3,0.9],[0.4,0.1]],"weights":null},"output":[[0.1,0.5],[0.2,0.5],[0.3,0.5],[0.4,0.5]]}
+{"input":{"op":"abers.isotonic_fit","name":"ties","pairs":[[0.5,0.2],[0.5,0.8],[0.5,0.5],[0.6,0.1]],"weights":null},"output":[[0.5,0.2],[0.5,0.46666666666666673],[0.5,0.46666666666666673],[0.6,0.46666666666666673]]}
+{"input":{"op":"abers.isotonic_fit","name":"weights","pairs":[[0.1,0.9],[0.2,0.1],[0.3,0.8],[0.4,0.2]],"weights":[3,1,1,1]},"output":[[0.1,0.6333333333333334],[0.2,0.6333333333333334],[0.3,0.6333333333333334],[0.4,0.6333333333333334]]}
+{"input":{"op":"abers.isotonic_fit","name":"weights-zero-dropped","pairs":[[0.1,0.9],[0.2,0.1],[0.3,0.8],[0.4,0.2]],"weights":[2,0,1,1]},"output":[[0.1,0.45],[0.3,0.5],[0.4,0.5]]}
+{"input":{"op":"abers.isotonic_fit","name":"weights-negative-dropped","pairs":[[0.1,0.9],[0.2,0.1],[0.3,0.8]],"weights":[1,-0.5,2]},"output":[[0.1,0.8333333333333334],[0.3,0.8333333333333334]]}
+{"input":{"op":"abers.isotonic_fit","name":"weights-mismatch","pairs":[[0.1,0.9],[0.2,0.1]],"weights":[1,2,3]},"output":{"error":"weights must match pairs"}}
+{"input":{"op":"abers.isotonic_fit","name":"empty","pairs":[],"weights":null},"output":[]}
+{"input":{"op":"abers.isotonic_fit","name":"single","pairs":[[0.7,0.3]],"weights":null},"output":[[0.7,0.3]]}
+{"input":{"op":"abers.isotonic_fit","name":"single-zero-weight","pairs":[[0.7,0.3]],"weights":[0]},"output":[]}
+{"input":{"op":"abers.isotonic_fit","name":"descending-all","pairs":[[0.9,0.1],[0.7,0.2],[0.5,0.3],[0.3,0.4]],"weights":null},"output":[[0.3,0.24999999999999997],[0.5,0.24999999999999997],[0.7,0.24999999999999997],[0.9,0.24999999999999997]]}
+{"input":{"op":"abers.isotonic_fit","name":"constant-y","pairs":[[0.1,0.5],[0.2,0.5],[0.3,0.5]],"weights":null},"output":[[0.1,0.5],[0.2,0.5],[0.3,0.5]]}
+{"input":{"op":"abers.isotonic_fit","name":"duplicate-scores-weights","pairs":[[0.4,1],[0.4,0],[0.4,1]],"weights":[1,1,1]},"output":[[0.4,0.5],[0.4,0.5],[0.4,1]]}
+{"input":{"op":"abers.isotonic_predict","name":"below-first","steps":[[0.1,0.5],[0.2,0.5],[0.3,0.5],[0.4,0.5]],"x":0.05},"output":0.5}
+{"input":{"op":"abers.isotonic_predict","name":"first","steps":[[0.1,0.5],[0.2,0.5],[0.3,0.5],[0.4,0.5]],"x":0.1},"output":0.5}
+{"input":{"op":"abers.isotonic_predict","name":"between","steps":[[0.1,0.5],[0.2,0.5],[0.3,0.5],[0.4,0.5]],"x":0.25},"output":0.5}
+{"input":{"op":"abers.isotonic_predict","name":"above-last","steps":[[0.1,0.5],[0.2,0.5],[0.3,0.5],[0.4,0.5]],"x":0.9},"output":0.5}
+{"input":{"op":"abers.isotonic_predict","name":"exact-mid","steps":[[0.1,0.5],[0.2,0.5],[0.3,0.5],[0.4,0.5]],"x":0.3},"output":0.5}
+{"input":{"op":"abers.isotonic_predict","name":"empty-steps","steps":[],"x":0.5},"output":0.5}
+{"input":{"op":"abers.isotonic_predict","name":"single-step","steps":[[0.5,0.42]],"x":0.1},"output":0.42}
+{"input":{"op":"abers.venn_abers","name":"inside","calib":[[0.1,0],[0.2,0],[0.4,1],[0.6,1],[0.8,1],[0.9,0]],"testP":0.5},"output":[0.5,0.8,0.65]}
+{"input":{"op":"abers.venn_abers","name":"low","calib":[[0.1,0],[0.2,0],[0.4,1],[0.6,1],[0.8,1],[0.9,0]],"testP":0.05},"output":[0,0.3333333333333333,0.16666666666666666]}
+{"input":{"op":"abers.venn_abers","name":"high","calib":[[0.1,0],[0.2,0],[0.4,1],[0.6,1],[0.8,1],[0.9,0]],"testP":0.95},"output":[0.6,1,0.8]}
+{"input":{"op":"abers.venn_abers","name":"boundary","calib":[[0.1,0],[0.2,0],[0.4,1],[0.6,1],[0.8,1],[0.9,0]],"testP":0.4},"output":[0.5,0.8,0.65]}
+{"input":{"op":"abers.venn_abers","name":"duplicate-score","calib":[[0.1,0],[0.2,0],[0.4,1],[0.6,1],[0.8,1],[0.9,0]],"testP":0.2},"output":[0,0.8,0.4]}
+{"input":{"op":"abers.venn_abers","name":"single-pair","calib":[[0.5,1]],"testP":0.5},"output":[0.5,1,0.75]}
+{"input":{"op":"abers.venn_abers","name":"empty-calib","calib":[],"testP":0.7},"output":[0,1,0.5]}
+{"input":{"op":"abers.wcq","name":"unweighted","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":null,"alpha":0.1},"output":0.93}
+{"input":{"op":"abers.wcq","name":"unweighted-alpha-25","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":null,"alpha":0.25},"output":0.8}
+{"input":{"op":"abers.wcq","name":"weighted","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":[1,1,1,1,1,1,1,1],"alpha":0.1},"output":0.93}
+{"input":{"op":"abers.wcq","name":"weighted-skew","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":[4,1,1,1,1,1,1,1],"alpha":0.1},"output":0.93}
+{"input":{"op":"abers.wcq","name":"weighted-tiny-alpha","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":[1,1,1,1,1,1,1,1],"alpha":0.001},"output":0.93}
+{"input":{"op":"abers.wcq","name":"weighted-heavy-alpha","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":[1,1,1,1,1,1,1,1],"alpha":0.9},"output":0.12}
+{"input":{"op":"abers.wcq","name":"weighted-zero-tail","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":[1,1,1,1,1,1,1,0],"alpha":0.1},"output":0.93}
+{"input":{"op":"abers.wcq","name":"too-few","scores":[0.1,0.2,0.3,0.4],"weights":null,"alpha":0.1},"output":null}
+{"input":{"op":"abers.wcq","name":"zero-total-weight","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":[0,0,0,0,0,0,0,0],"alpha":0.1},"output":null}
+{"input":{"op":"abers.wcq","name":"bad-alpha","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":null,"alpha":0},"output":{"error":"alpha in (0, 1)"}}
+{"input":{"op":"abers.wcq","name":"bad-alpha-high","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":null,"alpha":1},"output":{"error":"alpha in (0, 1)"}}
+{"input":{"op":"abers.wcq","name":"weights-mismatch","scores":[0.12,0.4,0.55,0.61,0.8,0.93,0.27,0.71],"weights":[1,1],"alpha":0.1},"output":{"error":"weights must match scores"}}
+{"input":{"op":"abers.ece","name":"perfect","scores":[0.1,0.2,0.8,0.9],"outcomes":[0,0,1,1],"bins":5},"output":0.14999999999999997}
+{"input":{"op":"abers.ece","name":"inverted","scores":[0.1,0.2,0.8,0.9],"outcomes":[1,1,0,0],"bins":5},"output":0.8500000000000001}
+{"input":{"op":"abers.ece","name":"one-bin","scores":[0.2,0.4,0.6,0.8],"outcomes":[0,1,1,1],"bins":1},"output":0.25}
+{"input":{"op":"abers.ece","name":"ten-bins","scores":[0.05,0.15,0.25,0.35,0.45,0.55,0.65,0.75,0.85,0.95],"outcomes":[0,0,0,1,0,1,1,1,1,1],"bins":10},"output":0.28}
+{"input":{"op":"abers.ece","name":"boundary-one","scores":[1,1,0.999],"outcomes":[1,0,1],"bins":5},"output":0.3330000000000001}
+{"input":{"op":"abers.ece","name":"boundary-zero","scores":[0,0,0.001],"outcomes":[0,1,0],"bins":5},"output":0.33299999999999996}
+{"input":{"op":"abers.ece","name":"clamped","scores":[-0.5,1.5,0.5],"outcomes":[0,1,1],"bins":4},"output":0.16666666666666666}
+{"input":{"op":"abers.ece","name":"empty","scores":[],"outcomes":[],"bins":5},"output":0}
+{"input":{"op":"abers.ece","name":"skewed-bins","scores":[0.11,0.13,0.15,0.17,0.19],"outcomes":[1,0,1,0,1],"bins":5},"output":0.44999999999999996}
+{"input":{"op":"abers.report","name":"ten-rows-folds-4","rows":[[0.1,0],[0.2,0],[0.3,1],[0.4,0],[0.5,1],[0.6,1],[0.7,0],[0.8,1],[0.9,1],[0.95,1]],"folds":4,"bins":5},"output":{"n":10,"ece_raw":0.135,"ece_isotonic":0.35,"ece_venn_abers":0.2033,"wide_va_intervals":5,"folds":4,"note":"out-of-sample: fold i scored by calibrators fitted on the other folds (deterministic, no RNG)"}}
+{"input":{"op":"abers.report","name":"ten-rows-folds-2","rows":[[0.1,0],[0.2,0],[0.3,1],[0.4,0],[0.5,1],[0.6,1],[0.7,0],[0.8,1],[0.9,1],[0.95,1]],"folds":2,"bins":4},"output":{"n":10,"ece_raw":0.115,"ece_isotonic":0.3,"ece_venn_abers":0.0925,"wide_va_intervals":6,"folds":2,"note":"out-of-sample: fold i scored by calibrators fitted on the other folds (deterministic, no RNG)"}}
+{"input":{"op":"abers.report","name":"five-rows","rows":[[0.1,0],[0.2,0],[0.3,1],[0.4,0],[0.5,1]],"folds":4,"bins":5},"output":{"n":5,"ece_raw":0.14,"ece_isotonic":0.5,"ece_venn_abers":0.1167,"wide_va_intervals":5,"folds":4,"note":"out-of-sample: fold i scored by calibrators fitted on the other folds (deterministic, no RNG)"}}
+{"input":{"op":"abers.report","name":"single-row","rows":[[0.5,1]],"folds":4,"bins":5},"output":{"n":1,"ece_raw":0.5,"ece_isotonic":0,"ece_venn_abers":0,"wide_va_intervals":0,"folds":4,"note":"out-of-sample: fold i scored by calibrators fitted on the other folds (deterministic, no RNG)"}}
+{"input":{"op":"abers.report","name":"two-rows","rows":[[0.3,0],[0.7,1]],"folds":4,"bins":5},"output":{"n":2,"ece_raw":0.3,"ece_isotonic":1,"ece_venn_abers":0,"wide_va_intervals":2,"folds":4,"note":"out-of-sample: fold i scored by calibrators fitted on the other folds (deterministic, no RNG)"}}
+{"input":{"op":"abers.report","name":"bins-one","rows":[[0.1,0],[0.2,0],[0.3,1],[0.4,0],[0.5,1],[0.6,1],[0.7,0],[0.8,1],[0.9,1],[0.95,1]],"folds":4,"bins":1},"output":{"n":10,"ece_raw":0.055,"ece_isotonic":0.05,"ece_venn_abers":0.03,"wide_va_intervals":5,"folds":4,"note":"out-of-sample: fold i scored by calibrators fitted on the other folds (deterministic, no RNG)"}}
+{"input":{"op":"abers.report","name":"calibrated-rows","rows":[[0.1,0],[0.3,0],[0.5,1],[0.7,1],[0.9,1],[0.2,0],[0.4,0],[0.6,1]],"folds":4,"bins":5},"output":{"n":8,"ece_raw":0.1875,"ece_isotonic":0.125,"ece_venn_abers":0.1562,"wide_va_intervals":6,"folds":4,"note":"out-of-sample: fold i scored by calibrators fitted on the other folds (deterministic, no RNG)"}}

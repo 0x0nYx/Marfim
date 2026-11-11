@@ -1,0 +1,56 @@
+{
+  "body_too_large": {
+    "body": {
+      "error": "body exceeds 1048576 byte cap"
+    },
+    "status": 413
+  },
+  "host_not_allowed": {
+    "body": {
+      "error": "host not allowed (DNS-rebinding guard)"
+    },
+    "status": 403
+  },
+  "no_such_approval": {
+    "body": {
+      "error": "no pending approval with that id"
+    },
+    "status": 404
+  },
+  "no_such_session": {
+    "body": {
+      "error": "no such session"
+    },
+    "status": 404
+  },
+  "not_found": {
+    "body": {
+      "error": "not found"
+    },
+    "status": 404
+  },
+  "nothing_to_undo": {
+    "body": {
+      "error": "nothing to undo"
+    },
+    "status": 409
+  },
+  "origin_not_allowed": {
+    "body": {
+      "error": "origin not allowed"
+    },
+    "status": 403
+  },
+  "route_not_wired": {
+    "body": {
+      "error": "route not wired by the embedding surface"
+    },
+    "status": 501
+  },
+  "unauthorized": {
+    "body": {
+      "error": "unauthorized"
+    },
+    "status": 401
+  }
+}

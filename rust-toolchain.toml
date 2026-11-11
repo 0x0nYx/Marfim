@@ -1,0 +1,17 @@
+# Pinned toolchain: CI and every local run resolve to this exact build,
+# so gates and release artifacts are reproducible across machines.
+# The targets list carries every cross target the release workflow
+# builds (FINAL-1: a pinned minimal toolchain has no cross std, which
+# made the tag-push release job fail with E0463 on every runner).
+# Bump only with a CHANGELOG entry and a green MSRV(1.89) job.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]

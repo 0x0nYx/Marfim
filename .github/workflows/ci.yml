@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Pinned toolchain (rust-toolchain.toml): fmt + clippy -D warnings +
+  # full tests (incl. wire-golden differentials + docs-as-tests) + release
+  # size budget, on both CI operating systems.
+  pinned:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install pinned toolchain (from rust-toolchain.toml)
+        run: rustup toolchain install --no-self-update
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests (incl. wire-golden differentials, docs-as-tests)
+        run: cargo test --all
+      - name: Release binary + size budget
+        run: |
+          cargo build --release
+          SIZE=$(stat -c%s target/release/marfim 2>/dev/null || stat -f%z target/release/marfim)
+          echo "binary size: $SIZE bytes"
+          test "$SIZE" -lt 26214400  # <25 MB
+      - name: CLI smoke
+        run: |
+          ./target/release/marfim --version
+          ./target/release/marfim doctor
+          ./target/release/marfim sessions || true
+
+  # MSRV gate: the oldest toolchain the workspace declares must build and
+  # pass the suite. `+1.89` overrides rust-toolchain.toml explicitly.
+  # 1.89 is the floor of the advisory-clean dependency tree: the
+  # quinn-proto advisory fixes (RUSTSEC-2026-*) floor at 1.85, and the
+  # current locked set (uuid 1.29, ratatui 0.30) floors at 1.89 —
+  # see CHANGELOG (MSRV 1.78 -> 1.89).
+  msrv:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup toolchain install 1.89 --profile minimal --no-self-update
+      - name: Test on MSRV 1.89
+        run: cargo +1.89 test --all
+      - name: Build binary on MSRV 1.89
+        run: cargo +1.89 build -p marfim
+
+  # Supply-chain policy (deny.toml): licenses, bans, RustSec advisories.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check
+
+  # Known-vulnerability audit against the RustSec advisory DB.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit

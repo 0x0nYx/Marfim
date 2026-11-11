@@ -1,0 +1,72 @@
+plugins {
+    id "com.android.application"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+// OWNER-INPUT #1: the applicationId is owner-confirmable. The documented
+// default below is the example from docs/OWNER-INPUT.md; changing it is a
+// one-line edit here plus the FFI start path note in docs/DESIGN.md.
+def marfimApplicationId = "dev.marfim.app"
+
+android {
+    namespace = marfimApplicationId
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = marfimApplicationId
+        // 26 (Android 8.0): the adaptive-icon pipeline is vector-only (no
+        // binary assets in the tree) and 16KiB-page .so packaging is a
+        // modern-NDK concern; the floor is documented in
+        // docs/ANDROID-FINDINGS.md.
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0.0"
+        // The engine rides as a prebuilt .so (jniLibs, filled by cargo-ndk
+        // — see docs/ANDROID-FINDINGS.md). No externalNativeBuild: the
+        // Rust build stays a cargo concern with its own gates.
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+
+    // OWNER-INPUT #2: absent release signing secrets, CI debug-signs —
+    // documented here, never silent: the workflow echoes the fallback.
+    signingConfigs {
+        if (System.getenv("ANDROID_KEYSTORE_B64") != null) {
+            release {
+                storeFile file("keystore.jks")
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (System.getenv("ANDROID_KEYSTORE_B64") != null) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
+            minifyEnabled = false
+            shrinkResources = false
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+flutter {
+    source = "../.."
+}

@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/marfim-testkit",
+    "crates/marfim-core",
+    "crates/marfim-state",
+    "crates/marfim-term",
+    "crates/marfim-tools",
+    "crates/marfim-mcp",
+    "crates/marfim-gateway",
+    "crates/marfim-brain",
+    "crates/marfim-app",
+    "crates/marfim-exec",
+    "crates/marfim-ffi",
+    "crates/marfim",
+]
+
+[workspace.package]
+version = "1.0.0"
+rust-version = "1.89"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/0x0nYx/Marfim"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "signal", "io-util", "net", "time", "sync", "fs", "io-std"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+futures-util = "0.3"
+regex = "1"
+# W5.9 CodeMode: the restricted interpreter behind the opt-in Code tool.
+rhai = "1.27"
+# W6: durable state (marfim-state): bundled sqlite (FTS5 rides the
+# bundled build) behind the WAL-policy write core.
+rusqlite = { version = "0.41", features = ["bundled"] }
+async-trait = "0.1"
+toml = "0.8"
+hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+http-body = "1"
+bytes = "1"
+getrandom = "0.3"
+ratatui = "0.30"
+crossterm = "0.29"
+# W3.1: PTY (portable-pty: ConPTY/Unix pty behind a safe API — our crates
+# stay forbid(unsafe_code)) and the vt100 screen-model emulator.
+portable-pty = "0.9"
+vt100 = "0.18"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+
+# Constrained-environment hygiene: line-tables-only debuginfo keeps the
+# dev target dir ~10x smaller; debugging still has stack traces.
+[profile.dev]
+debug = "line-tables-only"

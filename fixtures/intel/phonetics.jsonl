@@ -1,0 +1,56 @@
+{"input":{"op":"soundex","word":"Robert"},"output":"R163"}
+{"input":{"op":"soundex","word":"Rupert"},"output":"R163"}
+{"input":{"op":"soundex","word":"Ashcraft"},"output":"A261"}
+{"input":{"op":"soundex","word":"Ashcroft"},"output":"A261"}
+{"input":{"op":"soundex","word":"Tymczak"},"output":"T522"}
+{"input":{"op":"soundex","word":"Pfister"},"output":"P236"}
+{"input":{"op":"soundex","word":"Honeyman"},"output":"H555"}
+{"input":{"op":"soundex","word":"BOB"},"output":"B100"}
+{"input":{"op":"soundex","word":"O'Brien"},"output":"O165"}
+{"input":{"op":"soundex","word":""},"output":""}
+{"input":{"op":"soundex","word":"123"},"output":""}
+{"input":{"op":"soundex","word":"!!!"},"output":""}
+{"input":{"op":"soundex","word":"héllo"},"output":"H400"}
+{"input":{"op":"soundex","word":"KWIN"},"output":"K500"}
+{"input":{"op":"soundex","word":"kween"},"output":"K500"}
+{"input":{"op":"soundex","word":"x"},"output":"X000"}
+{"input":{"op":"soundex","word":"aa"},"output":"A000"}
+{"input":{"op":"soundex","word":"BFPV"},"output":"B000"}
+{"input":{"op":"soundex","word":"CGJKQSXZ"},"output":"C000"}
+{"input":{"op":"soundex","word":"WHY"},"output":"W000"}
+{"input":{"op":"soundex","word":"HELLO world 42"},"output":"H464"}
+{"input":{"op":"soundex","word":"transparancy"},"output":"T652"}
+{"input":{"op":"charNgrams","text":"kwin of the nile","n":3},"output":["  k"," kw"," ni"," of"," th","e  ","e n","f t","he ","ile","in ","kwi","le ","n o","nil","of ","the","win"]}
+{"input":{"op":"charNgrams","text":"transparancy","n":3},"output":["  t"," tr","anc","ans","ara","cy ","ncy","nsp","par","ran","spa","tra","y  "]}
+{"input":{"op":"charNgrams","text":"ab","n":3},"output":["ab"]}
+{"input":{"op":"charNgrams","text":"abc","n":3},"output":["  a"," ab","abc","bc ","c  "]}
+{"input":{"op":"charNgrams","text":"","n":3},"output":[]}
+{"input":{"op":"charNgrams","text":"   \n\t ","n":3},"output":[]}
+{"input":{"op":"charNgrams","text":"a  b\tc","n":3},"output":["  a"," a "," b "," c ","a b","b c","c  "]}
+{"input":{"op":"charNgrams","text":"Héllo Wörld","n":3},"output":["  h"," hé"," wö","d  ","hél","ld ","llo","lo ","o w","rld","wör","éll","örl"]}
+{"input":{"op":"charNgrams","text":"ABC def","n":3},"output":["  a"," ab"," de","abc","bc ","c d","def","ef ","f  "]}
+{"input":{"op":"charNgrams","text":"kwin of the nile","n":2},"output":["  "," k"," n"," o"," t","e ","f ","he","il","in","kw","le","n ","ni","of","th","wi"]}
+{"input":{"op":"charNgrams","text":"kwin of the nile","n":1},"output":[" ","e","f","h","i","k","l","n","o","t","w"]}
+{"input":{"op":"charNgrams","text":"kwin of the nile","n":10},"output":["  kwin of "," kwin of t"," of the ni"," the nile ","f the nile","in of the ","kwin of th","n of the n","of the nil","the nile  ","win of the"]}
+{"input":{"op":"charNgrams","text":"x","n":3},"output":["x"]}
+{"input":{"op":"charNgrams","text":"hi","n":2},"output":["  "," h","hi","i "]}
+{"input":{"op":"charNgrams","text":"hi","n":5},"output":["hi"]}
+{"input":{"op":"charNgrams","text":" Settings ","n":4},"output":["  se"," set","etti","gs  ","ings","ngs ","sett","ting","ttin"]}
+{"input":{"op":"charNgrams","text":"dock icons"},"output":["  d"," do"," ic","ck ","con","doc","ico","k i","ns ","ock","ons","s  "]}
+{"input":{"op":"phoneticHitRate","queryTokens":["kween","of","the","nile"],"atomTokens":["queen","of","the","nile"]},"output":0.6666666666666666}
+{"input":{"op":"phoneticHitRate","queryTokens":["kwin"],"atomTokens":["queen"]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["transparancy"],"atomTokens":["transparency"]},"output":1}
+{"input":{"op":"phoneticHitRate","queryTokens":["bar","34"],"atomTokens":["bar","volume"]},"output":1}
+{"input":{"op":"phoneticHitRate","queryTokens":["34"],"atomTokens":["34"]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":[],"atomTokens":["queen"]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["kwin"],"atomTokens":[]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["kwin","set","it"],"atomTokens":["queen"]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["kwin","xy"],"atomTokens":["queen","zz"]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["abc"],"atomTokens":["xyz"]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["robert","rupert"],"atomTokens":["robert"]},"output":1}
+{"input":{"op":"phoneticHitRate","queryTokens":["Héllo"],"atomTokens":["hello"]},"output":1}
+{"input":{"op":"phoneticHitRate","queryTokens":["ASHCRAFT"],"atomTokens":["ashcroft"]},"output":1}
+{"input":{"op":"phoneticHitRate","queryTokens":null,"atomTokens":["queen"]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["kwin"],"atomTokens":null},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["aa","bb"],"atomTokens":["aax"]},"output":0}
+{"input":{"op":"phoneticHitRate","queryTokens":["night"],"atomTokens":["knight","night"]},"output":1}

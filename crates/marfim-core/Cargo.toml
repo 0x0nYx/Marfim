@@ -1,0 +1,60 @@
+[package]
+name = "marfim-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Marfim core: event bus, agent loop, providers, router, permissions, sessions"
+
+[dependencies]
+getrandom.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+futures-util.workspace = true
+regex.workspace = true
+async-trait.workspace = true
+toml.workspace = true
+# W7.4 OAuth2: PKCE S256 (RFC 7636) needs SHA-256 + base64url. Both are
+# already in the dependency graph (transitively); this pins them as real
+# APIs, not incidental ones.
+sha2 = "0.10"
+base64 = "0.22"
+# W7.5 Bedrock: SigV4 key derivation is an HMAC-SHA256 chain (RFC 2104).
+hmac = "0.12"
+
+# Safe process-group signalling (kill(2) on the negative pgid) for Linux+macOS.
+# marfim-core forbids unsafe code, so libc is wrapped via nix's safe API.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", default-features = false, features = ["signal"] }
+
+# Landlock filesystem sandbox (Linux 5.13+ ABI v5): the crate wraps the
+# raw syscalls; our code stays safe-only and fail-closed (an unsupported
+# kernel REFUSES the command instead of running it unsandboxed).
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4" 
+
+# W1.5: in-process git backend (feature-gated; heavy dep — the default
+# build ships CliGit, the `git` CLI wrapper).
+gix = { version = "0.90", optional = true, default-features = false, features = [
+    "parallel",
+    "sha1",
+    "revision",
+    "status",
+    "blob-diff",
+    "dirwalk",
+    "index",
+    "worktree-mutation",
+    "worktree-stream",
+] }
+
+[features]
+gix = ["dep:gix"]
+
+[dev-dependencies]
+marfim-testkit = { path = "../marfim-testkit" }
+tokio = { workspace = true, features = ["test-util"] }
+# D10: outbound bodies are validated against the vendored wire schemas.
+jsonschema = { version = "0.26", default-features = false }

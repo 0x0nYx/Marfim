@@ -1,0 +1,55 @@
+# Per-model capability registry (W7.1, distillation §R/§R3/§P).
+#
+# The rows are COMMITTED DATA, not code: compat rules live here so a new
+# model generation is a one-line change. Matching is longest-prefix-wins
+# over the model id (a row without an explicit prefix matches exactly).
+#
+# Fields (unknown keys fail closed — see capabilities.rs):
+#   pattern           = model-id prefix this row matches (e.g. "claude-fable-5")
+#   thinking          = budgeted | adaptive | mandatory
+#                       budgeted  — explicit effort/budget enables thinking (default)
+#                       adaptive  — thinking rides {"type":"adaptive", budget_tokens}
+#                       mandatory — the model MUST think: a default budget is
+#                                   forced even when the user set nothing
+#   thought_signatures = true when the wire returns per-call
+#                        `thoughtSignature` fields that MUST be replayed
+#                        verbatim on later turns (Gemini 3+ function calls)
+#
+# Provenance: docs/DISTILLATION.md §R (Hermes anthropic adapter —
+# "fable/opus-5.5 mandatory-thinking") and §R3 (OMP google-shared —
+# thought signatures preserved per block for replay). Rows cover the
+# families present in the committed models.dev snapshot; everything not
+# listed resolves to the default capability set (budgeted, no signatures),
+# which keeps today's wire behavior byte-identical for unknown models.
+
+[[model]]
+pattern = "claude-fable-5"
+thinking = "mandatory"
+
+[[model]]
+pattern = "claude-opus-5-5"
+thinking = "mandatory"
+
+[[model]]
+pattern = "claude-opus-4-6"
+thinking = "adaptive"
+
+[[model]]
+pattern = "claude-sonnet-4-6"
+thinking = "adaptive"
+
+[[model]]
+pattern = "gemini-2.5-"
+thought_signatures = false
+
+[[model]]
+pattern = "gemini-3"
+thought_signatures = true
+
+[[model]]
+pattern = "gemini-4"
+thought_signatures = true
+
+[[model]]
+pattern = "gpt-5.6"
+thinking = "adaptive"

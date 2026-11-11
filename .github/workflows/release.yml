@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # linux: TRUE static binaries (musl, no glibc tie-in)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: marfim-linux-x86_64
+            host_native: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: marfim-linux-aarch64
+            host_native: false
+          # macOS: both architectures from arm64 runners -- macos-13 is
+          # retired; actions-rust-cross compiles the x86_64 target
+          # in-process on the arm64 host (Rosetta runs the smoke).
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: marfim-macos-aarch64
+            host_native: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: marfim-macos-x86_64
+            host_native: false
+          # windows: MSVC
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: marfim-windows-x86_64
+            host_native: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned binary for ${{ matrix.target }}
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          # --release rides in args explicitly: the action built the DEV
+          # profile on windows-latest when only the profile input was set
+          # (and `profile` is not even a valid input of this action).
+          args: -p marfim --release
+      - name: Version smoke + size gate (<25 MB)
+        run: |
+          BIN="target/${{ matrix.target }}/release/marfim"
+          test -f "$BIN" || BIN="target/${{ matrix.target }}/release/marfim.exe"
+          if [ "${{ matrix.host_native }}" = "true" ]; then
+            "$BIN" --version
+          else
+            echo "cross target: in-process version smoke skipped (no foreign-arch loader on this runner); size + tag CI carry the verification"
+          fi
+          SIZE=$(stat -c%s "$BIN" 2>/dev/null || stat -f%z "$BIN")
+          echo "${{ matrix.artifact }}: $SIZE bytes"
+          test "$SIZE" -lt 26214400
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          # the ORIGINAL build output, whichever spelling the target uses
+          subject-path: |
+            target/${{ matrix.target }}/release/marfim
+            target/${{ matrix.target }}/release/marfim.exe
+      # Upload the ORIGINAL binary into a per-artifact bundle: windows
+      # bash-created copies were not visible to the node-side actions
+      # (seen twice: attest, then upload), so no cp-staging happens on
+      # the runners at all -- the ubuntu publish job does the naming.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            target/${{ matrix.target }}/release/marfim
+            target/${{ matrix.target }}/release/marfim.exe
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # no merge-multiple: each artifact lands in its own dist/<name>/
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Stage uniquely-named release assets
+        run: |
+          mkdir -p release
+          for n in marfim-linux-x86_64 marfim-linux-aarch64 marfim-macos-aarch64 marfim-macos-x86_64; do
+            test -f "dist/$n/marfim" || { echo "missing binary in $n"; exit 1; }
+            cp "dist/$n/marfim" "release/$n"
+          done
+          test -f "dist/marfim-windows-x86_64/marfim.exe" || { echo "missing windows binary"; exit 1; }
+          cp "dist/marfim-windows-x86_64/marfim.exe" "release/marfim-windows-x86_64"
+          ls -la release
+      - name: ONE SHA256SUMS covering every asset
+        run: |
+          cd release
+          sha256sum marfim-linux-x86_64 marfim-linux-aarch64 marfim-macos-aarch64 marfim-macos-x86_64 marfim-windows-x86_64 > SHA256SUMS
+          cat SHA256SUMS
+          LINES=$(wc -l < SHA256SUMS)
+          test "$LINES" -eq 5
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/marfim-linux-x86_64
+            release/marfim-linux-aarch64
+            release/marfim-macos-aarch64
+            release/marfim-macos-x86_64
+            release/marfim-windows-x86_64
+            release/SHA256SUMS

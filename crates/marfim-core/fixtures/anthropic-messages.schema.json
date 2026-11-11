@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://marfim.dev/schemas/anthropic-messages.schema.json",
+  "title": "Anthropic /v1/messages request body (vendored subset enforced by Marfim)",
+  "type": "object",
+  "required": ["model", "max_tokens", "messages"],
+  "additionalProperties": true,
+  "properties": {
+    "model": { "type": "string", "minLength": 1 },
+    "max_tokens": { "type": "integer", "minimum": 1 },
+    "stream": { "type": "boolean" },
+    "temperature": { "type": "number", "minimum": 0, "maximum": 1 },
+    "system": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "text"],
+            "properties": {
+              "type": { "const": "text" },
+              "text": { "type": "string" },
+              "cache_control": { "type": "object" }
+            }
+          }
+        }
+      ]
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "input_schema"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "input_schema": { "type": "object" }
+        }
+      }
+    },
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["role", "content"],
+        "properties": {
+          "role": { "enum": ["user", "assistant"] },
+          "content": {
+            "oneOf": [
+              { "type": "string" },
+              { "$ref": "#/definitions/blocks" }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type", "text"],
+            "properties": {
+              "type": { "const": "text" },
+              "text": { "type": "string" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "thinking"],
+            "properties": {
+              "type": { "const": "thinking" },
+              "thinking": { "type": "string" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "id", "name", "input"],
+            "properties": {
+              "type": { "const": "tool_use" },
+              "id": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1 },
+              "input": { "type": "object" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "tool_use_id", "content"],
+            "properties": {
+              "type": { "const": "tool_result" },
+              "tool_use_id": { "type": "string", "minLength": 1 },
+              "content": {
+                "oneOf": [
+                  { "type": "string" },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["type", "text"],
+                      "properties": {
+                        "type": { "const": "text" },
+                        "text": { "type": "string" }
+                      }
+                    }
+                  }
+                ]
+              },
+              "is_error": { "type": "boolean" }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
